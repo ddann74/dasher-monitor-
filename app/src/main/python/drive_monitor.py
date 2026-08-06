@@ -237,6 +237,18 @@ class Database:
             timestamp REAL
         );
 
+        -- Per-restaurant, persistent (not per-trip) notes about the pickup
+        -- location itself -- e.g. "gate code 1234", "enter through side
+        -- door", "park in the loading zone, not the main lot". Keyed by
+        -- restaurant_name so a note added once is still there next time an
+        -- offer comes in from the same place, same pattern already used for
+        -- parking_difficulty_feedback and restaurant_wait_history.
+        CREATE TABLE IF NOT EXISTS pickup_location_notes (
+            restaurant_name TEXT PRIMARY KEY,
+            notes TEXT,
+            updated_ts REAL
+        );
+
         CREATE TABLE IF NOT EXISTS pending_offer_recovery (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             restaurant_name TEXT,
@@ -363,9 +375,9 @@ class Database:
         # will.
         trips_columns = [row["name"] for row in self.conn.execute("PRAGMA table_info(trips)")]
         for new_column in ("pickup_arrival_ts", "pickup_departure_ts", "dropoff_arrival_ts",
-                           "walking_confirmed_ts", "deadline_text"):
+                           "walking_confirmed_ts", "deadline_text", "pickup_address"):
             if new_column not in trips_columns:
-                col_type = "TEXT" if new_column == "deadline_text" else "REAL"
+                col_type = "TEXT" if new_column in ("deadline_text", "pickup_address") else "REAL"
                 self.conn.execute(f"ALTER TABLE trips ADD COLUMN {new_column} {col_type}")
         self.conn.commit()
 
@@ -1738,7 +1750,7 @@ class TripManager:
         self.db.conn.commit()
 
     def add_pickup(self, restaurant_name, lat, lon, claimed_distance_km=None, score_snapshot_json=None,
-                   deadline_text=None):
+                   deadline_text=None, address=None):
         """
         Called once per delivery when the pickup location is known (e.g.
         from the offer screen). lat/lon start as placeholders (0.0, 0.0)
@@ -1755,6 +1767,11 @@ class TripManager:
         screen showed one -- carried through the same way, so the
         post-trip phase breakdown can compare real elapsed time against
         what was actually promised.
+        address: a real formatted street address, if already known at
+        call time -- usually None here, since the only thing parsed off
+        the offer screen is the restaurant NAME, not an address; the real
+        value normally arrives slightly later via update_pickup_address
+        once GoogleApiHelper's geocoding resolves.
         """
         self.pickup = {
             "restaurant_name": restaurant_name, "lat": lat, "lon": lon,
@@ -1762,6 +1779,7 @@ class TripManager:
             "claimed_distance_km": claimed_distance_km,
             "score_snapshot_json": score_snapshot_json,
             "deadline_text": deadline_text,
+            "address": address,
         }
         self._deadhead_distance_km = None
         self._distance_at_departure_km = None
@@ -1780,6 +1798,23 @@ class TripManager:
         if self.pickup and self.pickup["arrived_at"] is None:
             self.pickup["lat"] = lat
             self.pickup["lon"] = lon
+
+    def update_pickup_address(self, address):
+        """
+        Called once GoogleApiHelper's geocode-with-formatted-address
+        resolves for the current pickup's restaurant name -- same "only
+        while still relevant" guard as update_pickup_coordinates (once
+        arrived, the address this is about no longer needs to keep
+        changing). Unlike coordinates, this is also persisted straight to
+        the currently active trip row (if one exists yet) so it survives
+        even if resolution lands mid-trip rather than before departure --
+        there's no separate "trip finished, backfill everything" pass the
+        way there is for score_snapshot_json/deadline_text, which are
+        only ever read once, at _start_trip.
+        """
+        if self.pickup and self.pickup["arrived_at"] is None:
+            self.pickup["address"] = address
+        self._update_current_trip_text_column("pickup_address", address)
 
     def _evaluate_pickup(self, lat, lon, ts):
         """
@@ -1825,6 +1860,19 @@ class TripManager:
         """
         self.db.conn.execute(
             f"UPDATE trips SET {column_name} = ? WHERE end_time IS NULL", (ts,)
+        )
+        self.db.conn.commit()
+
+    def _update_current_trip_text_column(self, column_name, value):
+        """
+        Same shape as _update_current_trip_phase_timestamp, for a text
+        value (currently only pickup_address) rather than a timestamp. A
+        no-op if no trip is currently active yet -- update_pickup_address
+        can resolve before departure, in which case _start_trip picks up
+        self.pickup["address"] directly instead.
+        """
+        self.db.conn.execute(
+            f"UPDATE trips SET {column_name} = ? WHERE end_time IS NULL", (value,)
         )
         self.db.conn.commit()
         # GAP 3 (diagnostic-coverage pass): previously this write was
@@ -1940,10 +1988,11 @@ class TripManager:
 
         score_snapshot = self.pickup.get("score_snapshot_json") if self.pickup else None
         deadline_text = self.pickup.get("deadline_text") if self.pickup else None
+        pickup_address = self.pickup.get("address") if self.pickup else None
         cur = self.db.conn.execute(
-            "INSERT INTO trips (start_time, mode, start_lat, start_lon, offer_score_snapshot_json, deadline_text) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (ts, self._trip_mode, lat, lon, score_snapshot, deadline_text)
+            "INSERT INTO trips (start_time, mode, start_lat, start_lon, offer_score_snapshot_json, "
+            "deadline_text, pickup_address) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (ts, self._trip_mode, lat, lon, score_snapshot, deadline_text, pickup_address)
         )
         self.db.conn.commit()
         self.trip_id = cur.lastrowid
@@ -2080,6 +2129,34 @@ class TripManager:
         if nearest and nearest_dist <= APPROACHING_RADIUS_METERS:
             return nearest
         return None
+
+    def check_approaching_pickup(self, lat, lon):
+        """
+        Same idea as _check_approaching_stop, but for the single active
+        pickup rather than a list of dropoff stops -- previously had no
+        equivalent at all, despite dropoff having had one from early on.
+        Returns a dict with restaurant_name/address/lat/lon while
+        genuinely approaching (within APPROACHING_RADIUS_METERS) and not
+        yet arrived, else None. "address" can legitimately be None here
+        even while otherwise approaching -- the restaurant name geocodes
+        to real coordinates fast (needed for arrival detection itself),
+        but the separate formatted-address lookup can still be in flight;
+        the caller uses a None address as its "waiting for address" signal
+        rather than this method blocking on it.
+        """
+        if not self.pickup or self.pickup["arrived_at"] is not None:
+            return None
+        if self.pickup["lat"] == 0.0 and self.pickup["lon"] == 0.0:
+            return None  # still a placeholder -- nothing real to approach yet
+        d = haversine_meters(lat, lon, self.pickup["lat"], self.pickup["lon"])
+        if d > APPROACHING_RADIUS_METERS:
+            return None
+        return {
+            "restaurant_name": self.pickup["restaurant_name"],
+            "address": self.pickup.get("address"),
+            "lat": self.pickup["lat"],
+            "lon": self.pickup["lon"],
+        }
 
     def _check_approach_instruction(self, approaching_stop, ts):
         """
@@ -2646,6 +2723,14 @@ class DriveMonitorEngine:
                 "lon": approaching["lon"],
             }
 
+        # Same idea, for the pickup side -- previously had no equivalent at
+        # all. "address" can be None even while approaching (still waiting
+        # on the separate formatted-address geocode) -- Java surfaces that
+        # as a "waiting for pickup address" state rather than hiding the
+        # icon entirely, since the restaurant name/coordinates are already
+        # known and useful on their own.
+        approaching_pickup = self.trip_manager.check_approaching_pickup(lat, lon)
+
         # Feeds the persistent, tappable instruction overlay -- shown
         # while APPROACHING a stop (not waiting for arrival), and
         # deliberately does NOT auto-clear even after arrival, since the
@@ -2677,6 +2762,7 @@ class DriveMonitorEngine:
             "mode": self.trip_manager.get_mode(),
             "arrival": arrival,
             "approaching_stop": approaching_stop,
+            "approaching_pickup": approaching_pickup,
             "approach_instruction": approach_instruction,
             "is_walking": is_walking,
             "gap_sample_log": gap_sample_log,
@@ -3608,6 +3694,14 @@ class DriveMonitorEngine:
             phase_breakdown["driving_to_dropoff_seconds"] = row["dropoff_arrival_ts"] - row["pickup_departure_ts"]
         if row["dropoff_arrival_ts"] and row["walking_confirmed_ts"]:
             phase_breakdown["parking_to_walking_seconds"] = row["walking_confirmed_ts"] - row["dropoff_arrival_ts"]
+        # The one stage that was missing entirely: door-to-marked-complete --
+        # everything from actually reaching the door (walking confirmed, if
+        # that was detected this trip; otherwise dropoff arrival itself) to
+        # the delivery being marked done and the trip ending. Covers photo/
+        # knock/hand-off time, not captured by any earlier phase.
+        completing_dropoff_start_ts = row["walking_confirmed_ts"] or row["dropoff_arrival_ts"]
+        if completing_dropoff_start_ts and row["end_time"]:
+            phase_breakdown["completing_dropoff_seconds"] = row["end_time"] - completing_dropoff_start_ts
 
         deadline_comparison = None
         if row["deadline_text"] and row["end_time"]:
@@ -3634,6 +3728,7 @@ class DriveMonitorEngine:
             "fuel_cost_estimate": row["fuel_cost_estimate"],
             "was_interrupted": bool(row["was_interrupted"]),
             "offer_score_snapshot": offer_score_snapshot,
+            "pickup_address": row["pickup_address"],
             "phase_breakdown": phase_breakdown,
             "deadline_comparison": deadline_comparison,
             "feedback_rating": feedback_row["rating"] if feedback_row else None,
@@ -3809,7 +3904,7 @@ class DriveMonitorEngine:
         return json.dumps(DropoffScreenParser.parse(lines))
 
     def add_pickup(self, restaurant_name, lat, lon, claimed_distance_km=None, score_snapshot_json=None,
-                   deadline_text=None):
+                   deadline_text=None, address=None):
         """
         Registers the pickup location so real wait time can be measured
         once the driver arrives and later leaves. Called once per offer,
@@ -3834,9 +3929,10 @@ class DriveMonitorEngine:
         single-number view shown live at accept-time.
         deadline_text: the offer's real "Deliver by X pm" text, carried
         through to the trip row for the post-trip phase-timing breakdown.
+        address: usually None here -- see TripManager.add_pickup's doc.
         """
         self.trip_manager.add_pickup(restaurant_name, lat, lon, claimed_distance_km, score_snapshot_json,
-                                      deadline_text)
+                                      deadline_text, address)
 
     def update_pickup_coordinates(self, lat, lon):
         """
@@ -3844,6 +3940,62 @@ class DriveMonitorEngine:
         the placeholder coordinates with real ones for the current pickup.
         """
         self.trip_manager.update_pickup_coordinates(lat, lon)
+
+    def update_pickup_address(self, address):
+        """
+        Called once GoogleApiHelper's async geocodeAddressWithFormatted
+        resolves for the current pickup's restaurant name -- see
+        TripManager.update_pickup_address's doc.
+        """
+        self.trip_manager.update_pickup_address(address)
+
+    def get_current_pickup_restaurant(self):
+        """
+        Restaurant name of the pickup currently registered (offer
+        accepted, not yet departed), or "" if there isn't one -- lets the
+        UI show/enable a "pickup notes" affordance only while it's
+        actually relevant, without exposing the whole internal pickup
+        dict just for this one field.
+        """
+        if self.trip_manager.pickup and not self.trip_manager.pickup.get("recorded"):
+            return self.trip_manager.pickup.get("restaurant_name") or ""
+        return ""
+
+    def get_pickup_notes(self, restaurant_name):
+        """
+        Whatever note (if any) was previously saved for this restaurant's
+        pickup location -- e.g. "gate code 1234", "enter through side
+        door". Returns "" (never None/null) when nothing's been saved yet,
+        so the Java side can always just display the result directly
+        without an extra null check.
+        """
+        row = self.db.conn.execute(
+            "SELECT notes FROM pickup_location_notes WHERE restaurant_name = ?",
+            (restaurant_name,)
+        ).fetchone()
+        return row["notes"] if row and row["notes"] else ""
+
+    def save_pickup_notes(self, restaurant_name, notes):
+        """
+        Persists a note for this restaurant's pickup location, keyed by
+        name so it's still there next time an offer comes in from the
+        same place -- same "learn per restaurant" pattern already used
+        for parking_difficulty_feedback and restaurant_wait_history. An
+        empty/blank note clears any existing one rather than storing a
+        blank row.
+        """
+        trimmed = (notes or "").strip()
+        if trimmed:
+            self.db.conn.execute(
+                "INSERT INTO pickup_location_notes (restaurant_name, notes, updated_ts) VALUES (?, ?, ?) "
+                "ON CONFLICT(restaurant_name) DO UPDATE SET notes = excluded.notes, updated_ts = excluded.updated_ts",
+                (restaurant_name, trimmed, time.time())
+            )
+        else:
+            self.db.conn.execute(
+                "DELETE FROM pickup_location_notes WHERE restaurant_name = ?", (restaurant_name,)
+            )
+        self.db.conn.commit()
 
     def record_live_traffic_delay(self, delay_ratio):
         """

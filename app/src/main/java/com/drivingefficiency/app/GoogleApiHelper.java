@@ -55,6 +55,16 @@ public final class GoogleApiHelper {
         void onError(String message);
     }
 
+    /** Separate from [GeocodeCallback] rather than adding a parameter to it, so every
+      * existing caller (dropoff address geocoding, restaurant-name-only pickup geocoding
+      * elsewhere, Diagnostics' test geocode) keeps working unchanged - only the one new
+      * caller that actually needs Google's formatted street address (not just lat/lon)
+      * needs to know about this overload. */
+    public interface GeocodeWithAddressCallback {
+        void onResult(double lat, double lon, String formattedAddress);
+        void onError(String message);
+    }
+
     public interface TrafficCallback {
         /** trafficDelayRatio: 1.0 = no delay, 1.5 = 50% slower than typical, etc. */
         void onResult(double trafficDelayRatio, int durationInTrafficSeconds, int typicalDurationSeconds);
@@ -90,8 +100,29 @@ public final class GoogleApiHelper {
     }
 
     public static void geocodeAddress(Context context, String address, GeocodeCallback callback) {
+        geocodeAddressInternal(context, address,
+                (lat, lon, formattedAddress) -> callback.onResult(lat, lon),
+                callback::onError);
+    }
+
+    /** Same request as [geocodeAddress], but also surfaces Google's own formatted street
+      * address for the match - used for the pickup side, which (unlike dropoff, which
+      * already gets a real customer-entered address from the Dasher app's own offer
+      * screen) previously only ever had a restaurant NAME, never an actual street
+      * address, to show or store. */
+    public static void geocodeAddressWithFormatted(Context context, String address, GeocodeWithAddressCallback callback) {
+        geocodeAddressInternal(context, address, callback::onResult, callback::onError);
+    }
+
+    private interface RawGeocodeResultListener {
+        void onResult(double lat, double lon, String formattedAddress);
+    }
+
+    private static void geocodeAddressInternal(Context context, String address,
+                                                 RawGeocodeResultListener onResult,
+                                                 java.util.function.Consumer<String> onError) {
         if (!hasApiKey(context)) {
-            postError(callback, "No Google Maps API key configured (see Permissions & Setup).");
+            MAIN_HANDLER.post(() -> onError.accept("No Google Maps API key configured (see Permissions & Setup)."));
             return;
         }
         String apiKey = getApiKey(context);
@@ -108,18 +139,21 @@ public final class GoogleApiHelper {
                     // status code alone ("REQUEST_DENIED") doesn't say
                     // which of several possible causes it actually is.
                     String detail = json.optString("error_message", "");
-                    postError(callback, "Geocoding failed: " + json.optString("status")
-                            + (detail.isEmpty() ? "" : " -- " + detail));
+                    String message = "Geocoding failed: " + json.optString("status")
+                            + (detail.isEmpty() ? "" : " -- " + detail);
+                    MAIN_HANDLER.post(() -> onError.accept(message));
                     return;
                 }
                 JSONArray results = json.getJSONArray("results");
-                JSONObject location = results.getJSONObject(0)
-                        .getJSONObject("geometry").getJSONObject("location");
+                JSONObject firstResult = results.getJSONObject(0);
+                JSONObject location = firstResult.getJSONObject("geometry").getJSONObject("location");
                 double lat = location.getDouble("lat");
                 double lon = location.getDouble("lng");
-                MAIN_HANDLER.post(() -> callback.onResult(lat, lon));
+                String formattedAddress = firstResult.optString("formatted_address", "");
+                MAIN_HANDLER.post(() -> onResult.onResult(lat, lon, formattedAddress));
             } catch (Exception e) {
-                postError(callback, "Geocoding error: " + e.getMessage());
+                String message = "Geocoding error: " + e.getMessage();
+                MAIN_HANDLER.post(() -> onError.accept(message));
             }
         }).start();
     }

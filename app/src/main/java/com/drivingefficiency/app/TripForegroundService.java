@@ -717,6 +717,7 @@ public class TripForegroundService extends Service {
     private String lastKnownTripState = null;
 
     private String lastApproachingAddress = null;
+    private String lastApproachingPickupRestaurant = null;
     private boolean lastKnownIsWalking = false;
 
     private void handleGpsResult(String resultJson) {
@@ -820,6 +821,55 @@ public class TripForegroundService extends Service {
                 logDiagnostic("NAV_ICON", "Cleared -- no longer approaching " + lastApproachingAddress);
             }
             lastApproachingAddress = approachingAddress;
+
+            // Same RoadWarrior-style icon, extended to the pickup side --
+            // previously only ever shown while approaching a dropoff.
+            // Shares the single nav-icon overlay slot with the dropoff
+            // handling above rather than a separate one: in the normal
+            // single-delivery flow the two are naturally mutually
+            // exclusive in time (the pickup icon only shows before the
+            // restaurant is reached; the dropoff icon only shows for a
+            // stop not yet matched, which only becomes relevant once
+            // picked up), so there's no real collision to guard against.
+            JSONObject approachingPickup = obj.optJSONObject("approaching_pickup");
+            String approachingPickupRestaurant = approachingPickup != null
+                    ? approachingPickup.optString("restaurant_name", "") : null;
+            if (approachingPickupRestaurant != null && !approachingPickupRestaurant.equals(lastApproachingPickupRestaurant)) {
+                double pickupLat = approachingPickup.optDouble("lat", 0);
+                double pickupLon = approachingPickup.optDouble("lon", 0);
+                // Real street address (see GoogleApiHelper.geocodeAddressWithFormatted /
+                // DasherAccessibilityService.geocodePickupAndCheckTraffic) if it's
+                // resolved by now, else null -- the restaurant name/coordinates
+                // are already known and useful even before it has.
+                String pickupAddress = approachingPickup.isNull("address")
+                        ? null : approachingPickup.optString("address", null);
+                if (pickupAddress == null || pickupAddress.isEmpty()) {
+                    // Per explicit request: a visible "waiting for that address"
+                    // signal, not just silently showing the icon with no address
+                    // yet. Auto-dismisses like every other transient overlay
+                    // message here -- this is a one-time heads-up, not a status
+                    // that needs to stay pinned on screen.
+                    OverlayHelper.showMessage(this,
+                            "Waiting for pickup address (" + approachingPickupRestaurant + ")...");
+                }
+                String finalPickupAddress = pickupAddress;
+                OverlayHelper.showNavigationIcon(this, () -> {
+                    // Falls back to the restaurant name if the address hasn't
+                    // resolved yet -- NavigationHelper/Maps can still route on
+                    // that plus real coordinates, just with a less precise
+                    // pin than a real street address would give.
+                    String target = (finalPickupAddress != null && !finalPickupAddress.isEmpty())
+                            ? finalPickupAddress : approachingPickupRestaurant;
+                    logDiagnostic("NAV_ICON", "Pickup icon tapped -- opening " + target);
+                    NavigationHelper.openAddress(this, target, pickupLat, pickupLon);
+                });
+                logDiagnostic("NAV_ICON", "Showing pickup icon -- approaching: " + approachingPickupRestaurant
+                        + (pickupAddress != null && !pickupAddress.isEmpty() ? " (" + pickupAddress + ")" : " (address pending)"));
+            } else if (approachingPickupRestaurant == null && lastApproachingPickupRestaurant != null) {
+                OverlayHelper.clearNavigationIcon(this);
+                logDiagnostic("NAV_ICON", "Cleared pickup icon -- no longer approaching " + lastApproachingPickupRestaurant);
+            }
+            lastApproachingPickupRestaurant = approachingPickupRestaurant;
 
             // Persistent, tappable delivery-instruction overlay -- shown
             // the moment a pending instruction is detected while

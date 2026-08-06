@@ -31,6 +31,8 @@ public class MainActivity extends AppCompatActivity {
     private static final long STATUS_POLL_INTERVAL_MS = 3000;
 
     private TextView statusText;
+    private Button pickupNoteButton;
+    private String lastKnownPickupRestaurant = null;
     private PyObject engine;
     private final Handler statusHandler = new Handler(Looper.getMainLooper());
     private final Runnable statusPoller = new Runnable() {
@@ -85,6 +87,8 @@ public class MainActivity extends AppCompatActivity {
             Button stopButton = findViewById(R.id.stopButton);
             Button quitCompletelyButton = findViewById(R.id.quitCompletelyButton);
             Button openRoadWarriorButton = findViewById(R.id.openRoadWarriorButton);
+            pickupNoteButton = findViewById(R.id.pickupNoteButton);
+            pickupNoteButton.setOnClickListener(v -> showPickupNoteDialog());
             Button tripHistoryNavButton = findViewById(R.id.tripHistoryNavButton);
             Button permissionsNavButton = findViewById(R.id.permissionsNavButton);
             Button dataManagementNavButton = findViewById(R.id.dataManagementNavButton);
@@ -388,10 +392,12 @@ public class MainActivity extends AppCompatActivity {
 
             if (!TripForegroundService.serviceExists) {
                 statusText.setText("Status: Fully Off" + warning);
+                pickupNoteButton.setVisibility(android.view.View.GONE);
                 return;
             }
             if (!TripForegroundService.isRunning) {
                 statusText.setText("Status: Not Monitoring (still running in background)" + warning);
+                pickupNoteButton.setVisibility(android.view.View.GONE);
                 return;
             }
             String state = engine.callAttr("get_state").toString();
@@ -399,6 +405,74 @@ public class MainActivity extends AppCompatActivity {
             String stateLabel = "TRIP_ACTIVE".equals(state) ? "Driving" : "Idle";
             String modeLabel = "DASHER".equals(mode) ? "Dasher Mode" : "General Driving Mode";
             statusText.setText("Status: " + stateLabel + " -- " + modeLabel + warning + "\n" + buildLastUpdateLine());
+            updatePickupNoteButton();
+        }
+
+        /**
+         * Shows/labels the Pickup Note button only while a pickup is
+         * actually currently registered (offer accepted, not yet
+         * departed) -- per explicit request, a comment section for the
+         * pickup address, previously nowhere in the app at all. Polled
+         * alongside the rest of the live status rather than its own timer.
+         */
+        private void updatePickupNoteButton() {
+            String restaurant;
+            try {
+                restaurant = engine.callAttr("get_current_pickup_restaurant").toString();
+            } catch (RuntimeException e) { // covers PyException too
+                restaurant = "";
+            }
+            lastKnownPickupRestaurant = restaurant.isEmpty() ? null : restaurant;
+            if (lastKnownPickupRestaurant != null) {
+                pickupNoteButton.setVisibility(android.view.View.VISIBLE);
+                pickupNoteButton.setText("Pickup Note (" + lastKnownPickupRestaurant + ")");
+            } else {
+                pickupNoteButton.setVisibility(android.view.View.GONE);
+            }
+        }
+
+        /**
+         * View/edit the persistent, per-restaurant note for the current
+         * pickup location (e.g. "gate code 1234", "enter through side
+         * door") - saved keyed by restaurant name (see
+         * save_pickup_notes/get_pickup_notes), so it's still there next
+         * time an offer comes in from the same place, the same "learn per
+         * restaurant" pattern already used for parking difficulty.
+         */
+        private void showPickupNoteDialog() {
+            String restaurant = lastKnownPickupRestaurant;
+            if (restaurant == null) {
+                return; // button shouldn't be visible in this state, but guard anyway
+            }
+            String existingNote;
+            try {
+                existingNote = engine.callAttr("get_pickup_notes", restaurant).toString();
+            } catch (RuntimeException e) { // covers PyException too
+                existingNote = "";
+            }
+            EditText noteInput = new EditText(this);
+            noteInput.setHint("e.g. gate code, which door, where to park...");
+            noteInput.setText(existingNote);
+            noteInput.setMinLines(2);
+
+            new AlertDialog.Builder(this)
+                    .setTitle("Pickup Note -- " + restaurant)
+                    .setMessage("Saved per restaurant -- still here next time an order comes from this place.")
+                    .setView(noteInput)
+                    .setPositiveButton("Save", (dialog, which) -> {
+                        String note = noteInput.getText().toString().trim();
+                        try {
+                            engine.callAttr("save_pickup_notes", restaurant, note);
+                            logDiagnostic("BUTTON", "Pickup note saved for " + restaurant);
+                            Toast.makeText(this, note.isEmpty() ? "Note cleared." : "Note saved.",
+                                    Toast.LENGTH_SHORT).show();
+                        } catch (RuntimeException e) { // covers PyException too
+                            Toast.makeText(this, "Could not save note: " + e.getMessage(),
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
         }
 
         /**
@@ -729,6 +803,13 @@ public class MainActivity extends AppCompatActivity {
                 body.append("Weather: ").append(offerSnapshot.optString("weather", "")).append("\n\n");
             }
 
+            // Real street address for the pickup, not just the restaurant
+            // name -- previously never captured or shown anywhere.
+            String pickupAddress = summary.optString("pickup_address", "");
+            if (!pickupAddress.isEmpty()) {
+                body.append("Pickup address: ").append(pickupAddress).append("\n\n");
+            }
+
             // Phase-by-phase timing breakdown: where did the time
             // actually go for THIS delivery, not just a learned average.
             // Any phase not captured (no walking detected, no pickup this
@@ -752,6 +833,10 @@ public class MainActivity extends AppCompatActivity {
                 if (!phaseBreakdown.isNull("parking_to_walking_seconds")) {
                     body.append(String.format("Parking to walking: %s\n",
                             formatMinutesSeconds(phaseBreakdown.optDouble("parking_to_walking_seconds", 0))));
+                }
+                if (!phaseBreakdown.isNull("completing_dropoff_seconds")) {
+                    body.append(String.format("Completing dropoff: %s\n",
+                            formatMinutesSeconds(phaseBreakdown.optDouble("completing_dropoff_seconds", 0))));
                 }
                 body.append("\n");
             }

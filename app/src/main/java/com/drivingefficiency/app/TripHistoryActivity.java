@@ -453,6 +453,13 @@ public class TripHistoryActivity extends AppCompatActivity {
                 body.append("Weather: ").append(offerSnapshot.optString("weather", "")).append("\n\n");
             }
 
+            // Real street address for the pickup, not just the restaurant
+            // name -- previously never captured or shown anywhere.
+            String pickupAddress = summary.optString("pickup_address", "");
+            if (!pickupAddress.isEmpty()) {
+                body.append("Pickup address: ").append(pickupAddress).append("\n\n");
+            }
+
             // Phase-by-phase timing breakdown: where did the time
             // actually go for THIS delivery, not just a learned average.
             // Any phase not captured (no walking detected, no pickup this
@@ -476,6 +483,10 @@ public class TripHistoryActivity extends AppCompatActivity {
                 if (!phaseBreakdown.isNull("parking_to_walking_seconds")) {
                     body.append(String.format("Parking to walking: %s\n",
                             formatMinutesSeconds(phaseBreakdown.optDouble("parking_to_walking_seconds", 0))));
+                }
+                if (!phaseBreakdown.isNull("completing_dropoff_seconds")) {
+                    body.append(String.format("Completing dropoff: %s\n",
+                            formatMinutesSeconds(phaseBreakdown.optDouble("completing_dropoff_seconds", 0))));
                 }
                 body.append("\n");
             }

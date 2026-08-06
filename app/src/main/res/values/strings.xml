@@ -17,6 +17,7 @@
     <string name="view_last_trip_summary">View Last Trip Summary</string>
     <string name="view_trip_history">View Trip History</string>
     <string name="open_in_roadwarrior">Open in RoadWarrior</string>
+    <string name="pickup_note">Pickup Note</string>
     <string name="nav_trip_history">Trip &amp; History</string>
     <string name="nav_trusted_contacts">Trusted Contacts</string>
     <string name="nav_canned_replies">Canned Replies</string>

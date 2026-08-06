@@ -279,6 +279,52 @@ badge may show a slightly different traffic reading a moment after it
 first appears, once geocoding and the traffic query actually resolve --
 this is expected, not a bug.
 
+## New: pickup address, approach icon, notes, and the final timing stage
+
+Dropoff has always had a real geocoded address, an approach-warning
+RoadWarrior icon, and arrival detection. Pickup only ever had a
+restaurant *name* and raw coordinates -- no address text, no approach
+icon, nowhere to leave a note about the location itself. This closes
+that gap by mirroring the existing dropoff pattern rather than inventing
+a new one:
+
+- **Real pickup address**: `GoogleApiHelper.geocodeAddressWithFormatted`
+  (a new method alongside the existing `geocodeAddress`, so every other
+  caller is untouched) also captures Google's own formatted street
+  address for the restaurant-name geocode already being done, not just
+  lat/lon. Stored on the trip row (`pickup_address`) and shown in the
+  trip summary.
+- **RoadWarrior icon while approaching pickup**: the same quick-nav icon
+  already shown while approaching a dropoff now also appears while
+  approaching the pickup (`TripManager.check_approaching_pickup`,
+  mirroring `_check_approaching_stop`), tappable to open navigation. If
+  the icon appears before the formatted address has resolved, it falls
+  back to the restaurant name + coordinates -- still enough for real
+  navigation, just a less precise pin.
+- **"Waiting for pickup address"**: a brief overlay message the first
+  time the pickup icon would show but the address hasn't resolved yet --
+  a visible signal rather than the icon just silently appearing with
+  nothing extra.
+- **Pickup notes**: a **Pickup Note** button appears on the main screen
+  only while a pickup is actively registered (offer accepted, not yet
+  departed), opening a small dialog to add/edit a note -- e.g. "gate code
+  1234," "enter through side door." Saved per restaurant name
+  (`pickup_location_notes` table), so it's still there next time an offer
+  comes in from the same place, the same "learn per restaurant" pattern
+  already used for parking-difficulty feedback and restaurant wait times.
+- **Final timing stage**: the phase-by-phase "Where The Time Went"
+  breakdown previously stopped at "parking to walking." It now also
+  captures **completing dropoff** -- from reaching the door (or dropoff
+  arrival, if walking wasn't separately detected) to the delivery
+  actually being marked complete -- the photo/knock/hand-off time that
+  wasn't measured before.
+
+None of this has been confirmed against a real device yet -- same
+honest-limit caveat as the rest of Real Google Maps Integration above:
+the pickup icon/address/waiting-message flow reuses proven mechanics
+(the exact same code paths dropoff already uses), but hasn't itself been
+watched happen on an actual delivery.
+
 ## Distance accuracy: empirically checking what the offer's "X km" means
 
 DoorDash doesn't publicly document whether the distance figure on the offer

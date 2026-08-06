@@ -938,9 +938,9 @@ public class DasherAccessibilityService extends AccessibilityService {
         if (!GoogleApiHelper.hasApiKey(this) || restaurantName.isEmpty()) {
             return;
         }
-        GoogleApiHelper.geocodeAddress(this, restaurantName, new GoogleApiHelper.GeocodeCallback() {
+        GoogleApiHelper.geocodeAddressWithFormatted(this, restaurantName, new GoogleApiHelper.GeocodeWithAddressCallback() {
             @Override
-            public void onResult(double lat, double lon) {
+            public void onResult(double lat, double lon, String formattedAddress) {
                 // CRITICAL: this runs via Handler.post() on the main thread.
                 // An uncaught exception here crashes the ENTIRE app process,
                 // not just this call -- silently killing TripForegroundService
@@ -951,6 +951,20 @@ public class DasherAccessibilityService extends AccessibilityService {
                 try {
                     engine.callAttr("update_pickup_coordinates", lat, lon);
                     logDiagnostic("GEOCODE", "Resolved " + restaurantName + " -> " + lat + "," + lon);
+                    // Real street address for the pickup (not just the
+                    // restaurant name) -- previously never captured at all.
+                    // Guarded separately from the block below so a failure
+                    // here can never take down coordinate resolution/traffic
+                    // checking, which this whole delivery's tracking depends
+                    // on far more than the address text does.
+                    if (formattedAddress != null && !formattedAddress.isEmpty()) {
+                        try {
+                            engine.callAttr("update_pickup_address", formattedAddress);
+                        } catch (RuntimeException e) { // covers PyException too
+                            logDiagnostic("ERROR", "update_pickup_address exception: "
+                                    + android.util.Log.getStackTraceString(e));
+                        }
+                    }
                     // Starts building real sweet-spot history going
                     // forward -- see record_pickup_location's own
                     // reasoning for why this can't be backfilled.
