@@ -64,6 +64,14 @@ public class AppNotificationListenerService extends NotificationListenerService 
 
     private PyObject engine;
     private String lastNotificationOfferKey = null;
+    // Defense in depth alongside the empty-content guard in
+    // onNotificationPosted: if Dasher ever reposts a *non-empty* not-an-
+    // offer notification (e.g. "You're still dashing...") repeatedly in a
+    // tight loop the same way it did with empty content in the real log
+    // this was found from, this stops it from flooding the log with
+    // identical lines too - only a title+text pair that actually changed
+    // gets logged again.
+    private String lastUnrecognizedNotificationKey = null;
 
     // Message triage (idea #5): urgent instructions (delivery notes,
     // address corrections) are read immediately as before. Lower-priority
@@ -113,6 +121,26 @@ public class AppNotificationListenerService extends NotificationListenerService 
         Bundle extras = notification.extras;
         CharSequence title = extras.getCharSequence(Notification.EXTRA_TITLE, "");
         CharSequence text = extras.getCharSequence(Notification.EXTRA_TEXT, "");
+
+        // Dasher's own ongoing/foreground-service notification ("You're
+        // still dashing...") gets reposted by the OS very frequently while
+        // an active dash is running - confirmed against a real diagnostic
+        // log: roughly once per second, sustained for 30+ minutes straight,
+        // with EXTRA_TITLE and EXTRA_TEXT empty on nearly every repost.
+        // Every repost used to trigger two unconditional cross-language
+        // calls into the embedded Python engine below (parse_offer_notification
+        // here, on_notification further down) plus a diagnostic log write -
+        // with real content that's structurally impossible: an offer or a
+        // customer message can never be conveyed by an empty notification,
+        // so there's nothing to parse either way. That sustained load is
+        // the most likely cause of a real, observed failure in the same
+        // log: a 12-minute total monitoring blackout (no heartbeats, no GPS,
+        // nothing) immediately followed by the service process restarting.
+        // Bailing out here, before any Python call, costs nothing real and
+        // fixes both the log spam and the underlying load.
+        if (isDasher && title.length() == 0 && text.length() == 0) {
+            return;
+        }
 
         try {
             if (isDasher) {
@@ -225,6 +253,11 @@ public class AppNotificationListenerService extends NotificationListenerService 
                 // Safe to log content here (unlike personal SMS/Messenger
                 // messages) -- Dasher notifications aren't private the
                 // same way.
+                String unrecognizedKey = title + "|" + text;
+                if (unrecognizedKey.equals(lastUnrecognizedNotificationKey)) {
+                    return; // identical repost of the same non-offer notification - already logged
+                }
+                lastUnrecognizedNotificationKey = unrecognizedKey;
                 logDiagnostic("NOTIFICATION", "Dasher notification NOT recognized as an offer -- title: \""
                         + title + "\", text: \"" + text + "\"");
                 return;
