@@ -8,6 +8,7 @@
     <string name="enable_accessibility_access">Enable Accessibility Access</string>
     <string name="enable_overlay_permission">Enable Overlay Permission</string>
     <string name="disable_battery_optimization">Disable Battery Optimization</string>
+    <string name="open_oem_background_settings">Fix Background/Autostart Settings</string>
     <string name="enable_activity_recognition">Enable Activity Recognition (General-Driving Auto-Start)</string>
     <string name="google_maps_api_key_heading">Google Maps API Key</string>
     <string name="google_maps_api_key_subtext">Used for geocoding and live traffic. Entering it here takes priority over local.properties, and survives re-extracting the project into a new folder.</string>

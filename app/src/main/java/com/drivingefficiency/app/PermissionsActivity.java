@@ -43,6 +43,7 @@ public class PermissionsActivity extends AppCompatActivity {
         Button accessibilityButton = findViewById(R.id.accessibilityButton);
         Button overlayPermissionButton = findViewById(R.id.overlayPermissionButton);
         Button batteryOptimizationButton = findViewById(R.id.batteryOptimizationButton);
+        Button oemBackgroundButton = findViewById(R.id.oemBackgroundButton);
         Button activityRecognitionButton = findViewById(R.id.activityRecognitionButton);
         Button trustedContactsButton = findViewById(R.id.trustedContactsButton);
         Button cannedRepliesButton = findViewById(R.id.cannedRepliesButton);
@@ -97,6 +98,20 @@ public class PermissionsActivity extends AppCompatActivity {
                     Uri.parse("package:" + getPackageName()));
             startActivity(intent);
         });
+
+        // Only shown on manufacturers with a documented history of
+        // proprietary background-killing beyond standard Android battery
+        // optimization -- confirmed relevant here by a real diagnostic
+        // log showing 9 accessibility revocations in ~4 hours with
+        // screenOn=true/doze=false every time and standard battery
+        // exemption already granted, which pointed at an OEM-specific
+        // mechanism rather than a stock-Android one.
+        if (OemBackgroundHelper.isKnownAggressiveOem()) {
+            oemBackgroundButton.setVisibility(android.view.View.VISIBLE);
+            oemBackgroundButton.setText(getString(R.string.open_oem_background_settings)
+                    + " (" + OemBackgroundHelper.displayName() + ")");
+        }
+        oemBackgroundButton.setOnClickListener(v -> showOemBackgroundGuidance());
 
         // For general-driving auto-start -- lets monitoring start from
         // genuine driving motion alone, without ever needing to open
@@ -241,40 +256,39 @@ public class PermissionsActivity extends AppCompatActivity {
                 + " batteryExempt=" + hasBatteryExemption + " accessibility=" + hasAccessibility
                 + ". " + buildInstallTimingNote());
 
-        // Previously only ever discussed conversationally -- never
-        // actually built into the app. Only shows for confirmed Oppo
-        // devices (the actual device this whole investigation has been
-        // about), not speculative guidance for other manufacturers with
-        // no evidence they're relevant here. Only shown when
-        // accessibility is genuinely off, and only once per visit to
-        // this screen (not nagging on every single permission refresh).
-        if (!hasAccessibility && "OPPO".equalsIgnoreCase(Build.MANUFACTURER)) {
-            showOppoAccessibilityGuidance();
+        // Originally Oppo-only (the confirmed device from the initial
+        // investigation) -- generalized to any manufacturer with a
+        // documented history of proprietary background-killing, since
+        // the underlying mechanism (an OEM-specific autostart/background
+        // permission separate from standard battery optimization) isn't
+        // unique to Oppo. Only shown when accessibility is genuinely off,
+        // and only once per visit to this screen (not nagging on every
+        // single permission refresh).
+        if (!hasAccessibility && OemBackgroundHelper.isKnownAggressiveOem()) {
+            showOemBackgroundGuidance();
         }
     }
 
     /**
-     * Oppo's "Restricted Settings" security feature can silently block
-     * re-enabling accessibility for sideloaded apps, especially after a
-     * reinstall -- this walks through the specific, confirmed steps to
-     * work around it, rather than the generic "go re-enable it in
-     * Settings" guidance that doesn't mention this Oppo-specific gate.
+     * Many OEMs (Xiaomi, Oppo, Vivo, Huawei, Samsung, etc.) have their own
+     * proprietary autostart/background-activity permission, separate from
+     * and in addition to standard Android battery optimization -- this
+     * walks through the specific mechanism for the detected manufacturer
+     * and offers a best-effort deep-link straight to that settings
+     * screen, rather than generic "go re-enable it in Settings" guidance
+     * that doesn't mention the OEM-specific gate at all.
      */
-    private void showOppoAccessibilityGuidance() {
+    private void showOemBackgroundGuidance() {
         new AlertDialog.Builder(this)
-                .setTitle("Oppo Device Detected")
-                .setMessage("Accessibility access is off. On Oppo devices, this is often caused by "
-                        + "\"Restricted Settings\" silently blocking it, especially after a reinstall.\n\n"
-                        + "To fix this:\n"
-                        + "1. Settings > Apps > See all apps > Dasher Monitor\n"
-                        + "2. Tap the three-dot menu > \"Allow restricted settings\"\n"
-                        + "3. Then re-enable accessibility for this app as usual\n\n"
-                        + "Also worth checking: Settings > Battery > App battery management > "
-                        + "allow background activity for this app.")
-                .setPositiveButton("Open App Settings", (dialog, which) -> {
-                    Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                            Uri.parse("package:" + getPackageName()));
-                    startActivity(intent);
+                .setTitle(OemBackgroundHelper.displayName() + " Device Detected")
+                .setMessage(OemBackgroundHelper.guidanceText())
+                .setPositiveButton("Open Settings", (dialog, which) -> {
+                    boolean openedOemScreen = OemBackgroundHelper.openAutostartSettings(this);
+                    if (!openedOemScreen) {
+                        Toast.makeText(this, "Couldn't find the dedicated settings screen on this "
+                                + "device/OS version -- opened the app's general settings instead.",
+                                Toast.LENGTH_LONG).show();
+                    }
                 })
                 .setNegativeButton("Not Now", null)
                 .show();

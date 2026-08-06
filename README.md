@@ -194,19 +194,33 @@ platform upgrade on their end as of this writing -- so this uses
 Open-Meteo's default best-available model instead of depending on
 something explicitly flagged unavailable.
 
-## Known, real, unresolved: possible OEM battery/background app killing
+## Confirmed: OEM battery/background app killing, with an in-app fix
 
-If monitoring stops during an actual shift (as opposed to the crash bug
-above, now fixed) and a screen recorder running at the same time also
-stops, that's a strong signal of your phone's manufacturer-specific
-battery/background app management (Samsung, Xiaomi/MIUI, Huawei, OnePlus,
+A real 3-day diagnostic log confirmed this happening: 9 separate
+"Accessibility revoked while monitoring active" events in one ~4-hour
+window, every one of them with the screen on, Doze off, and standard
+Android battery-optimization exemption already granted -- ruling out
+simple screen-off/Doze killing and a missing standard exemption as the
+cause. That combination points at a manufacturer-specific background/
+autostart management sweep (Samsung, Xiaomi/MIUI, Huawei, OnePlus, Vivo,
 and others all have their own aggressive app-killing on top of Android's
-own battery optimization) killing both apps to free resources for
-Dasher. The in-app "Disable Battery Optimization" button requests Android's
-*standard* exemption, but most OEMs also have a SEPARATE setting
-(commonly called "Auto-start," "Protected apps," "App power management,"
-or similar) that has to be granted independently -- this varies by
-manufacturer and isn't something any app's code can configure for you.
+own battery optimization, gated behind a SEPARATE setting -- commonly
+called "Auto-start," "Protected apps," "App power management," or
+similar -- that standard `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`
+never reaches).
+
+The Permissions screen now has a manufacturer-aware **"Fix Background/
+Autostart Settings"** button (only shown on manufacturers with a known
+history of this) that best-effort deep-links straight into that OEM's own
+autostart settings screen, with manufacturer-specific guidance text
+explaining what to look for. It also pops up automatically if
+accessibility is found to be off on a device from one of these
+manufacturers. HONEST LIMIT: these are undocumented, OEM-internal
+settings screens that have changed across OS versions/regions before, so
+every attempt falls back gracefully to the app's own details settings
+page if the specific screen can't be found -- there's no universal API
+for this, only best-effort per-manufacturer deep links
+(`OemBackgroundHelper.java`).
 
 ## Real Google Maps integration: geocoding + live traffic
 
