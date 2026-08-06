@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base theme: the main screen's blue, matching the app icon.
+         Previously the whole app used Android's completely unmodified
+         stock AppCompat theme (no colorPrimary/colorAccent override at
+         all), which is why it looked plain and monochrome throughout. -->
+    <style name="Theme.DasherMonitor" parent="Theme.AppCompat.DayNight">
+        <item name="colorPrimary">@color/brand_blue</item>
+        <item name="colorPrimaryDark">@color/brand_blue_dark</item>
+        <item name="colorAccent">@color/brand_blue</item>
+    </style>
+
+    <style name="Theme.DasherMonitor.TripHistory">
+        <item name="colorPrimary">@color/trip_history_teal</item>
+        <item name="colorPrimaryDark">@color/trip_history_teal_dark</item>
+        <item name="colorAccent">@color/trip_history_teal</item>
+    </style>
+
+    <style name="Theme.DasherMonitor.TrustedContacts">
+        <item name="colorPrimary">@color/trusted_contacts_purple</item>
+        <item name="colorPrimaryDark">@color/trusted_contacts_purple_dark</item>
+        <item name="colorAccent">@color/trusted_contacts_purple</item>
+    </style>
+
+    <style name="Theme.DasherMonitor.Permissions">
+        <item name="colorPrimary">@color/permissions_orange</item>
+        <item name="colorPrimaryDark">@color/permissions_orange_dark</item>
+        <item name="colorAccent">@color/permissions_orange</item>
+    </style>
+
+    <style name="Theme.DasherMonitor.DataManagement">
+        <item name="colorPrimary">@color/data_management_indigo</item>
+        <item name="colorPrimaryDark">@color/data_management_indigo_dark</item>
+        <item name="colorAccent">@color/data_management_indigo</item>
+    </style>
+
+    <style name="Theme.DasherMonitor.Diagnostics">
+        <item name="colorPrimary">@color/diagnostics_maroon</item>
+        <item name="colorPrimaryDark">@color/diagnostics_maroon_dark</item>
+        <item name="colorAccent">@color/diagnostics_maroon</item>
+    </style>
+
+    <style name="Theme.DasherMonitor.DeveloperTesting">
+        <item name="colorPrimary">@color/developer_testing_cyan</item>
+        <item name="colorPrimaryDark">@color/developer_testing_cyan_dark</item>
+        <item name="colorAccent">@color/developer_testing_cyan</item>
+    </style>
+</resources>

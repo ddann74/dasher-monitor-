@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  No android:packageNames restriction here (deliberately): this service
+  needs to observe window state changed events from ANY app to detect
+  when the Dasher app is or isn't in the foreground, which drives DASHER
+  vs GENERAL mode detection (see report requirement re: navigation
+  efficiency monitor). This does NOT mean other apps' on screen content
+  is read: the code in DasherAccessibilityService only ever calls
+  getRootInActiveWindow() slash reads text nodes when the event's
+  package is Dasher's. For every other app, only the bare package name
+  is inspected.
+
+  typeViewClicked was added specifically to detect Accept/Decline taps
+  on the offer screen (accept/decline outcome tracking); like every
+  other event type here, click events are only ever inspected for the
+  Dasher package specifically.
+
+  flagRetrieveInteractiveWindows is required for getWindows() to work
+  (used once at service connect to check whether Dasher is ALREADY the
+  foreground app: otherwise there's no way to know that until a future
+  window-state-changed event fires, which doesn't happen if Dasher was
+  already open and nothing changes afterward).
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged|typeViewClicked"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:notificationTimeout="100" />

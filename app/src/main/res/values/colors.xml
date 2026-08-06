@@ -1,0 +1,44 @@
+<resources>
+    <color name="score_green">#2E7D32</color>
+    <color name="score_yellow">#F9A825</color>
+    <color name="score_red">#C62828</color>
+
+    <!-- One distinct brand color per screen: previously the whole app
+         used Android's completely unmodified stock theme (no custom
+         colors at all), which is why it looked plain. Giving each of the
+         6 category screens its own color makes them visually distinct
+         and recognizable at a glance, on top of just the main screen's
+         blue brand color (matching the app icon). -->
+    <color name="brand_blue">#1565C0</color>
+    <color name="brand_blue_dark">#0D47A1</color>
+
+    <color name="trip_history_teal">#00897B</color>
+    <color name="trip_history_teal_dark">#00695C</color>
+
+    <color name="trusted_contacts_purple">#8E24AA</color>
+    <color name="trusted_contacts_purple_dark">#6A1B9A</color>
+
+    <color name="permissions_orange">#EF6C00</color>
+    <color name="permissions_orange_dark">#E65100</color>
+
+    <color name="data_management_indigo">#3949AB</color>
+    <color name="data_management_indigo_dark">#283593</color>
+
+    <color name="diagnostics_maroon">#AD1457</color>
+    <color name="diagnostics_maroon_dark">#880E4F</color>
+
+    <color name="developer_testing_cyan">#00838F</color>
+    <color name="developer_testing_cyan_dark">#006064</color>
+
+    <!-- Light pastel tints for screen backgrounds: previously every
+         screen was plain white regardless of its accent color, so color
+         only ever showed up in the action bar and buttons. These make
+         the whole screen feel colorful, not just the trim. -->
+    <color name="brand_blue_light">#E3F2FD</color>
+    <color name="trip_history_teal_light">#E0F2F1</color>
+    <color name="trusted_contacts_purple_light">#F3E5F5</color>
+    <color name="permissions_orange_light">#FFF3E0</color>
+    <color name="data_management_indigo_light">#E8EAF6</color>
+    <color name="diagnostics_maroon_light">#FCE4EC</color>
+    <color name="developer_testing_cyan_light">#E0F7FA</color>
+</resources>

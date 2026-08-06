@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Map pin silhouette: represents trip/location tracking -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,14 C70,14 83,27 83,43 C83,64 54,94 54,94 C54,94 25,64 25,43 C25,27 38,14 54,14 Z" />
+    <!-- "Hole" near the top of the pin, cut out in the background color -->
+    <path
+        android:fillColor="#1565C0"
+        android:pathData="M54,30 m-13,0 a13,13 0 1 1 26,0 a13,13 0 1 1 -26,0" />
+    <!-- Checkmark inside the hole: a completed, tracked delivery route -->
+    <path
+        android:pathData="M47,30 L52,35 L62,24"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000" />
+</vector>

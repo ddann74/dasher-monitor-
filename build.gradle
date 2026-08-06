@@ -1,0 +1,9 @@
+// Top-level build file
+// NOTE: AGP 8.4.0 + Chaquopy 15.0.1 requires Gradle 8.7 (pinned in
+// gradle/wrapper/gradle-wrapper.properties). Chaquopy's version-check code
+// uses an internal Gradle API removed in Gradle 9.0, so do NOT let Android
+// Studio upgrade the Gradle wrapper past 8.x without also upgrading Chaquopy.
+plugins {
+    id 'com.android.application' version '8.4.0' apply false
+    id 'com.chaquo.python' version '15.0.1' apply false
+}

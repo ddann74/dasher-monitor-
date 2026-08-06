@@ -1,0 +1,86 @@
+plugins {
+    id 'com.android.application'
+    id 'com.chaquo.python'
+}
+
+android {
+    namespace 'com.drivingefficiency.app'
+    compileSdk 34
+
+    // Loads GOOGLE_MAPS_API_KEY from local.properties (NOT committed to
+    // version control) into a BuildConfig field. Add this one line to
+    // your existing local.properties file (the one Android Studio already
+    // created with sdk.dir=... in it -- don't replace the whole file):
+    //   GOOGLE_MAPS_API_KEY=your_real_key_here
+    // Never hardcode a real API key directly into build.gradle or any
+    // committed source file.
+    def localProperties = new Properties()
+    def localPropertiesFile = rootProject.file('local.properties')
+    if (localPropertiesFile.exists()) {
+        localProperties.load(new FileInputStream(localPropertiesFile))
+    }
+
+    defaultConfig {
+        applicationId "com.drivingefficiency.app"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+
+        buildConfigField "String", "GOOGLE_MAPS_API_KEY",
+                "\"${localProperties.getProperty('GOOGLE_MAPS_API_KEY', '')}\""
+
+        ndk {
+            // Chaquopy currently supports these ABIs
+            abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
+        }
+
+        python {
+            pip {
+                // Add any pure-python dependencies drive_monitor.py needs here
+                // install "requests"
+            }
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+chaquopy {
+    defaultConfig {
+        pyc {
+            src false
+        }
+    }
+    sourceSets {
+        main {
+            srcDirs = ["src/main/python"]
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'com.google.android.gms:play-services-location:21.4.0'
+    // Note: osmdroid was previously listed here for a planned map view
+    // (color-coded route trail + delay pins) that was never actually
+    // built -- a genuinely dead dependency, just adding APK size for a
+    // feature that didn't exist. Removed. Add it back if/when that map
+    // screen actually gets built.
+}

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Exposes the app's cache directory (where exported CSV files are
+     written) and its external files directory (where the diagnostic log
+     export now lives, for genuine persistence/browsability) to
+     FileProvider, not the whole app storage. -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="exports" path="." />
+    <external-files-path name="external_exports" path="." />
+</paths>

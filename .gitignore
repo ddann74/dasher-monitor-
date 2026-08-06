@@ -1,0 +1,19 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+# Unanchored (no leading slash) so this catches every module's build output,
+# not just a root-level build/ folder - the generated .gitignore only
+# excluded the latter, missing app/build/ (Gradle's actual output directory
+# for the one module this project has).
+build/
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Python bytecode cache for the Chaquopy-embedded module - regenerated
+# automatically, never meant to be committed.
+__pycache__/
+*.pyc

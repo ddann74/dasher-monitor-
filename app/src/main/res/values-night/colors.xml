@@ -1,0 +1,46 @@
+<resources>
+    <!-- Dark-mode variants: Android automatically picks these over
+         values/colors.xml when the system is in dark mode, since the
+         app's theme extends Theme.AppCompat.DayNight. Same color names
+         as the light versions, so no layout/Java changes needed anywhere
+         that already references @color/X, Android does the swap.
+
+         score_green/score_red are brightened here specifically for
+         contrast against a dark background (the light-mode values are
+         deep, saturated tones that read fine on white but would be low-
+         contrast on near-black). Everything else this app renders text
+         on top of (button backgrounds, the overlay badge, the status
+         dot) is a solid colored fill with white text, not paired against
+         the system background, so those don't need dark variants at all.
+    -->
+    <color name="score_green">#66BB6A</color>
+    <color name="score_yellow">#FFCA28</color>
+    <color name="score_red">#EF5350</color>
+
+    <color name="brand_blue">#1565C0</color>
+    <color name="brand_blue_dark">#0D47A1</color>
+    <color name="trip_history_teal">#00897B</color>
+    <color name="trip_history_teal_dark">#00695C</color>
+    <color name="trusted_contacts_purple">#8E24AA</color>
+    <color name="trusted_contacts_purple_dark">#6A1B9A</color>
+    <color name="permissions_orange">#EF6C00</color>
+    <color name="permissions_orange_dark">#E65100</color>
+    <color name="data_management_indigo">#3949AB</color>
+    <color name="data_management_indigo_dark">#283593</color>
+    <color name="diagnostics_maroon">#AD1457</color>
+    <color name="diagnostics_maroon_dark">#880E4F</color>
+    <color name="developer_testing_cyan">#00838F</color>
+    <color name="developer_testing_cyan_dark">#006064</color>
+
+    <!-- Dark, hue-tinted screen backgrounds: the actual visible change
+         between day and night mode. Deliberately deep and desaturated
+         rather than pure black, keeping each screen's color identity
+         recognizable even at night. -->
+    <color name="brand_blue_light">#0D1B2A</color>
+    <color name="trip_history_teal_light">#0A211D</color>
+    <color name="trusted_contacts_purple_light">#211526</color>
+    <color name="permissions_orange_light">#271907</color>
+    <color name="data_management_indigo_light">#11132B</color>
+    <color name="diagnostics_maroon_light">#26101A</color>
+    <color name="developer_testing_cyan_light">#04252A</color>
+</resources>

@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Location: trip lifecycle / GPS logging -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+
+    <!-- General-driving auto-start: detects "in vehicle" motion so
+         monitoring can start even if Dasher is never opened at all. -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+
+    <!-- Foreground service (always-on trip tracking) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+
+    <!-- Bluetooth assist (car connect/disconnect) -->
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- Offer / message capture -->
+    <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- Accessibility service: reads UI text after offer acceptance -->
+    <!-- (declared via BIND_ACCESSIBILITY_SERVICE on the service itself) -->
+
+    <!-- Emergency SMS alert (v2.3 roadmap) -->
+
+    <!-- Nominatim geocoding (occasional network use, otherwise 100% offline) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Vibrate for accept/decline suggestion (v3.2 roadmap) -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- Floating overlay bubble for arrival instructions (Zero Interaction While Driving) -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- Battery optimization exemption: without this, aggressive OEM
+         battery managers (Samsung, Xiaomi, etc.) can kill the always-on
+         foreground service despite it being a foreground service. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- Lets BootAndUpdateReceiver log reboots to the diagnostic log,
+         directly relevant to investigating OEM battery killer behavior,
+         since some phones reset battery optimization exemptions after a
+         reboot without telling you. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Required on Android 13+ for ANY notification to show at all,
+         including the persistent status notification and the new
+         watchdog alert. HONEST GAP: only the manifest declaration is
+         here; there's no runtime request flow built for this yet
+         (same category as the other permission flows in
+         PermissionsActivity), so on Android 13+ this may need to be
+         granted manually via system Settings until that's built. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:name=".DasherMonitorApplication"
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.DasherMonitor">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- The six category screens the main screen's buttons were split
+             into, since previously 23 buttons were stacked in one long
+             scroll with no grouping at all. Each gets its own distinct
+             theme color for quick visual recognition. -->
+        <activity android:name=".TripHistoryActivity" android:exported="false"
+            android:theme="@style/Theme.DasherMonitor.TripHistory"
+            android:parentActivityName=".MainActivity" />
+        <activity android:name=".TrustedContactsActivity" android:exported="false"
+            android:theme="@style/Theme.DasherMonitor.TrustedContacts"
+            android:parentActivityName=".MainActivity" />
+        <activity android:name=".CannedRepliesActivity" android:exported="false"
+            android:theme="@style/Theme.DasherMonitor"
+            android:parentActivityName=".PermissionsActivity" />
+        <activity android:name=".PermissionsActivity" android:exported="false"
+            android:theme="@style/Theme.DasherMonitor.Permissions"
+            android:parentActivityName=".MainActivity" />
+        <activity android:name=".DataManagementActivity" android:exported="false"
+            android:theme="@style/Theme.DasherMonitor.DataManagement"
+            android:parentActivityName=".MainActivity" />
+        <activity android:name=".DiagnosticsActivity" android:exported="false"
+            android:theme="@style/Theme.DasherMonitor.Diagnostics"
+            android:parentActivityName=".MainActivity" />
+        <activity android:name=".DeveloperTestingActivity" android:exported="false"
+            android:theme="@style/Theme.DasherMonitor.DeveloperTesting"
+            android:parentActivityName=".MainActivity" />
+
+        <!-- Foreground service: GPS logging, trip state machine -->
+        <service
+            android:name=".TripForegroundService"
+            android:foregroundServiceType="location"
+            android:exported="false" />
+
+        <!-- Captures Dasher offer + message notifications -->
+        <service
+            android:name=".AppNotificationListenerService"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- Reads screen text after offer acceptance for 100%-accurate address -->
+        <service
+            android:name=".DasherAccessibilityService"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- Logs reboots and app updates to the diagnostic log; see
+             BootAndUpdateReceiver's class doc for why this matters for
+             OEM battery killer investigation. -->
+        <receiver
+            android:name=".BootAndUpdateReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Independent watchdog: alerts if monitoring appears to have
+             stopped unexpectedly. Triggered by AlarmManager, which Android
+             will invoke even if the main app process was killed; see
+             MonitoringWatchdogReceiver's class doc for the honest limits
+             of what "instant" detection actually means here. -->
+        <receiver
+            android:name=".MonitoringWatchdogReceiver"
+            android:exported="false" />
+
+        <!-- General-driving auto-start: receives Activity Recognition
+             transition results (in-vehicle detection). -->
+        <receiver
+            android:name=".DrivingDetectionReceiver"
+            android:exported="false" />
+
+        <!-- Lets exported CSV files be shared via Intent.ACTION_SEND
+             without exposing the app's whole file storage. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.drivingefficiency.app.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+    </application>
+</manifest>
