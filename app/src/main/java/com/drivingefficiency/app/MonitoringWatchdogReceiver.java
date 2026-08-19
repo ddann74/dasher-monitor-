@@ -157,23 +157,39 @@ public class MonitoringWatchdogReceiver extends BroadcastReceiver {
                 + "+ min since last heartbeat, monitoring was intended to be active");
         raiseAlert(context, staleness);
 
-        // Confirmed real gap: a real diagnostic log showed this alert
+        // Confirmed real gap #1: a real diagnostic log showed this alert
         // firing three separate times (7, 12, 17+ minutes stale) with no
         // evidence monitoring ever actually resumed afterward -- this
         // was previously only ever a notification, entirely dependent on
         // the user noticing and manually reopening the app. Attempts an
         // actual restart now, using the exact same proven
         // cross-component trigger already relied on for Dasher
-        // auto-start and Dash-Paused auto-resume. TripForegroundService's
-        // own startTracking() already safely no-ops if it's somehow
-        // already running, so this can't cause a disruptive restart of
-        // something that's actually fine.
-        if (!TripForegroundService.isRunning) {
-            Intent restartIntent = new Intent(context, TripForegroundService.class);
+        // auto-start and Dash-Paused auto-resume.
+        //
+        // Confirmed real gap #2, worse than #1: a separate ~3.5-hour
+        // incident showed TripForegroundService.isRunning staying true
+        // the entire time (the service, and even its independent
+        // 15-second accessibility heartbeat, never actually died) while
+        // the regular heartbeat still went stale for 82 consecutive
+        // alerts with only ONE restart attempt ever logged. The old
+        // "if (!isRunning)" guard here meant that once isRunning was
+        // true, nothing was ever attempted again -- and even if it had
+        // been, ACTION_START_TRACKING no-ops via startTracking()'s own
+        // early return while monitoringActive is already true, so it
+        // could not have fixed a stalled GPS callback anyway. Now takes
+        // real action on every firing, not just the first, and picks the
+        // action that actually matches the failure: a full restart if
+        // the service is genuinely dead, or a location-update kick
+        // (ACTION_KICK_LOCATION_UPDATES) if it's alive but stuck.
+        Intent restartIntent = new Intent(context, TripForegroundService.class);
+        if (TripForegroundService.isRunning) {
+            restartIntent.setAction(TripForegroundService.ACTION_KICK_LOCATION_UPDATES);
+            logToEngine(context, "WATCHDOG", "Service already running but heartbeat stale -- kicking GPS location updates");
+        } else {
             restartIntent.setAction(TripForegroundService.ACTION_START_TRACKING);
-            context.startForegroundService(restartIntent);
-            logToEngine(context, "WATCHDOG", "Attempted automatic restart of monitoring after staleness detected");
+            logToEngine(context, "WATCHDOG", "Service not running -- attempting full restart");
         }
+        context.startForegroundService(restartIntent);
     }
 
     private void logToEngine(Context context, String category, String message) {

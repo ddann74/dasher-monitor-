@@ -382,6 +382,24 @@ public class DasherAccessibilityService extends AccessibilityService {
             // accessibility event (system overlay, IME, etc.) without
             // meaningfully delaying detection of an actual, sustained
             // app switch.
+            // This app's own package briefly coming to the foreground (e.g.
+            // the driver glancing at the status screen) is not a real
+            // signal about whether Dasher or driving stopped -- unlike the
+            // debounce above, which only filters sub-second flicker, a
+            // multi-second look at this app's own UI is "genuine" by the
+            // debounce's own definition and would otherwise commit a real
+            // switch away from Dasher, then switch straight back, each with
+            // its own spoken announcement. Confirmed via a real diagnostic
+            // log: DASHER->GENERAL->DASHER->GENERAL->DASHER->GENERAL, three
+            // full round trips in about 60 seconds, from nothing more than
+            // checking the app twice. Skipped entirely -- not even started
+            // as a debounce candidate -- so whatever mode was committed
+            // before this glance is exactly what's still committed after.
+            boolean isSelf = packageName.equals(getPackageName());
+            if (isSelf) {
+                return;
+            }
+
             if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
                 long nowMs = System.currentTimeMillis();
                 if (isDasher == isDasherForeground) {

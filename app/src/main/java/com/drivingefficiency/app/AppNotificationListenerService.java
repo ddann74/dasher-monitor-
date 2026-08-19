@@ -62,6 +62,18 @@ public class AppNotificationListenerService extends NotificationListenerService 
     private static final String SMS_PACKAGE = "com.google.android.apps.messaging";
     private static final String MESSENGER_PACKAGE = "com.facebook.orca";
 
+    // Messenger posts these as its own system/status notifications, not as
+    // a message from a person -- but their EXTRA_TITLE still gets passed to
+    // is_trusted_sender() like any real sender name, and if it happens to
+    // satisfy a trusted-contact substring match, it gets read aloud
+    // verbatim as if it were a message. Confirmed against a real 12-day
+    // diagnostic log: "Chat heads active" alone accounted for 264 of 396
+    // total personal-message reads (67%) -- by far the single noisiest
+    // thing in the log. Checked before the trusted-sender lookup so these
+    // never reach it, regardless of what's on the trusted list.
+    private static final java.util.Set<String> MESSENGER_SYSTEM_NOTIFICATION_TITLES = new java.util.HashSet<>(
+            java.util.Arrays.asList("Chat heads active", "Messenger Audio call", "Messenger Video call"));
+
     private PyObject engine;
     private String lastNotificationOfferKey = null;
     // Defense in depth alongside the empty-content guard in
@@ -196,6 +208,10 @@ public class AppNotificationListenerService extends NotificationListenerService 
 
             // --- Personal: trusted-contacts allowlist (SMS / Messenger) ---
             if (isPersonalMessagingApp) {
+                if (MESSENGER_SYSTEM_NOTIFICATION_TITLES.contains(title.toString())) {
+                    logDiagnostic("PERSONAL_MSG", "Ignored (Messenger system notification, not a message: " + title + ")");
+                    return;
+                }
                 boolean trusted = engine.callAttr("is_trusted_sender", title.toString())
                         .toBoolean();
                 if (trusted && text.length() > 0) {
