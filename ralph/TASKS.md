@@ -96,9 +96,14 @@ Priority order top to bottom within each section; sections are roughly sequentia
       caps and the 15-minute staleness fallback. `python3 -m pytest
       app/src/main/python/tests/test_smart_score_weather.py -v`: 9 passed. Full suite:
       35 passed.)
-- [ ] FR-13: write a unit test for `MessageIntelligence` with representative sample strings for
+- [x] FR-13: write a unit test for `MessageIntelligence` with representative sample strings for
       each recognized message category (delivery note, address correction, ETA update). Verify:
       real passing run.
+      (Verified 2026-08-19, iteration 10 — see ralph/PROGRESS.log. Created
+      app/src/main/python/tests/test_message_intelligence.py, 13 tests including a
+      priority-order regression (instruction keywords beat address-correction keywords when
+      both match). `python3 -m pytest app/src/main/python/tests/test_message_intelligence.py
+      -v`: 13 passed. Full suite: 48 passed.)
 - [ ] FR-16: write a unit test for `TrustedContacts.is_trusted()` covering exact match,
       substring match, case-insensitivity, and a non-matching sender being correctly rejected.
       Verify: real passing run.

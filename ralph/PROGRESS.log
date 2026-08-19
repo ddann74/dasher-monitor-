@@ -295,9 +295,40 @@ Output: 35 passed, 0 failed.
 
 Task result: [x] checked in ralph/TASKS.md.
 
-=== End of this supervised run (9 iterations) ===
-All 9 committed and pushed to origin/fix-watchdog-recovery-and-notification-noise. Suggested
-next unchecked task: FR-13 (MessageIntelligence category recognition test).
+=== Iteration 10 — 2026-08-19T09:48Z ===
+Task: FR-13 (PRD.md §4.4) — unit test for MessageIntelligence with representative sample
+strings for each recognized message category.
+
+Read the class directly: simple keyword-based classify()/extract_instruction()/is_urgent(),
+checked in a FIXED priority order (INSTRUCTION_KEYWORDS -> ADDRESS_CORRECTION_KEYWORDS ->
+LATE_KEYWORDS) -- worth testing explicitly since a message can trigger more than one
+category's keywords at once (e.g. "not " is broad).
+
+Wrote app/src/main/python/tests/test_message_intelligence.py, 13 tests:
+- classify(): 4 cases covering allowed/disallowed package x messaging-style/not.
+- extract_instruction(): 8 true-positive samples across the 3 categories (delivery_note,
+  address_correction, eta_adjustment) and 4 negative samples (plain pleasantries) that must
+  return None.
+- Priority-order regression: a message containing BOTH an instruction keyword ("leave at")
+  and an address-correction keyword ("it's") must classify as delivery_note, matching the
+  real check order in the code (proves the ordering, not just that individual keywords work
+  in isolation).
+- is_urgent(): delivery_note and address_correction are urgent; eta_adjustment and None are not.
+
+Command: `python3 -m pytest app/src/main/python/tests/test_message_intelligence.py -v`
+Output: 13 passed.
+Command: `python3 -m pytest app/src/main/python/tests/ -v` (full suite)
+Output: 48 passed, 0 failed.
+
+Task result: [x] checked in ralph/TASKS.md.
+
+=== End of this supervised run (10 iterations) ===
+All 10 committed and pushed to origin/fix-watchdog-recovery-and-notification-noise. Suggested
+next unchecked task: FR-16 (TrustedContacts.is_trusted() matching test).
+
+FLAGGED FOR HUMAN REVIEW: README.md and PRD.md both under-describe the traffic-risk tier
+count (say 3, code has 4 -- see iteration 8 above). Consider a follow-up task to correct
+both documents once a human reviews this.
 
 FLAGGED FOR HUMAN REVIEW: README.md and PRD.md both under-describe the traffic-risk tier
 count (say 3, code has 4 -- see iteration 8 above). Consider a follow-up task to correct
