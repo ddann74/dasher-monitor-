@@ -106,3 +106,31 @@ Command: `python3 -m pytest app/src/main/python/tests/ -v` (full suite, regressi
 Output: 3 passed, 0 failed
 
 Task result: [x] checked in ralph/TASKS.md.
+
+=== Iteration 4 — 2026-08-19T09:08Z ===
+Task: FR-3 (PRD.md §4.1) — unit test for TripManager._evaluate_trip_end covering both the
+GENERAL-mode parking-ends-trip rule and the DASHER-mode pending-stop rule, including the
+documented case where an active not-yet-departed pickup counts as a DASHER signal.
+
+Read _evaluate_trip_end directly: parking is detected via speed<TRIP_STOP_SPEED_KMH held
+for TRIP_END_PARK_SECONDS (300s); once parked long enough, the trip ends UNLESS
+_trip_mode=="DASHER" AND (an unmatched stop exists OR an active/unrecorded pickup exists).
+
+Wrote app/src/main/python/tests/test_trip_manager_trip_end.py with 4 cases, each starting a
+real trip via the actual speed/hold state machine (same helper pattern as iteration 3) and
+calling the real _evaluate_trip_end across two ticks (start of park, then +300s):
+1. GENERAL mode, no stops, no pickup, parked -> trip ends (state IDLE). Regression test for
+   the README-documented bug where trip-ending previously required >=1 stop to ever exist.
+2. DASHER mode, one unmatched stop, parked -> trip stays ACTIVE.
+3. DASHER mode, active (unrecorded) pickup, parked -> trip stays ACTIVE. This is the specific
+   named bug fix in README.md (a long restaurant wait looks identical to a genuine
+   end-of-trip park from GPS alone).
+4. DASHER mode, one stop already matched, no pickup, parked -> trip ends (state IDLE) --
+   confirms parking alone is sufficient once every registered stop is matched.
+
+Command: `python3 -m pytest app/src/main/python/tests/test_trip_manager_trip_end.py -v`
+Output: 4 passed.
+Command: `python3 -m pytest app/src/main/python/tests/ -v` (full suite)
+Output: 7 passed, 0 failed.
+
+Task result: [x] checked in ralph/TASKS.md.

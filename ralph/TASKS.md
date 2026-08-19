@@ -41,10 +41,14 @@ Priority order top to bottom within each section; sections are roughly sequentia
       app/src/main/python/tests/test_trip_manager_pickup_distance.py. `python3 -m pytest
       app/src/main/python/tests/test_trip_manager_pickup_distance.py -v`: 1 passed. Full
       suite: 3 passed.)
-- [ ] FR-3: write a unit test for `TripManager._evaluate_trip_end` covering both the
+- [x] FR-3: write a unit test for `TripManager._evaluate_trip_end` covering both the
       GENERAL-mode parking-ends-trip rule and the DASHER-mode pending-stop rule, including the
       documented case where an active not-yet-departed pickup itself counts as a DASHER signal.
       Verify: test file + real passing run.
+      (Verified 2026-08-19, iteration 4 — see ralph/PROGRESS.log. Created
+      app/src/main/python/tests/test_trip_manager_trip_end.py, 4 cases. `python3 -m pytest
+      app/src/main/python/tests/test_trip_manager_trip_end.py -v`: 4 passed. Full suite:
+      7 passed.)
 - [ ] FR-5: write a unit test asserting `SmartScoreEngine`'s six factor weights sum to 1.00 and
       that a known synthetic input produces the expected composite score. Verify: real passing
       run.
