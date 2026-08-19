@@ -24,13 +24,16 @@ Priority order top to bottom within each section; sections are roughly sequentia
       (real `python3 -m pytest` runs against drive_monitor.py) IS reachable for this loop.)
 
 ## 2. Verify what's claimed done (README + PRD §4, FR-1 through FR-25)
-- [ ] Set up a way to unit-test `app/src/main/python/drive_monitor.py` in isolation (no
+- [x] Set up a way to unit-test `app/src/main/python/drive_monitor.py` in isolation (no
       Chaquopy/Android needed — it's plain Python). Create `app/src/main/python/tests/` (or
       repo-root `tests/`, pick one and note why in PROGRESS.log) with a minimal
       `test_smoke.py` that just imports the module and asserts the key classes exist
       (`TripManager`, `SmartScoreEngine`, `OfferScreenParser`, `MessageIntelligence`,
       `StopsBuffer`, `Database`, `TrustedContacts`). Verify: `python3 -m pytest` (or
       `python3 -m unittest`) actually runs and passes against this file — paste real output.
+      (Verified 2026-08-19, iteration 2 — see ralph/PROGRESS.log. Created
+      app/src/main/python/tests/{conftest.py,test_smoke.py}. `python3 -m pytest
+      app/src/main/python/tests/test_smoke.py -v`: 2 passed.)
 - [ ] FR-1: write a unit test for `TripManager` pickup arrival/departure distance tracking —
       feed synthetic GPS points, assert deadhead distance and delivery-leg distance match the
       known synthetic path within a defined tolerance. Verify: test file + real passing run.

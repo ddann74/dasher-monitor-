@@ -41,3 +41,32 @@ since neither a real build nor a JVM test runner is available here.
 
 Task result: [x] checked in ralph/TASKS.md — both probes were tried and their real outcomes
 are logged above, which is what this task required.
+
+=== Iteration 2 — 2026-08-19T08:56Z ===
+Task: "2. Verify what's claimed done" — first item: set up a way to unit-test
+drive_monitor.py in isolation (no Chaquopy/Android needed).
+
+Checked first whether the module even imports outside Chaquopy: read the top of
+drive_monitor.py — only stdlib imports at module level (sqlite3, time, math, json, os,
+re, datetime). Confirmed directly:
+  `python3 -c "import sys; sys.path.insert(0,'app/src/main/python'); import drive_monitor"`
+  -> "import OK", and hasattr() checks for all 7 expected classes (TripManager,
+  SmartScoreEngine, OfferScreenParser, MessageIntelligence, StopsBuffer, Database,
+  TrustedContacts) all returned True.
+
+Created app/src/main/python/tests/ (chose this location, not repo-root tests/, so the
+test package sits next to the module it tests and is obviously part of the Python side,
+not the Java/Gradle side):
+  - app/src/main/python/tests/conftest.py — adds the parent dir to sys.path so
+    `import drive_monitor` resolves without needing to install it as a package.
+  - app/src/main/python/tests/test_smoke.py — test_module_imports, and
+    test_expected_classes_exist asserting all 7 classes are present.
+
+Command: `python3 -m pytest app/src/main/python/tests/test_smoke.py -v`
+Output:
+  app/src/main/python/tests/test_smoke.py::test_module_imports PASSED      [ 50%]
+  app/src/main/python/tests/test_smoke.py::test_expected_classes_exist PASSED [100%]
+  2 passed in 0.02s
+
+Task result: [x] checked in ralph/TASKS.md. This establishes the pattern (path setup via
+conftest.py) every subsequent drive_monitor.py test task in this file should reuse.
