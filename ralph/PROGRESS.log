@@ -322,9 +322,46 @@ Output: 48 passed, 0 failed.
 
 Task result: [x] checked in ralph/TASKS.md.
 
-=== End of this supervised run (10 iterations) ===
-All 10 committed and pushed to origin/fix-watchdog-recovery-and-notification-noise. Suggested
-next unchecked task: FR-16 (TrustedContacts.is_trusted() matching test).
+=== Iteration 11 — 2026-08-19T10:05Z ===
+Task: FR-16 (PRD.md §4.4) — unit test for TrustedContacts.is_trusted() covering exact match,
+substring match, case-insensitivity, and a non-matching sender being rejected.
+
+Read the class directly and found a real, easy-to-miss behavior worth testing explicitly:
+is_trusted() returns TRUE BY DEFAULT when the allowlist is completely empty (no contacts
+added yet at all) -- documented in its own docstring as a deliberate "don't silently go quiet
+with no indication why" choice. Only once at least one contact exists does it become a real
+allowlist. The task's "non-matching sender rejected" case only holds once the list is
+non-empty -- tested both states explicitly, not just the non-empty case.
+
+Wrote app/src/main/python/tests/test_trusted_contacts.py, 8 tests:
+1. Empty list -> is_trusted() True for literally anyone (the documented default).
+2. Exact match.
+3. Substring match (trusted "mom" matches "Mom", "Mom [heart emoji]", "Call me Mom").
+4. Case-insensitivity.
+5. Non-matching sender rejected once the list is non-empty (both a clearly unrelated name and
+   an empty string).
+6. add() normalizes (strip + lowercase) and dedupes via INSERT OR IGNORE -- "  Mom  " and
+   "MOM" both added -> list_all() has exactly one entry, "mom".
+7. add() with an empty/whitespace-only name is a no-op -- AND confirms this didn't create a
+   phantom empty-string entry that would match everything via substring-in-string (would be a
+   real, subtle bug if it had).
+8. remove() takes a contact off the list; is_trusted() correctly flips to False for that
+   sender afterward while a remaining contact still matches.
+
+Command: `python3 -m pytest app/src/main/python/tests/test_trusted_contacts.py -v`
+Output: 8 passed.
+Command: `python3 -m pytest app/src/main/python/tests/ -v` (full suite)
+Output: 56 passed, 0 failed.
+
+Task result: [x] checked in ralph/TASKS.md.
+
+=== End of this supervised run (11 iterations) ===
+All 11 committed and pushed to origin/fix-watchdog-recovery-and-notification-noise. Suggested
+next unchecked task: FR-17 (TripManager.get_mode() DASHER-trigger conditions test).
+
+FLAGGED FOR HUMAN REVIEW: README.md and PRD.md both under-describe the traffic-risk tier
+count (say 3, code has 4 -- see iteration 8 above). Consider a follow-up task to correct
+both documents once a human reviews this.
 
 FLAGGED FOR HUMAN REVIEW: README.md and PRD.md both under-describe the traffic-risk tier
 count (say 3, code has 4 -- see iteration 8 above). Consider a follow-up task to correct

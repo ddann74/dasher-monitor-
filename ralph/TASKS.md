@@ -104,9 +104,14 @@ Priority order top to bottom within each section; sections are roughly sequentia
       priority-order regression (instruction keywords beat address-correction keywords when
       both match). `python3 -m pytest app/src/main/python/tests/test_message_intelligence.py
       -v`: 13 passed. Full suite: 48 passed.)
-- [ ] FR-16: write a unit test for `TrustedContacts.is_trusted()` covering exact match,
+- [x] FR-16: write a unit test for `TrustedContacts.is_trusted()` covering exact match,
       substring match, case-insensitivity, and a non-matching sender being correctly rejected.
       Verify: real passing run.
+      (Verified 2026-08-19, iteration 11 — see ralph/PROGRESS.log. Also tested a real
+      documented behavior beyond the task wording: an empty allowlist defaults to trusting
+      everyone, not no one. Created app/src/main/python/tests/test_trusted_contacts.py, 8
+      tests. `python3 -m pytest app/src/main/python/tests/test_trusted_contacts.py -v`:
+      8 passed. Full suite: 56 passed.)
 - [ ] FR-17: write a unit test for `TripManager.get_mode()` covering all three independent
       DASHER-triggering conditions (Dasher foregrounded / unmatched stop pending / active
       not-yet-departed pickup) plus the GENERAL default. Verify: real passing run.
