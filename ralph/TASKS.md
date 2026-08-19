@@ -75,9 +75,17 @@ Priority order top to bottom within each section; sections are roughly sequentia
       different restaurant's data. `python3 -m pytest
       app/src/main/python/tests/test_smart_score_deadhead_and_wait.py -v`: 6 passed. Full
       suite: 21 passed.)
-- [ ] FR-9: write a unit test forcing each of the three traffic-risk preconditions (live result
+- [x] FR-9: write a unit test forcing each of the three traffic-risk preconditions (live result
       <5 min old / 5+ trips personal average / neither) and asserting `traffic_risk_source`
       reports the correct tier each time. Verify: real passing run.
+      (Verified 2026-08-19, iteration 8 — see ralph/PROGRESS.log. IMPORTANT: found the real
+      code has FOUR tiers (live/zone/personal/generic), not three as README.md and this task's
+      own wording say — flagged for human review, not fixed in this iteration per the
+      guardrail against doc-editing as a side effect. Created
+      app/src/main/python/tests/test_smart_score_traffic_risk.py, 5 tests covering all 4 real
+      tiers including priority-ordering proof (zone beats personal, live beats zone). `python3
+      -m pytest app/src/main/python/tests/test_smart_score_traffic_risk.py -v`: 5 passed. Full
+      suite: 26 passed.)
 - [ ] FR-10: write a unit test with a mocked/stubbed Open-Meteo response asserting the weather
       factor score moves in the expected direction for heavy rain vs. clear conditions, and that
       it falls back to neutral 100 when no reading is <15 min old. Verify: real passing run.
@@ -136,6 +144,15 @@ Priority order top to bottom within each section; sections are roughly sequentia
       implemented but UNCONFIRMED on a real device — do not claim them fully done, since no
       device test exists yet. Verify: diff review confirms the new wording matches PRD §5
       exactly (implemented-but-unconfirmed, not done, not still-a-stub).
+- [ ] Correct the traffic-risk tier count in both `README.md`'s "Real Google Maps
+      integration" section and `PRD.md` FR-9: both currently say the traffic-risk factor has
+      THREE tiers (live/personal/generic), but `SmartScoreEngine._get_traffic_risk` actually
+      has FOUR (live -> zone -> personal -> generic) — found and verified with a real passing
+      test in ralph/PROGRESS.log iteration 8 (`test_smart_score_traffic_risk.py`, which proves
+      the zone tier's priority over personal with a real fixture). Update both documents to
+      describe the zone tier (what it is, `ZONE_MIN_SAMPLES`, its priority position) rather
+      than continuing to omit it. Verify: diff review confirms both docs now match the code's
+      real 4-tier behavior.
 - [ ] Write the exact human-only manual-verification script for post-accept address
       reading + geocoding (PRD §5 row 1-2): step-by-step instructions for a person with a real
       Dasher account to accept a real offer and confirm the "Deliver to X" address is captured

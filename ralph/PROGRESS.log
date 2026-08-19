@@ -225,6 +225,48 @@ Output: 21 passed, 0 failed.
 
 Task result: [x] checked in ralph/TASKS.md.
 
-=== End of this supervised run (7 iterations) ===
-All 7 committed and pushed to origin/fix-watchdog-recovery-and-notification-noise. Suggested
-next unchecked task: FR-9 (traffic-risk 3-tier source test: live/personal/generic).
+=== Iteration 8 — 2026-08-19T09:35Z ===
+Task: FR-9 (PRD.md §4.2) — unit test forcing each of the three traffic-risk preconditions
+and asserting traffic_risk_source reports the correct tier each time.
+
+REAL DISCREPANCY FOUND (flagged for human review): both README.md ("now has three tiers,
+checked in order: live -> personal -> generic") and PRD.md's own FR-9 wording describe THREE
+traffic-risk tiers. Reading _get_traffic_risk directly shows FOUR tiers actually exist: live
+-> zone (_get_traffic_risk_by_zone -- a rounded lat/lon grid cell + hour combination,
+requiring >=ZONE_MIN_SAMPLES=3 same-zone-same-hour trips) -> personal (_is_peak_hour,
+hour-of-day only, >=5 total trips) -> generic. The "zone" tier is real, working code that
+neither README.md nor PRD.md currently document. This is the second documentation-vs-code
+gap found this loop (after the stale TODO section PRD.md's own status note already flags) --
+recommend PRD.md §4.2 FR-9 and README.md's traffic section both get updated to describe 4
+tiers, not 3. NOT fixing README.md/PRD.md wording in this iteration per ralph/PROMPT.md's
+guardrail (doc updates are their own task, not a side effect of a test-writing task) --
+flagging here for a human or a future dedicated task to act on.
+
+Wrote app/src/main/python/tests/test_smart_score_traffic_risk.py, 5 tests covering all 4 real
+tiers (more thorough than the 3-tier task wording, to match actual behavior):
+1. Generic, off-peak hour (10) -> low risk.
+2. Generic, peak hour (12, lunch window) -> high risk.
+3. Personal tier activates once >=5 total trips exist (4 fast trips at hour 8, 1 slow at hour
+   17, no lat/lon so zone can never trigger) -> correctly identifies hour 17 as high-risk
+   relative to the driver's own overall average.
+4. Zone tier overrides personal when same-zone-same-hour data exists (3 slow trips in one
+   zone at hour 9 + 1 faster same-zone trip at a different hour, PLUS 5 unrelated trips that
+   would satisfy the personal tier on their own) -> source is "zone", not "personal",
+   confirming real priority ordering, not just "only data present."
+5. Live tier overrides zone AND personal when a fresh reading exists (same zone fixture as
+   test 4, plus record_live_traffic_delay) -> source is "live".
+
+Command: `python3 -m pytest app/src/main/python/tests/test_smart_score_traffic_risk.py -v`
+Output: 5 passed.
+Command: `python3 -m pytest app/src/main/python/tests/ -v` (full suite)
+Output: 26 passed, 0 failed.
+
+Task result: [x] checked in ralph/TASKS.md.
+
+=== End of this supervised run (8 iterations) ===
+All 8 committed and pushed to origin/fix-watchdog-recovery-and-notification-noise. Suggested
+next unchecked task: FR-10 (weather factor test with mocked Open-Meteo response).
+
+FLAGGED FOR HUMAN REVIEW: README.md and PRD.md both under-describe the traffic-risk tier
+count (say 3, code has 4 -- see iteration 8 above). Consider a follow-up task to correct
+both documents once a human reviews this.
