@@ -134,3 +134,44 @@ Command: `python3 -m pytest app/src/main/python/tests/ -v` (full suite)
 Output: 7 passed, 0 failed.
 
 Task result: [x] checked in ralph/TASKS.md.
+
+=== Iteration 5 — 2026-08-19T09:14Z ===
+Task: FR-5 (PRD.md §4.2) — unit test asserting SmartScoreEngine's six factor weights sum
+to 1.00 and that a known synthetic input produces the expected composite score.
+
+Read the real weight constants (WEIGHT_BASE_RATE=0.36, WEIGHT_HOURLY_RATE=0.225,
+WEIGHT_DEADHEAD=0.135, WEIGHT_RESTAURANT_WAIT=0.09, WEIGHT_TIME_OF_DAY=0.09,
+WEIGHT_WEATHER=0.10 -- these DO sum to 1.00), `calculate()`, and every per-factor cold-start
+fallback (_estimate_deadhead_km, _restaurant_wait_info, _get_traffic_risk/_is_peak_hour,
+_get_weather_score, _get_calibrated_weights) to hand-compute an exact expected score for a
+fresh (:memory:) DB with zero history -- every factor is then fully deterministic, not an
+approximation.
+
+Wrote app/src/main/python/tests/test_smart_score_engine.py, 3 tests:
+1. Module-level weight constants sum to 1.00 (direct assertion, no engine needed).
+2. A fresh SmartScoreEngine's _get_calibrated_weights() returns the exact base weights
+   unchanged (confirms the precondition the hand-computed score below depends on -- no
+   personal_calibration rows means no renormalization).
+3. `calculate(payout=20.0, distance_km=10.0, est_minutes=20.0, restaurant_name="Brand New
+   Test Restaurant", hour_24=10)` against the hand-computed expectation: base_score=100.0
+   ($2/km), hourly_score=100.0 ($60/hr), deadhead_score=100.0 (no history -> 0km),
+   wait_score=76.0 (no history -> 6.0min default), time_score=70.0 (hour 10 is outside both
+   peak windows, <5 trips recorded -> generic low-risk), weather_score=100.0 (no live
+   reading -> neutral) -> final_score = 95.14 -> rounds to 95.1, label "Excellent". Also
+   asserts traffic_risk_source=="generic", deadhead_samples==0,
+   restaurant_wait_is_learned==False, delivery_speed_is_learned==False (all correct
+   "unlearned/cold-start" transparency flags, matching PRD FR-6/FR-7/FR-8's honesty
+   requirements).
+
+Command: `python3 -m pytest app/src/main/python/tests/test_smart_score_engine.py -v`
+Output: 3 passed (all matched the hand-computed values on the first run, no debugging needed).
+Command: `python3 -m pytest app/src/main/python/tests/ -v` (full suite)
+Output: 10 passed, 0 failed.
+
+Task result: [x] checked in ralph/TASKS.md.
+
+=== End of this supervised run (5 iterations) ===
+Per ralph/README.md's guidance to start with MAX_ITERATIONS=5 for early runs, stopping here
+for human review. All 5 committed and pushed to
+origin/fix-watchdog-recovery-and-notification-noise. Suggested next unchecked task for the
+next run: FR-6 (delivery_speed_is_learned false->true transition test).

@@ -49,9 +49,14 @@ Priority order top to bottom within each section; sections are roughly sequentia
       app/src/main/python/tests/test_trip_manager_trip_end.py, 4 cases. `python3 -m pytest
       app/src/main/python/tests/test_trip_manager_trip_end.py -v`: 4 passed. Full suite:
       7 passed.)
-- [ ] FR-5: write a unit test asserting `SmartScoreEngine`'s six factor weights sum to 1.00 and
+- [x] FR-5: write a unit test asserting `SmartScoreEngine`'s six factor weights sum to 1.00 and
       that a known synthetic input produces the expected composite score. Verify: real passing
       run.
+      (Verified 2026-08-19, iteration 5 — see ralph/PROGRESS.log. Created
+      app/src/main/python/tests/test_smart_score_engine.py, 3 tests including a fully
+      hand-computed synthetic-input score (95.1, "Excellent"). `python3 -m pytest
+      app/src/main/python/tests/test_smart_score_engine.py -v`: 3 passed. Full suite:
+      10 passed.)
 - [ ] FR-6: write a unit test confirming `delivery_speed_is_learned` is `false` before any
       completed delivery and `true` (using the running average, not the 25 km/h fallback) after
       one synthetic completed delivery. Verify: real passing run.
