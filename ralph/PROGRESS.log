@@ -170,8 +170,32 @@ Output: 10 passed, 0 failed.
 
 Task result: [x] checked in ralph/TASKS.md.
 
-=== End of this supervised run (5 iterations) ===
-Per ralph/README.md's guidance to start with MAX_ITERATIONS=5 for early runs, stopping here
-for human review. All 5 committed and pushed to
-origin/fix-watchdog-recovery-and-notification-noise. Suggested next unchecked task for the
-next run: FR-6 (delivery_speed_is_learned false->true transition test).
+=== Iteration 6 — 2026-08-19T09:22Z ===
+Task: FR-6 (PRD.md §4.2) — unit test confirming delivery_speed_is_learned is false before any
+completed delivery and true (using the running average) after one.
+
+Read record_delivery_speed() and _learned_delivery_speed_kmh() directly: global (not
+per-restaurant) running average, sanity-guarded to reject speed_kmh<=0 or >150 (GPS
+glitch/jump protection).
+
+Wrote app/src/main/python/tests/test_smart_score_delivery_speed.py, 5 tests:
+1. Fresh engine -> unlearned, ASSUMED_DELIVERY_SPEED_KMH (25.0) fallback, 0 samples.
+2. One record_delivery_speed(10km, 0.5h = 20km/h) -> learned, 20.0 km/h, 1 sample.
+3. Two records (20km/h then 40km/h) -> running average 30.0 km/h, 2 samples.
+4. A third, implausible record (10km in 0.01h = 1000km/h) -> rejected by the >150km/h sanity
+   guard, sample count and average stay at the prior values (regression test for the guard
+   actually working, not just existing).
+5. calculate()'s output flags (delivery_speed_is_learned, delivery_speed_samples,
+   delivery_speed_kmh) correctly reflect the before/after state across one real
+   record_delivery_speed() call.
+
+Command: `python3 -m pytest app/src/main/python/tests/test_smart_score_delivery_speed.py -v`
+Output: 5 passed.
+Command: `python3 -m pytest app/src/main/python/tests/ -v` (full suite)
+Output: 15 passed, 0 failed.
+
+Task result: [x] checked in ralph/TASKS.md.
+
+=== End of this supervised run (6 iterations) ===
+All 6 committed and pushed to origin/fix-watchdog-recovery-and-notification-noise. Suggested
+next unchecked task: FR-7 and FR-8 (deadhead / restaurant-wait 3-tier fallback tests).
