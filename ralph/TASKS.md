@@ -120,13 +120,21 @@ Priority order top to bottom within each section; sections are roughly sequentia
       across all 3 conditions independently. `python3 -m pytest
       app/src/main/python/tests/test_trip_manager_get_mode.py -v`: 8 passed. Full suite:
       64 passed.)
-- [ ] FR-4: manual-review checklist (Java, not Python-testable without Android) — read
+- [x] FR-4: manual-review checklist (Java, not Python-testable without Android) — read
       `TripForegroundService`'s phase-timing code path end to end and confirm all five phases
       (deadhead, pickup wait, delivery leg, parking-to-walking, completing dropoff) are each
       captured by a distinct, correctly-ordered timestamp pair with no gap or double-count.
       Write the checklist and findings into `ralph/PROGRESS.log`. This is a manual-review-level
       task, not a build/test — check the box once the checklist is written and each item
       confirmed against the actual code, not before.
+      (Verified 2026-08-19, iteration 13 — see ralph/PROGRESS.log. All 5 phases traced to
+      their real capture sites: TripForegroundService.java's only involvement is a single
+      `on_gps_update()` call; all timestamp capture and re-fire guards live in
+      drive_monitor.py. All confirmed single-fire (3 different guard mechanisms: an
+      in-memory None-check, a "recorded" entry guard, and 2 explicit SQL `...IS NULL`
+      guards). One observation recorded, not a bug: phase ordering is enforced physically
+      by the state machine's preconditions, not by an explicit code-level timestamp-ordering
+      assertion.)
 - [ ] FR-18: manual-review checklist — trace every call site of `getRootInActiveWindow()` and
       the text-node walk in `DasherAccessibilityService.java`, confirm each one is unreachable
       unless `isDasher` (or equivalent) is true, including after the `isSelf` early-return added

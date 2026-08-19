@@ -381,17 +381,75 @@ first-ever Gradle build attempt, which is expected to fail here (no Android SDK,
 iteration 1) but should still be attempted and logged per the task's own wording.
 
 FLAGGED FOR HUMAN REVIEW: README.md and PRD.md both under-describe the traffic-risk tier
-count (say 3, code has 4 -- see iteration 8 above). Consider a follow-up task to correct
-both documents once a human reviews this.
+count (say 3, code has 4 -- see iteration 8 above). A TASKS.md item now exists for this
+(section 4, added iteration 8) -- not yet actioned.
 
-FLAGGED FOR HUMAN REVIEW: README.md and PRD.md both under-describe the traffic-risk tier
-count (say 3, code has 4 -- see iteration 8 above). Consider a follow-up task to correct
-both documents once a human reviews this.
+=== Iteration 13 — 2026-08-19T10:20Z ===
+Task: FR-4 (PRD.md §4.1) — manual-review checklist: read TripForegroundService's
+phase-timing code path end to end and confirm all five phases are each captured by a
+distinct, correctly-ordered timestamp pair with no gap or double-count.
 
-FLAGGED FOR HUMAN REVIEW: README.md and PRD.md both under-describe the traffic-risk tier
-count (say 3, code has 4 -- see iteration 8 above). Consider a follow-up task to correct
-both documents once a human reviews this.
+First confirmed TripForegroundService.java's actual involvement: grepped for every
+callAttr() into a phase-relevant Python method. Result: exactly ONE call site,
+`engine.callAttr("on_gps_update", ...)`, fired on every location update. There is no
+separate/duplicate Java-side phase-timing logic -- all five phase timestamps are captured
+entirely inside drive_monitor.py's on_gps_update() and the methods it calls
+(_evaluate_pickup, _evaluate_arrivals, the walking-detection block), reached through this
+single entry point. This rules out the Java/Python boundary as a source of double-counting.
 
-FLAGGED FOR HUMAN REVIEW: README.md and PRD.md both under-describe the traffic-risk tier
-count (say 3, code has 4 -- see iteration 8 above). Consider a follow-up task to correct
-both documents once a human reviews this.
+Checklist (each of the 5 phases, its capture mechanism, and its re-fire guard):
+
+1. driving_to_pickup_seconds = pickup_arrival_ts - start_time (deadhead).
+   Set once in _evaluate_pickup (line ~1834-1838): `if within_geofence and
+   self.pickup["arrived_at"] is None`. Guard: arrived_at starts None and is set in the same
+   branch, so this can only fire once per pickup. CONFIRMED single-fire.
+
+2. wait_at_restaurant_seconds = pickup_departure_ts - pickup_arrival_ts (pickup wait).
+   Set once in _evaluate_pickup (line ~1840-1845): `if not within_geofence and
+   self.pickup["arrived_at"] is not None`, then sets recorded=True. Guard: _evaluate_pickup's
+   own entry line (`if not self.pickup or self.pickup["recorded"]: return None`) makes every
+   future call on this pickup a no-op once recorded=True. CONFIRMED single-fire.
+
+3. driving_to_dropoff_seconds = dropoff_arrival_ts - pickup_departure_ts (delivery leg).
+   Set in _evaluate_arrivals (line ~2083-2086) via
+   `UPDATE trips SET dropoff_arrival_ts=? WHERE end_time IS NULL AND dropoff_arrival_ts IS
+   NULL` -- an explicit SQL-level guard, not just an in-memory flag. Requires: parked
+   (speed<1.0) for TRIP_STOP_HOLD_SECONDS near an UNMATCHED stop within the 50m geofence.
+   CONFIRMED single-fire (only the first dropoff of a trip is captured this way -- comment in
+   the code confirms this is deliberate, documented scope: "Only the FIRST dropoff arrival --
+   a multi-stop batch would have several, and this is deliberately a simplified,
+   single-primary-flow breakdown").
+
+4. parking_to_walking_seconds = walking_confirmed_ts - dropoff_arrival_ts (parking-to-walking).
+   Set in the walking-detection block (line ~2427-2430), same SQL-level `...IS NULL` guard,
+   PLUS an in-memory `_walking_gap_recorded_for_current_park` flag that resets only on a new
+   genuine park event. Requires: a genuine park (detected via _walking_last_genuine_park_ts)
+   followed by WALKING_PATTERN_CONSECUTIVE_READINGS consecutive walking-pace GPS readings.
+   CONFIRMED single-fire per trip (same documented single-primary-flow scope as #3).
+
+5. completing_dropoff_seconds = end_time - (walking_confirmed_ts OR dropoff_arrival_ts)
+   (completing dropoff). Computed once, read-only, at trip-summary time (line ~3702-3704):
+   `completing_dropoff_start_ts = row["walking_confirmed_ts"] or row["dropoff_arrival_ts"]`.
+   Correctly falls back to dropoff_arrival_ts when walking was never confirmed this trip
+   (e.g. driver hands off immediately, no detectable walk). CONFIRMED no double-count -- this
+   is a derived read at summary time, not a second write.
+
+Ordering: all 4 preceding phases (driving_to_pickup, wait_at_restaurant,
+driving_to_dropoff, parking_to_walking) are each guarded by `if <both timestamps present>`
+before being computed (lines 3689-3696) -- a phase whose pair isn't both captured (e.g. no
+walking ever detected) is OMITTED from the breakdown rather than guessed at or computed with
+a missing value. CONFIRMED no gaps produce wrong numbers, only correctly-absent phases.
+
+Monotonic ordering (start_time <= pickup_arrival_ts <= pickup_departure_ts <=
+dropoff_arrival_ts <= walking_confirmed_ts <= end_time) is enforced PHYSICALLY (wall-clock
+time only moves forward, and each capture requires the state machine to have already reached
+the prior state) rather than by an explicit code-level ordering check. NOTED, not a bug: this
+is a reasonable design given each stage's precondition already implies the prior stage
+happened (e.g. dropoff_arrival_ts requires an unmatched stop's geofence, which in the normal
+Dasher flow only happens after pickup departure) -- but there is no code-level assertion
+preventing an out-of-order timestamp if trip data were ever corrupted or manipulated
+directly. Recording as an observation for anyone hardening this further, not fixing here
+(out of scope for a manual-review task).
+
+Task result: [x] checked in ralph/TASKS.md — checklist written above, every phase traced to
+its actual capture site and re-fire guard in the real code, not assumed from the docstrings.
