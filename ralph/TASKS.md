@@ -65,10 +65,16 @@ Priority order top to bottom within each section; sections are roughly sequentia
       running average and the >150km/h sanity-guard rejection. `python3 -m pytest
       app/src/main/python/tests/test_smart_score_delivery_speed.py -v`: 5 passed. Full
       suite: 15 passed.)
-- [ ] FR-7 and FR-8: write unit tests covering the 3-tier fallback (restaurant-specific →
+- [x] FR-7 and FR-8: write unit tests covering the 3-tier fallback (restaurant-specific →
       cross-restaurant average → hardcoded default) for both deadhead distance estimation and
       restaurant wait time, seeding history with 0/1-different-restaurant/1-same-restaurant
       prior records for each tier. Verify: real passing run.
+      (Verified 2026-08-19, iteration 7 — see ralph/PROGRESS.log. Created
+      app/src/main/python/tests/test_smart_score_deadhead_and_wait.py, 6 tests (3 tiers x 2
+      factors), including the key case of a restaurant-specific average NOT blending with a
+      different restaurant's data. `python3 -m pytest
+      app/src/main/python/tests/test_smart_score_deadhead_and_wait.py -v`: 6 passed. Full
+      suite: 21 passed.)
 - [ ] FR-9: write a unit test forcing each of the three traffic-risk preconditions (live result
       <5 min old / 5+ trips personal average / neither) and asserting `traffic_risk_source`
       reports the correct tier each time. Verify: real passing run.

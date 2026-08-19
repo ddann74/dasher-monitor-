@@ -196,6 +196,35 @@ Output: 15 passed, 0 failed.
 
 Task result: [x] checked in ralph/TASKS.md.
 
-=== End of this supervised run (6 iterations) ===
-All 6 committed and pushed to origin/fix-watchdog-recovery-and-notification-noise. Suggested
-next unchecked task: FR-7 and FR-8 (deadhead / restaurant-wait 3-tier fallback tests).
+=== Iteration 7 — 2026-08-19T09:28Z ===
+Task: FR-7 and FR-8 (PRD.md §4.2) — unit tests covering the 3-tier fallback (restaurant-
+specific -> cross-restaurant average -> hardcoded default) for both deadhead distance
+estimation and restaurant wait time.
+
+Read _estimate_deadhead_km (reads offer_distance_accuracy, populated elsewhere at trip
+persistence time -- inserted directly via SQL for this test since there's no dedicated
+"record deadhead" method to call) and _restaurant_wait_info/record_restaurant_wait (has a
+real public recording method, used directly).
+
+Wrote app/src/main/python/tests/test_smart_score_deadhead_and_wait.py, 6 tests (3 tiers x 2
+factors):
+- Deadhead tier 3 (no history anywhere): 0.0 km, 0 samples, not restaurant-specific.
+- Deadhead tier 2 (cross-restaurant avg): a restaurant with no history of its own falls back
+  to the average of ALL recorded deadhead samples (2.0km, 4.0km -> 3.0km avg, 2 samples).
+- Deadhead tier 1 (restaurant-specific): with both Restaurant A's own history (2.0, 4.0 ->
+  3.0) AND a very different Restaurant B (100.0) in the DB, A's estimate must use only its
+  own average, not blend with B's -- this is the key regression case (a real bug would be
+  averaging across all restaurants even when restaurant-specific data exists).
+- Same 3 tiers for restaurant wait time (6.0 min default -> cross-restaurant average ->
+  restaurant-specific average), using the real record_restaurant_wait() running-average path.
+
+Command: `python3 -m pytest app/src/main/python/tests/test_smart_score_deadhead_and_wait.py -v`
+Output: 6 passed.
+Command: `python3 -m pytest app/src/main/python/tests/ -v` (full suite)
+Output: 21 passed, 0 failed.
+
+Task result: [x] checked in ralph/TASKS.md.
+
+=== End of this supervised run (7 iterations) ===
+All 7 committed and pushed to origin/fix-watchdog-recovery-and-notification-noise. Suggested
+next unchecked task: FR-9 (traffic-risk 3-tier source test: live/personal/generic).
