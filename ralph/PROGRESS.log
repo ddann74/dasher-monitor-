@@ -1,0 +1,43 @@
+=== Iteration 1 — 2026-08-19T08:52Z ===
+Task: "1. Environment check" — determine what's actually available in this environment.
+
+Command 1: `chmod +x ./gradlew && ./gradlew tasks`
+Output (relevant lines):
+  Error: Could not find or load main class org.gradle.wrapper.GradleWrapperMain
+  Caused by: java.lang.ClassNotFoundException: org.gradle.wrapper.GradleWrapperMain
+Finding: fails, but NOT because the Android SDK is missing — it fails because
+`gradle/wrapper/gradle-wrapper.jar` is not checked into this repo as a binary. This
+matches README.md's own "Troubleshooting: org.gradle.util.VersionNumber build failure"
+section, which already documents that gradlew/gradlew.bat can't find gradle-wrapper.jar
+because "it isn't included here as a binary." So this is a known, pre-existing repo gap,
+not a new discovery, and not fixable by regenerating a wrapper jar without either
+committing a binary or running `gradle wrapper --gradle-version 8.7` from a machine with
+Gradle already installed (also not available here — no `gradle` on PATH either, checked
+separately: `which gradle` -> not found).
+Conclusion: real Android builds (`./gradlew assembleDebug`) are NOT reachable in this
+environment. Level 1 verification (real Gradle build) is unavailable for every task in
+this backlog. Any task claiming a Gradle build passed from this environment should be
+treated as false.
+
+Command 2: `python3 -c "import sys; print(sys.version)"`
+Output: 3.11.15 (main, Mar 3 2026, 09:26:23) [GCC 13.3.0]
+
+Command 3: `python3 -m pytest --version`
+Output (first attempt): "No module named pytest"
+Command 4: `python3 -m pip install --quiet pytest`
+Output: succeeded (only a root-user warning, no error)
+Command 5 (retry): `python3 -m pytest --version`
+Output: pytest 9.1.1
+Conclusion: Level 2 verification (real, runnable Python unit tests against
+app/src/main/python/drive_monitor.py, bypassing Gradle/Chaquopy entirely) IS reachable
+in this environment. pytest is now installed. Network egress to PyPI works.
+
+Net result for the rest of this backlog: every task touching drive_monitor.py's pure-Python
+classes (TripManager, SmartScoreEngine, MessageIntelligence, TrustedContacts, etc.) should
+target Level 2 (python3 -m pytest, real run, real output pasted here). Every task touching
+only Java (DasherAccessibilityService, AppNotificationListenerService, MonitoringWatchdogReceiver,
+TripForegroundService) is capped at Level 3 (manual-review checklist) in this environment,
+since neither a real build nor a JVM test runner is available here.
+
+Task result: [x] checked in ralph/TASKS.md — both probes were tried and their real outcomes
+are logged above, which is what this task required.

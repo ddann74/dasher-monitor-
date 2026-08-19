@@ -10,13 +10,18 @@ Priority order top to bottom within each section; sections are roughly sequentia
 (environment) gates everything else — do it first.
 
 ## 1. Environment check (do this before anything else)
-- [ ] Determine what's actually available in this environment: try `./gradlew assembleDebug`
+- [x] Determine what's actually available in this environment: try `./gradlew assembleDebug`
       (or `./gradlew tasks` as a cheaper first probe) and separately try
       `python3 -m pytest --version` / `python3 -c "import sys; print(sys.version)"`. Record the
       real outcome of both in `ralph/PROGRESS.log` (exact command + exact output/error) so every
       later task in this file knows which verification levels are actually reachable here,
       instead of re-discovering it each time. This task is done once both are tried and logged,
       regardless of whether either succeeds.
+      (Verified 2026-08-19, iteration 1 — see ralph/PROGRESS.log. Result: no Android SDK/Gradle
+      wrapper jar in this environment, so `./gradlew` builds are not reachable (Level 1
+      unavailable, matches a pre-existing repo-documented gap, not a new problem). Python 3.11.15
+      present; pytest installed successfully via pip, network egress to PyPI works — Level 2
+      (real `python3 -m pytest` runs against drive_monitor.py) IS reachable for this loop.)
 
 ## 2. Verify what's claimed done (README + PRD §4, FR-1 through FR-25)
 - [ ] Set up a way to unit-test `app/src/main/python/drive_monitor.py` in isolation (no
