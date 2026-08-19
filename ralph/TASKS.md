@@ -34,9 +34,13 @@ Priority order top to bottom within each section; sections are roughly sequentia
       (Verified 2026-08-19, iteration 2 — see ralph/PROGRESS.log. Created
       app/src/main/python/tests/{conftest.py,test_smoke.py}. `python3 -m pytest
       app/src/main/python/tests/test_smoke.py -v`: 2 passed.)
-- [ ] FR-1: write a unit test for `TripManager` pickup arrival/departure distance tracking —
+- [x] FR-1: write a unit test for `TripManager` pickup arrival/departure distance tracking —
       feed synthetic GPS points, assert deadhead distance and delivery-leg distance match the
       known synthetic path within a defined tolerance. Verify: test file + real passing run.
+      (Verified 2026-08-19, iteration 3 — see ralph/PROGRESS.log. Created
+      app/src/main/python/tests/test_trip_manager_pickup_distance.py. `python3 -m pytest
+      app/src/main/python/tests/test_trip_manager_pickup_distance.py -v`: 1 passed. Full
+      suite: 3 passed.)
 - [ ] FR-3: write a unit test for `TripManager._evaluate_trip_end` covering both the
       GENERAL-mode parking-ends-trip rule and the DASHER-mode pending-stop rule, including the
       documented case where an active not-yet-departed pickup itself counts as a DASHER signal.

@@ -70,3 +70,39 @@ Output:
 
 Task result: [x] checked in ralph/TASKS.md. This establishes the pattern (path setup via
 conftest.py) every subsequent drive_monitor.py test task in this file should reuse.
+
+=== Iteration 3 — 2026-08-19T09:02Z ===
+Task: FR-1 (PRD.md §4.1) — unit test for TripManager pickup arrival/departure distance
+tracking against real synthetic GPS points, asserting deadhead and delivery-leg distance
+match the known path within a tolerance.
+
+Read TripManager's actual pickup-tracking code (_evaluate_pickup, _process_point_during_trip,
+_start_trip, add_pickup) directly rather than guessing the API. Key real behavior confirmed
+by reading, then exercised by the test:
+- gps_points is reset to [] on trip start, so cumulative distance tracking begins fresh from
+  whatever GPS point is first fed to on_gps_update() after the trip becomes ACTIVE -- not from
+  the point that crossed the start-speed/hold threshold (that point is consumed inside the
+  IDLE branch and never reaches _process_point_during_trip).
+- Arrival snapshots _deadhead_distance_km = current cumulative distance the moment the
+  driver enters the 50m geofence (ARRIVAL_GEOFENCE_METERS) around the pickup coordinates.
+- Departure (leaving that geofence again) snapshots _distance_at_departure_km and returns a
+  {"restaurant_name", "wait_minutes"} event exactly once.
+
+Wrote app/src/main/python/tests/test_trip_manager_pickup_distance.py: drives a real
+Database(":memory:") + TripManager through the actual state machine (speed/hold trip start,
+add_pickup, three GPS points along a straight line: pre-arrival -> exactly at pickup ->
+~100m past it 72s later) and asserts, against independently-computed expected distances
+(via the module's own haversine_meters on the same coordinates -- verifying the
+ACCUMULATION/snapshot logic, not re-deriving the haversine formula itself):
+- deadhead snapshot matches the real straight-line distance from trip start to pickup,
+  within 1 meter
+- departure snapshot matches deadhead + the post-arrival leg, within 1 meter
+- wait_minutes == 1.2 (72s / 60), within 0.01
+- departure distance > deadhead distance (sanity check that state actually advanced)
+
+Command: `python3 -m pytest app/src/main/python/tests/test_trip_manager_pickup_distance.py -v`
+Output: 1 passed (test_pickup_arrival_and_departure_distance_tracking)
+Command: `python3 -m pytest app/src/main/python/tests/ -v` (full suite, regression check)
+Output: 3 passed, 0 failed
+
+Task result: [x] checked in ralph/TASKS.md.
