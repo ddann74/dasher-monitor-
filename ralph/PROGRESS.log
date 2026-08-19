@@ -263,9 +263,41 @@ Output: 26 passed, 0 failed.
 
 Task result: [x] checked in ralph/TASKS.md.
 
-=== End of this supervised run (8 iterations) ===
-All 8 committed and pushed to origin/fix-watchdog-recovery-and-notification-noise. Suggested
-next unchecked task: FR-10 (weather factor test with mocked Open-Meteo response).
+=== Iteration 9 — 2026-08-19T09:42Z ===
+Task: FR-10 (PRD.md §4.2) — unit test with a mocked/stubbed Open-Meteo response asserting the
+weather factor score moves in the expected direction for heavy rain vs. clear.
+
+Read record_live_weather/_get_weather_score directly. Clarified what "mocking Open-Meteo"
+means for this module: there is no HTTP client in drive_monitor.py -- weather comes from
+WeatherHelper.java's async Open-Meteo call, which then calls engine.record_live_weather(...)
+with the parsed values. So the correct mock boundary for a Python-only test is calling
+record_live_weather() directly with known values, exactly as that real callback would.
+
+Formula confirmed: score = 100 - min(60, precip_mm*15) - min(30, max(0,(wind_kmh-30)*1.5)),
+floored at 0, neutral 100 if no reading or reading >15 min stale.
+OBSERVATION (not a bug, recorded for future reference): the two deduction caps (60 for rain,
+30 for wind) mean the real minimum possible score is 10.0 -- the `max(0.0, score)` floor in
+the code can never actually be reached under this formula. Not changed here (task was to
+test existing behavior, not alter it).
+
+Wrote app/src/main/python/tests/test_smart_score_weather.py, 9 tests: no reading (neutral
+100), clear conditions (100), moderate rain (70.0), heavy rain hitting the 60-point cap
+(40.0, not the naive uncapped -50), high wind (85.0), extreme wind hitting the 30-point cap
+(70.0), combined rain+wind stacking (55.0), a stale (16-minute-old) reading correctly falling
+back to neutral despite having real data recorded, and one end-to-end calculate() check
+confirming the weather component and the human-readable "5.0mm rain" label both reflect a
+live reading correctly.
+
+Command: `python3 -m pytest app/src/main/python/tests/test_smart_score_weather.py -v`
+Output: 9 passed.
+Command: `python3 -m pytest app/src/main/python/tests/ -v` (full suite)
+Output: 35 passed, 0 failed.
+
+Task result: [x] checked in ralph/TASKS.md.
+
+=== End of this supervised run (9 iterations) ===
+All 9 committed and pushed to origin/fix-watchdog-recovery-and-notification-noise. Suggested
+next unchecked task: FR-13 (MessageIntelligence category recognition test).
 
 FLAGGED FOR HUMAN REVIEW: README.md and PRD.md both under-describe the traffic-risk tier
 count (say 3, code has 4 -- see iteration 8 above). Consider a follow-up task to correct

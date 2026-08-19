@@ -86,9 +86,16 @@ Priority order top to bottom within each section; sections are roughly sequentia
       tiers including priority-ordering proof (zone beats personal, live beats zone). `python3
       -m pytest app/src/main/python/tests/test_smart_score_traffic_risk.py -v`: 5 passed. Full
       suite: 26 passed.)
-- [ ] FR-10: write a unit test with a mocked/stubbed Open-Meteo response asserting the weather
+- [x] FR-10: write a unit test with a mocked/stubbed Open-Meteo response asserting the weather
       factor score moves in the expected direction for heavy rain vs. clear conditions, and that
       it falls back to neutral 100 when no reading is <15 min old. Verify: real passing run.
+      (Verified 2026-08-19, iteration 9 — see ralph/PROGRESS.log. "Mocking Open-Meteo" here
+      means calling record_live_weather() directly with known values, the same boundary
+      WeatherHelper.java's real async callback uses. Created
+      app/src/main/python/tests/test_smart_score_weather.py, 9 tests including both deduction
+      caps and the 15-minute staleness fallback. `python3 -m pytest
+      app/src/main/python/tests/test_smart_score_weather.py -v`: 9 passed. Full suite:
+      35 passed.)
 - [ ] FR-13: write a unit test for `MessageIntelligence` with representative sample strings for
       each recognized message category (delivery note, address correction, ETA update). Verify:
       real passing run.
