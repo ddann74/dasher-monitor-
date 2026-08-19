@@ -494,3 +494,38 @@ dump block) are confirmed unreachable for any app other than Dasher.
 
 Task result: [x] checked in ralph/TASKS.md — checklist written above, every call site traced
 to its actual guard chain in the real code.
+
+=== Iteration 15 — 2026-08-19T10:33Z ===
+Task: Attempt `./gradlew assembleDebug` (or the closest available build/lint task), and
+per this task's own explicit instructions -- log the exact failure and note this as an open
+gap requiring a human with an Android SDK, rather than checking the box, if it fails.
+
+Command: `which android`, `echo $ANDROID_HOME`, `ls /opt/android*`, `ls ~/Android*`
+Output: no `android` binary on PATH, ANDROID_HOME unset, no Android SDK directory found
+anywhere searched.
+
+Command: `./gradlew assembleDebug`
+Output:
+  Error: Could not find or load main class org.gradle.wrapper.GradleWrapperMain
+  Caused by: java.lang.ClassNotFoundException: org.gradle.wrapper.GradleWrapperMain
+
+Same failure as iteration 1's probe, confirmed fresh (not just re-citing the earlier
+result): gradle/wrapper/gradle-wrapper.jar is not present in this checkout (it's a binary,
+not checked in per README.md's own troubleshooting section), so gradlew cannot even launch
+Gradle to attempt resolving an SDK. This is unrelated to whether an Android SDK is present --
+the SDK check above also came back negative independently, so BOTH prerequisites for a real
+build are missing in this environment, not just one.
+
+OPEN GAP (not closeable by this loop in this environment): a real `./gradlew assembleDebug`
+(or equivalent build/lint task) has NEVER been run successfully anywhere in this repo's
+history as far as this session can determine. This remains Level 1 verification's single
+open item across the entire backlog -- every other task in this loop has used Level 2 (real
+pytest runs) or Level 3 (manual-review checklists) instead, per ralph/README.md's verification
+levels. Closing this requires a human, on a machine with the Android SDK and a real
+gradle-wrapper.jar (either committed to the repo or generated via
+`gradle wrapper --gradle-version <version>` from a machine with Gradle installed), to run
+the build and report back whether it succeeds.
+
+Task result: box LEFT UNCHECKED in ralph/TASKS.md, exactly as the task instructs when the
+build cannot be attempted successfully in this environment. This is not a skipped task --
+the attempt was made and its real, exact failure is logged above.
