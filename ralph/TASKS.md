@@ -135,11 +135,18 @@ Priority order top to bottom within each section; sections are roughly sequentia
       guards). One observation recorded, not a bug: phase ordering is enforced physically
       by the state machine's preconditions, not by an explicit code-level timestamp-ordering
       assertion.)
-- [ ] FR-18: manual-review checklist — trace every call site of `getRootInActiveWindow()` and
+- [x] FR-18: manual-review checklist — trace every call site of `getRootInActiveWindow()` and
       the text-node walk in `DasherAccessibilityService.java`, confirm each one is unreachable
       unless `isDasher` (or equivalent) is true, including after the `isSelf` early-return added
       for the mode-flapping fix. Write the call-site list and confirmation into
       `ralph/PROGRESS.log`.
+      (Verified 2026-08-19, iteration 14 — see ralph/PROGRESS.log. Exactly 3 real
+      getRootInActiveWindow() call sites found (lines 222, 515, 896), all traced through
+      their call chains to onAccessibilityEvent()'s `if (!isDasher) return;` gate at line
+      458-459. isSelf's early return (line 398-401) sits well before that gate. Also
+      confirmed checkCurrentForegroundWindow()'s unconditional window.getRoot() use only
+      ever reads the package name, never content — consistent with the documented privacy
+      boundary.)
 - [ ] Attempt `./gradlew assembleDebug` (or the closest available build/lint task) at whatever
       verification level Section 1 found reachable. If a real Android SDK is available, this is
       the first-ever recorded successful build of this repo — a significant milestone, log it

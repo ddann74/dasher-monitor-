@@ -453,3 +453,44 @@ directly. Recording as an observation for anyone hardening this further, not fix
 
 Task result: [x] checked in ralph/TASKS.md — checklist written above, every phase traced to
 its actual capture site and re-fire guard in the real code, not assumed from the docstrings.
+
+=== Iteration 14 — 2026-08-19T10:28Z ===
+Task: FR-18 (PRD.md §4.5) — manual-review checklist: trace every call site of
+getRootInActiveWindow() and the text-node walk in DasherAccessibilityService.java, confirm
+each one is unreachable unless the foregrounded app is actually Dasher.
+
+Grepped every getRootInActiveWindow() call site in the file. Found exactly 3:
+
+1. Line 222, inside scanAndRecordAcceptDeclineNodeBounds(). Traced its only caller: line 881,
+   inside handleOfferResult(). Traced handleOfferResult()'s only caller: line 588, inside
+   onAccessibilityEvent(), itself inside the block that begins after the file's
+   `if (!isDasher) return;` gate at line 458-459. CONFIRMED unreachable unless isDasher.
+
+2. Line 515, directly inside onAccessibilityEvent(), under the comment "--- 2. Offer /
+   address reading (Dasher only) ---". Same function, same position -- AFTER line 458's
+   `if (!isDasher) return;`. CONFIRMED unreachable unless isDasher.
+
+3. Line 896 (`dumpRoot`), inside the same handleOfferResult() block as call site #1 (both are
+   part of the offer-detection flow triggered from line 588). CONFIRMED unreachable unless
+   isDasher, by the same chain as #1.
+
+Also checked the `isSelf` early-return added for the mode-flapping fix (line 398-401): it
+sits at the very top of onAccessibilityEvent(), well BEFORE the isDasher content-read gate at
+line 458 -- confirms self-package events never even reach the mode-detection debounce logic,
+let alone the content-reading section. Matches what was described when that fix was
+committed (fix-watchdog-recovery-and-notification-noise branch).
+
+One adjacent thing checked for completeness, NOT a getRootInActiveWindow() call and NOT a
+violation: checkCurrentForegroundWindow() (line 147-203) uses window.getRoot() (a different
+API, from getWindows()) unconditionally for every foreground window, but ONLY ever reads
+root.getPackageName() -- no findAccessibilityNodeInfosByText(), no collectVisibleText(), no
+text-node walk of any kind. This is consistent with the documented privacy boundary (bare
+package name is always inspectable; text CONTENT requires isDasher) -- confirmed by reading
+the method body line by line, not assumed from its docstring.
+
+No 4th call site exists. All 3 real getRootInActiveWindow() call sites plus the one
+text-node-walk entry point (collectVisibleText, called at line 521 and inside the line-896
+dump block) are confirmed unreachable for any app other than Dasher.
+
+Task result: [x] checked in ralph/TASKS.md — checklist written above, every call site traced
+to its actual guard chain in the real code.
