@@ -112,9 +112,14 @@ Priority order top to bottom within each section; sections are roughly sequentia
       everyone, not no one. Created app/src/main/python/tests/test_trusted_contacts.py, 8
       tests. `python3 -m pytest app/src/main/python/tests/test_trusted_contacts.py -v`:
       8 passed. Full suite: 56 passed.)
-- [ ] FR-17: write a unit test for `TripManager.get_mode()` covering all three independent
+- [x] FR-17: write a unit test for `TripManager.get_mode()` covering all three independent
       DASHER-triggering conditions (Dasher foregrounded / unmatched stop pending / active
       not-yet-departed pickup) plus the GENERAL default. Verify: real passing run.
+      (Verified 2026-08-19, iteration 12 — see ralph/PROGRESS.log. Created
+      app/src/main/python/tests/test_trip_manager_get_mode.py, 8 tests proving OR semantics
+      across all 3 conditions independently. `python3 -m pytest
+      app/src/main/python/tests/test_trip_manager_get_mode.py -v`: 8 passed. Full suite:
+      64 passed.)
 - [ ] FR-4: manual-review checklist (Java, not Python-testable without Android) — read
       `TripForegroundService`'s phase-timing code path end to end and confirm all five phases
       (deadhead, pickup wait, delivery leg, parking-to-walking, completing dropoff) are each

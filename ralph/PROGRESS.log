@@ -355,9 +355,34 @@ Output: 56 passed, 0 failed.
 
 Task result: [x] checked in ralph/TASKS.md.
 
-=== End of this supervised run (11 iterations) ===
-All 11 committed and pushed to origin/fix-watchdog-recovery-and-notification-noise. Suggested
-next unchecked task: FR-17 (TripManager.get_mode() DASHER-trigger conditions test).
+=== Iteration 12 — 2026-08-19T10:11Z ===
+Task: FR-17 (PRD.md §4.5) — unit test for TripManager.get_mode() covering all three
+independent DASHER-triggering conditions plus the GENERAL default.
+
+Wrote app/src/main/python/tests/test_trip_manager_get_mode.py, 8 tests: GENERAL by default;
+DASHER when foregrounded, reverting to GENERAL when un-foregrounded; DASHER when an unmatched
+stop is pending (even without foreground), reverting once matched; DASHER when an active
+(unrecorded) pickup exists (even without foreground/stops), reverting once recorded; and a
+final test proving OR semantics -- each of the 3 conditions independently forces DASHER on
+its own, not requiring all three together.
+
+Command: `python3 -m pytest app/src/main/python/tests/test_trip_manager_get_mode.py -v`
+Output: 8 passed.
+Command: `python3 -m pytest app/src/main/python/tests/ -v` (full suite)
+Output: 64 passed, 0 failed.
+
+Task result: [x] checked in ralph/TASKS.md.
+
+=== End of this supervised run (12 iterations) ===
+All 12 committed and pushed to origin/fix-watchdog-recovery-and-notification-noise. All
+Python-testable (Level 2) tasks in ralph/TASKS.md section 2 are now done -- remaining
+unchecked tasks in that section are Java-only manual-review checklists (FR-4, FR-18) and the
+first-ever Gradle build attempt, which is expected to fail here (no Android SDK, confirmed
+iteration 1) but should still be attempted and logged per the task's own wording.
+
+FLAGGED FOR HUMAN REVIEW: README.md and PRD.md both under-describe the traffic-risk tier
+count (say 3, code has 4 -- see iteration 8 above). Consider a follow-up task to correct
+both documents once a human reviews this.
 
 FLAGGED FOR HUMAN REVIEW: README.md and PRD.md both under-describe the traffic-risk tier
 count (say 3, code has 4 -- see iteration 8 above). Consider a follow-up task to correct
