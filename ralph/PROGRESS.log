@@ -529,3 +529,47 @@ the build and report back whether it succeeds.
 Task result: box LEFT UNCHECKED in ralph/TASKS.md, exactly as the task instructs when the
 build cannot be attempted successfully in this environment. This is not a skipped task --
 the attempt was made and its real, exact failure is logged above.
+
+=== Iteration 16 — 2026-08-21T13:35Z ===
+Task: FR-20/FR-21 (PRD.md §4.6) — manual-review checklist: re-read
+MonitoringWatchdogReceiver.onReceive() and confirm the kick-vs-restart branch fires on EVERY
+stale-heartbeat tick, not just the first (the exact Aug 7 bug).
+
+Confirmed via git log that MonitoringWatchdogReceiver.java and TripForegroundService.java
+have not changed since the original fix commit (cd177f6) -- re-reading fresh, not trusting a
+stale memory of the code.
+
+Checklist:
+1. onReceive() reschedules the next watchdog check (scheduleWatchdog) UNCONDITIONALLY as its
+   very first line, before any staleness logic -- confirmed the watchdog itself can never
+   silently stop checking regardless of what happens below.
+2. The staleness check (lines 142-147) has NO "already alerted" dedup flag of any kind -- it
+   only compares current staleness against the mode-aware threshold. This means: as long as
+   staleness stays >= threshold on a subsequent firing (which it will, since a location kick
+   alone doesn't instantly produce a fresh GPS fix), the alert+recovery block below WILL fire
+   again. This is the exact mechanism that was missing before the fix.
+3. The kick-vs-restart decision (lines 184-192) re-checks TripForegroundService.isRunning
+   FRESH on every single onReceive() call -- there is no one-time flag, no "already attempted"
+   state anywhere in this method. CONFIRMED: this directly fixes the Aug 7 bug where the old
+   `if (!isRunning)` guard meant nothing was ever attempted again once isRunning became (and
+   stayed) true.
+4. Traced the kick path into TripForegroundService.java: ACTION_KICK_LOCATION_UPDATES is wired
+   at the action-dispatch switch (line 169-170) to kickLocationUpdates() (line 289-296), which
+   itself guards against acting on a genuinely-stopped session (`if (!monitoringActive) return`)
+   before calling the real startLocationUpdates().
+5. Traced startLocationUpdates() (line 1050) -> startLocationUpdatesAtInterval() (line 1056):
+   confirmed this is a REAL re-subscription to FusedLocationProviderClient
+   (fusedLocationClient.requestLocationUpdates(...)), not a no-op or a log-only stub -- this is
+   what could actually recover a stalled GPS callback, the root cause named in the Aug 7
+   incident writeup.
+6. raiseAlert() (the loud notification) still fires unconditionally on every threshold-crossing
+   tick too, same as before the fix -- consistent, no regression in the alerting behavior while
+   fixing the recovery-action gap.
+
+No build/test environment for Java is available here (confirmed iterations 1 and 15 -- no
+Android SDK, no gradle-wrapper.jar), so this stays Level 3 (manual-review checklist) per
+ralph/README.md's verification levels; a JVM unit test simulating repeated firings is not
+attempted since it cannot actually run and be verified in this environment.
+
+Task result: [x] checked in ralph/TASKS.md — checklist written above, every claim traced to a
+specific line range in the current (unchanged-since-fix) code.

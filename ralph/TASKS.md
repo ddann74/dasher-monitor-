@@ -154,13 +154,18 @@ Priority order top to bottom within each section; sections are roughly sequentia
       an Android SDK to close, rather than checking the box.
 
 ## 3. Confirm the three fixes already committed (fix-watchdog-recovery-and-notification-noise)
-- [ ] FR-20/FR-21: manual-review checklist — re-read `MonitoringWatchdogReceiver.onReceive()`
+- [x] FR-20/FR-21: manual-review checklist — re-read `MonitoringWatchdogReceiver.onReceive()`
       and confirm the kick-vs-restart branch (`ACTION_KICK_LOCATION_UPDATES` when
       `TripForegroundService.isRunning` is true, `ACTION_START_TRACKING` when false) fires on
       *every* stale-heartbeat tick, not just the first — this was the exact bug in the Aug 7
       outage. If a build/test environment is available, additionally write and run a unit test
       simulating repeated stale-heartbeat firings. Log which verification level was actually
       reached.
+      (Verified 2026-08-21, iteration 16 — see ralph/PROGRESS.log. Confirmed no dedup/one-time
+      guard exists anywhere in the staleness or kick-vs-restart logic; traced the kick path all
+      the way to a real FusedLocationProviderClient.requestLocationUpdates() call, not a no-op.
+      No Java build/test environment available here (confirmed iterations 1/15) — Level 3
+      manual-review only.)
 - [ ] Messenger false-positive fix: manual-review checklist — confirm
       `MESSENGER_SYSTEM_NOTIFICATION_TITLES` in `AppNotificationListenerService.java` correctly
       short-circuits before the `is_trusted_sender` lookup for "Chat heads active", "Messenger
