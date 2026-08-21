@@ -166,12 +166,16 @@ Priority order top to bottom within each section; sections are roughly sequentia
       the way to a real FusedLocationProviderClient.requestLocationUpdates() call, not a no-op.
       No Java build/test environment available here (confirmed iterations 1/15) — Level 3
       manual-review only.)
-- [ ] Messenger false-positive fix: manual-review checklist — confirm
+- [x] Messenger false-positive fix: manual-review checklist — confirm
       `MESSENGER_SYSTEM_NOTIFICATION_TITLES` in `AppNotificationListenerService.java` correctly
       short-circuits before the `is_trusted_sender` lookup for "Chat heads active", "Messenger
       Audio call", and "Messenger Video call", and does NOT accidentally also swallow real
       Messenger text messages (which have a different, sender-named title). Log the exact code
       path traced.
+      (Verified 2026-08-21, iteration 17 — see ralph/PROGRESS.log. Confirmed package-gated
+      (isPersonalMessagingApp), exact-match (not substring), and returns before the
+      is_trusted_sender call. No Java build/test environment available — Level 3
+      manual-review only.)
 - [ ] Mode-flapping fix: manual-review checklist — confirm the `isSelf` early return in
       `DasherAccessibilityService.onAccessibilityEvent()` sits before the debounce block, fires
       only for this app's own package, and doesn't suppress any legitimate cross-app mode

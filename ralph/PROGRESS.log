@@ -573,3 +573,40 @@ attempted since it cannot actually run and be verified in this environment.
 
 Task result: [x] checked in ralph/TASKS.md — checklist written above, every claim traced to a
 specific line range in the current (unchanged-since-fix) code.
+
+=== Iteration 17 — 2026-08-21T13:41Z ===
+Task: Messenger false-positive fix (PRD.md §7 open risk) — manual-review checklist: confirm
+MESSENGER_SYSTEM_NOTIFICATION_TITLES correctly short-circuits before is_trusted_sender, and
+does NOT accidentally also swallow real Messenger text messages.
+
+Read AppNotificationListenerService.java's onNotificationPosted() fresh (unchanged since the
+fix commit, confirmed via git log same as iteration 16).
+
+Checklist:
+1. The check at line 211 (`MESSENGER_SYSTEM_NOTIFICATION_TITLES.contains(title.toString())`)
+   is nested INSIDE `if (isPersonalMessagingApp)` (line 210), which is only true for
+   packageName equal to SMS_PACKAGE or MESSENGER_PACKAGE (lines 129-130). CONFIRMED
+   package-gated -- this can never fire for an unrelated app whose notification title happens
+   to say "Chat heads active".
+2. It's an exact Set.contains() match against 3 fixed literal strings ("Chat heads active",
+   "Messenger Audio call", "Messenger Video call"), not a substring match -- CONFIRMED tight
+   scope, no risk of partial-title collisions.
+3. It `return`s immediately (line 213) BEFORE the `is_trusted_sender` call at line 215 --
+   CONFIRMED these 3 notification types can never reach the trusted-sender lookup, regardless
+   of what's on the trusted list (matches the task's specific requirement).
+4. Real Messenger/SMS text messages carry a SENDER-NAMED title (a contact's name or phone
+   number), which can never exactly equal one of the 3 fixed system-notification strings under
+   normal use -- CONFIRMED no swallowing of real messages. Theoretical edge case noted (not
+   fixed, negligible): a real contact literally named exactly "Chat heads active" would be
+   silently dropped, but this is not a realistic scenario worth guarding against.
+5. Traced the isPersonalMessagingApp/isDasher split further up (lines 128-130, 162-183):
+   confirmed via the code's own comment that `on_notification()` only ever matches internally
+   for DASHER_PACKAGE or SMS_PACKAGE, so Messenger notifications always fall through
+   harmlessly to the personal-messaging branch (line 209) rather than being double-handled by
+   the "work" path above it.
+
+No Java build/test environment available here (same as iterations 13/14/16) -- Level 3
+manual-review only.
+
+Task result: [x] checked in ralph/TASKS.md — checklist written above, every claim traced to a
+specific line in the current code.
