@@ -610,3 +610,56 @@ manual-review only.
 
 Task result: [x] checked in ralph/TASKS.md — checklist written above, every claim traced to a
 specific line in the current code.
+
+=== Iteration 18 — 2026-08-21T13:48Z ===
+Task: Mode-flapping fix (PRD.md §7 open risk, last item in section 3) — manual-review
+checklist: confirm the isSelf early return sits before the debounce block, fires only for this
+app's own package, and doesn't suppress any legitimate cross-app mode transition.
+
+Re-confirmed the 3 stated checklist items for the EVENT-DRIVEN path (onAccessibilityEvent),
+same as traced in iteration 14 for FR-18:
+1. isSelf (`packageName.equals(getPackageName())`, line 398) sits at the very top of
+   onAccessibilityEvent(), before the TYPE_WINDOW_STATE_CHANGED debounce block (starts line
+   403). CONFIRMED.
+2. Fires only for this app's own exact package name via equals(), not a substring/prefix
+   match. CONFIRMED.
+3. Does not suppress any legitimate cross-app transition: self-package events return
+   immediately without touching pendingIsDasher/pendingIsDasherSinceMs at all, so an
+   in-progress debounce candidate for a DIFFERENT app is completely unaffected by a self-event
+   landing in between (e.g. Dasher -> WhatsApp[starts candidate] -> self[skipped, no state
+   touched] -> WhatsApp[candidate continues uninterrupted]). CONFIRMED.
+
+REAL GAP FOUND (not part of what this task asked to verify, but found while tracing the
+surrounding mode-detection code -- flagging per ralph/PROMPT.md's instruction to record
+discoveries): checkCurrentForegroundWindow() (lines 147-202) is a SEPARATE code path -- a
+periodic re-check that runs every FOREGROUND_CHECK_INTERVAL_MS (20s, line 113) via a Handler,
+independent of onAccessibilityEvent() entirely. It has NO isSelf-equivalent guard anywhere.
+Its "else if (isDasherForeground)" branch (line 177-190) immediately (no debounce, no
+self-package exclusion) flips isDasherForeground to false and calls
+engine.callAttr("set_dasher_foreground", false) whenever the currently-active window's
+package is anything other than Dasher -- including this app's OWN package. Confirmed real
+user-visible impact via refreshStatusDot() (line 343-359): a false mode-flip here would
+immediately change the floating status dot from GREEN/YELLOW to RED_FLASHING or clear it,
+depending on TripForegroundService.isRunning. Could not confirm from this file alone whether
+a spoken TTS cue is also directly tied to this transition (that logic may live in
+MainActivity or elsewhere observing mode state) -- but the status-dot flip alone is a real,
+confirmed, user-visible symptom of the same underlying bug class the isSelf fix was built to
+solve, just reachable via a different 20-second periodic path the fix doesn't cover.
+
+Concretely reproducible scenario: actively dashing (isDasherForeground=true), driver taps the
+persistent notification to glance at this app's own status screen for a few seconds, and the
+20-second periodic timer happens to fire while this app's window is still active ->
+checkCurrentForegroundWindow() sees packageName != DASHER_PACKAGE, isDasherForeground was
+true -> immediately corrects to false, no debounce, no self-check.
+
+NOT fixed in this iteration -- this is a manual-review-checklist task, and fixing a newly
+found gap is out of scope for it (separate iteration-sized task). Added a new TASKS.md item
+in section 4 for a future iteration to actually fix this (add the same isSelf check to
+checkCurrentForegroundWindow(), or debounce it the same way).
+
+No Java build/test environment available here (same as iterations 13/14/16/17) -- Level 3
+manual-review only for the event-driven path this task covers.
+
+Task result: [x] checked in ralph/TASKS.md — the 3 stated checklist items for the
+event-driven path are all confirmed true. A related but separate gap in a different code
+path was found and flagged as a new task, not silently left out.

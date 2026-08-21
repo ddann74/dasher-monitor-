@@ -176,12 +176,32 @@ Priority order top to bottom within each section; sections are roughly sequentia
       (isPersonalMessagingApp), exact-match (not substring), and returns before the
       is_trusted_sender call. No Java build/test environment available — Level 3
       manual-review only.)
-- [ ] Mode-flapping fix: manual-review checklist — confirm the `isSelf` early return in
+- [x] Mode-flapping fix: manual-review checklist — confirm the `isSelf` early return in
       `DasherAccessibilityService.onAccessibilityEvent()` sits before the debounce block, fires
       only for this app's own package, and doesn't suppress any legitimate cross-app mode
       transition. If a build/test environment is available, additionally simulate a burst of
       self-package `TYPE_WINDOW_STATE_CHANGED` events and confirm no mode-change side effects
       fire. Log which verification level was actually reached.
+      (Verified 2026-08-21, iteration 18 — see ralph/PROGRESS.log. All 3 stated checklist
+      items confirmed true for the event-driven path. IMPORTANT: found a related but separate
+      gap in `checkCurrentForegroundWindow()` — the 20-second periodic re-check path has no
+      `isSelf` guard at all and can reproduce the same false-mode-flip symptom (confirmed
+      user-visible via the status-dot). New task added below to fix it. No Java build/test
+      environment available — Level 3 manual-review only.)
+- [ ] Fix the periodic mode-recheck gap found in iteration 18 (ralph/PROGRESS.log):
+      `checkCurrentForegroundWindow()` in `DasherAccessibilityService.java` (runs every
+      `FOREGROUND_CHECK_INTERVAL_MS` = 20s via `foregroundCheckRunnable`) has no `isSelf`
+      equivalent guard — its `else if (isDasherForeground)` branch (~line 177) will
+      immediately flip `isDasherForeground` to false (no debounce) if this app's own window
+      happens to be foregrounded when the periodic timer fires while actively dashing,
+      reproducing the same status-dot-flipping symptom the event-driven `isSelf` fix was built
+      to solve, just via a different path. Add the same `packageName.equals(getPackageName())`
+      check (skip correction, or skip the whole periodic check entirely, when the active
+      window is this app's own) before the `else if (isDasherForeground)` branch. Verify: a
+      manual-review re-trace confirming the new guard covers this path the same way the
+      existing one covers the event-driven path; a real device test if a build environment
+      becomes available (glance at the app's own status screen for 20+ seconds while a Dasher
+      session is active, confirm the status dot does NOT flip).
 
 ## 4. Close the stubs (PRD §5, "real vs. stub vs. unconfirmed")
 - [ ] Reconcile the stale README TODO section (PRD's top-of-document contradiction note):
