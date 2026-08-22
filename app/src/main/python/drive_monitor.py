@@ -1879,7 +1879,15 @@ class TripManager:
         # completely silent -- consumed by DriveMonitorEngine.on_gps_update
         # to log it, since TripManager has no direct access to
         # log_diagnostic itself.
-        self._last_phase_capture_log = f"Captured {column_name} = {ts}"
+        #
+        # Confirmed real bug, fixed here: this referenced `ts`, a
+        # copy-paste leftover from _update_current_trip_phase_timestamp
+        # just above (which has a real `ts` parameter) -- this method has
+        # no such variable, so every real call raised
+        # NameError: name 'ts' is not defined, crashing
+        # update_pickup_address mid-geocode-callback on a real device
+        # (confirmed via a real diagnostic log, 2026-08-22 16:45:11).
+        self._last_phase_capture_log = f"Captured {column_name} = {value}"
 
     def get_mode(self):
         """
