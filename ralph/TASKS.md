@@ -214,7 +214,7 @@ Priority order top to bottom within each section; sections are roughly sequentia
       plus 2 directly-related contradictions of the same claims found elsewhere in the file
       (the feature table and the permissions section, which also wrongly named Nominatim as
       the geocoding provider instead of Google Maps). `git diff README.md` reviewed directly.)
-- [ ] Correct the traffic-risk tier count in both `README.md`'s "Real Google Maps
+- [x] Correct the traffic-risk tier count in both `README.md`'s "Real Google Maps
       integration" section and `PRD.md` FR-9: both currently say the traffic-risk factor has
       THREE tiers (live/personal/generic), but `SmartScoreEngine._get_traffic_risk` actually
       has FOUR (live -> zone -> personal -> generic) — found and verified with a real passing
@@ -223,6 +223,9 @@ Priority order top to bottom within each section; sections are roughly sequentia
       describe the zone tier (what it is, `ZONE_MIN_SAMPLES`, its priority position) rather
       than continuing to omit it. Verify: diff review confirms both docs now match the code's
       real 4-tier behavior.
+      (Verified 2026-08-21, iteration 20 — see ralph/PROGRESS.log. Both README.md and PRD.md
+      now describe the zone tier in its correct position between live and personal. `git diff`
+      reviewed directly.)
 - [ ] Write the exact human-only manual-verification script for post-accept address
       reading + geocoding (PRD §5 row 1-2): step-by-step instructions for a person with a real
       Dasher account to accept a real offer and confirm the "Deliver to X" address is captured

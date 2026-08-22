@@ -111,10 +111,13 @@ required) an explicit manual-verification step.
 - **FR-8**: Restaurant wait time is genuinely learned (`record_restaurant_wait`, 3-tier fallback:
   restaurant-specific → cross-restaurant average → 6.0 min default), badge exposes
   `restaurant_wait_is_restaurant_specific`. *Acceptance*: same 3-tier unit test pattern as FR-7.
-- **FR-9**: Traffic risk has three tiers checked in order — live (Distance Matrix result <5 min
-  old) → personal (5+ completed trips, hour-of-day average speed) → generic (lunch/dinner
-  clock-time heuristic) — exposed via `traffic_risk_source`. *Acceptance*: unit test forcing each
-  precondition and asserting the reported source matches.
+- **FR-9**: Traffic risk has FOUR tiers checked in order — live (Distance Matrix result <5 min
+  old) → zone (same rounded lat/lon zone + hour, 3+ completed trips there) → personal (5+
+  completed trips, hour-of-day-only average speed) → generic (lunch/dinner clock-time
+  heuristic) — exposed via `traffic_risk_source`. *Acceptance*: unit test forcing each
+  precondition and asserting the reported source matches. (Corrected 2026-08-21: this
+  requirement originally said three tiers, omitting the zone tier — found and fixed via
+  `ralph/PROGRESS.log` iteration 8's real-code trace of `_get_traffic_risk`.)
 - **FR-10**: Weather factor uses Open-Meteo current precipitation/wind at the driver's location,
   10-minute cooldown, neutral 100 if no reading <15 min old. *Acceptance*: unit test with a mocked
   Open-Meteo response asserts the score moves in the expected direction for heavy rain vs. clear.

@@ -264,12 +264,15 @@ coordinates on both ends of a route).
    query checks live traffic (`departure_time=now`) for the route from
    your current location to the pickup.
 4. The resulting traffic delay ratio is fed into the Smart Score's
-   traffic-risk factor, which now has three tiers, checked in order:
-   **live** (real traffic, if a result was recorded within the last 5
-   minutes) → **personal** (your own historical average speed by hour of
-   day, if you have 5+ completed trips) → **generic** (the original
-   lunch/dinner clock-time guess). `traffic_risk_source` in the score
-   output tells you which tier was actually used.
+   traffic-risk factor, which has FOUR tiers, checked in order: **live**
+   (real traffic, if a result was recorded within the last 5 minutes) →
+   **zone** (this specific rounded lat/lon area at this hour, if you have
+   3+ completed trips that started in the same zone at the same hour --
+   more specific than the hour-only tier below) → **personal** (your own
+   historical average speed by hour of day only, if you have 5+ completed
+   trips) → **generic** (the original lunch/dinner clock-time guess).
+   `traffic_risk_source` in the score output tells you which tier was
+   actually used.
 
 **Important architecture note**: all network calls run on a background
 thread with results delivered via callback -- an accessibility service or

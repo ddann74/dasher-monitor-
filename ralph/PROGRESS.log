@@ -697,3 +697,24 @@ caveat for all 3 items, matching PRD.md §5 exactly (implemented-but-unconfirmed
 "done" nor "still-a-stub").
 
 Task result: [x] checked in ralph/TASKS.md.
+
+=== Iteration 20 — 2026-08-21T16:52Z ===
+Task: Correct the traffic-risk tier count in both README.md's "Real Google Maps integration"
+section and PRD.md FR-9 -- both said 3 tiers (live/personal/generic), code has 4
+(live/zone/personal/generic), found and test-proven in iteration 8.
+
+Edited both documents to describe the real zone tier (same rounded lat/lon area + hour,
+requiring 3+ completed trips there, more specific than the hour-only personal tier) in its
+correct priority position between live and personal:
+1. README.md's "Real Google Maps integration: geocoding + live traffic" section, step 4.
+2. PRD.md FR-9's requirement text, with an inline "(Corrected 2026-08-21: ...)" note pointing
+   back to the iteration 8 finding for traceability.
+
+Verify: `git diff README.md PRD.md` reviewed directly above -- both now describe 4 tiers in
+the correct order, matching `_get_traffic_risk`'s real implementation and the real passing
+test in test_smart_score_traffic_risk.py. No other "three tier(s)" references to this specific
+traffic-risk factor exist elsewhere in either file (grepped PRD.md; the other "3-tier" hits
+there are the unrelated deadhead/wait-time fallback pattern, correctly still 3 tiers).
+
+Task result: [x] checked in ralph/TASKS.md. This closes out both documentation-gap findings
+recorded in this loop (the stale TODO section in iteration 19, this tier-count gap now).
