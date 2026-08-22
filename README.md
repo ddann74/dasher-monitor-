@@ -606,22 +606,35 @@ Fix:
 
 Remaining real gaps, as of the current build:
 
-- **Post-accept address reading**: `DasherAccessibilityService` still
-  doesn't extract the real customer address from the post-accept screen --
-  every stop uses placeholder or manually-supplied coordinates. Needs a
-  screenshot of that real screen to build the same way the offer parser
-  was built (from real screenshots).
-- **Geocoding**: nothing converts an address string into real lat/lon
-  anywhere in the app. Combined with the above, this is the main blocker
-  for arrival detection to work on an actual real delivery rather than
-  simulated/manually-entered coordinates.
+- ~~**Post-accept address reading**: `DasherAccessibilityService` still
+  doesn't extract the real customer address from the post-accept
+  screen...~~ **Resolved.** `DasherAccessibilityService.handleDropoffScreen`
+  now parses the real "Deliver to X" screen (built from real screenshots,
+  see `DropoffScreenParser`) and geocodes the full address; pickup address
+  reading works the same way via `geocodeAddressWithFormatted`. Real
+  coordinates now reach the RoadWarrior icon and arrival detection on an
+  actual delivery, not just simulated/manually-entered ones.
+- ~~**Geocoding**: nothing converts an address string into real lat/lon
+  anywhere in the app...~~ **Resolved** as part of the above --
+  `GoogleApiHelper.geocodeAddress` / `geocodeAddressWithFormatted` do
+  this for both dropoff and pickup, gated on a configured Google Maps API
+  key (`GoogleApiHelper.hasApiKey`). Without a key, or before an async
+  geocode resolves, stops still carry the `(0.0, 0.0)` placeholder --
+  `NavigationHelper.openAddress()` now detects that case explicitly and
+  refuses to navigate instead of silently opening a pin in the ocean
+  (`docs/road_warrior_icon/PRD.md`).
 - **Battery optimization exemption**: nothing requests exemption from
   aggressive OEM battery managers (Samsung, Xiaomi, etc.), which could
   kill the background service despite it being a foreground service.
-- **RoadWarrior's `geo:` intent is unconfirmed**: no documented deep-link
-  API exists for RoadWarrior (see `NavigationHelper.java`'s comments), so
-  whether it actually opens RoadWarrior specifically (vs. falling back to
-  another maps app) hasn't been verified on a real device.
+- **RoadWarrior's `geo:` intent is still unconfirmed on a real device**:
+  `com.roadwarrior.android` was reconfirmed as the correct Play Store
+  package name (2026-08-22), and `NavigationHelper.openAddress()` now
+  shows a distinct toast for a RoadWarrior-specific open vs. a
+  fallback-to-another-maps-app open, so which one actually happened is at
+  least visible. Whether RoadWarrior's app itself accepts and pre-fills a
+  single-stop `geo:` intent at all -- no documented deep-link API exists
+  for RoadWarrior, see `NavigationHelper.java`'s comments -- still hasn't
+  been verified on a real device with RoadWarrior installed.
 - **Peak-hour traffic windows and harsh-accel/brake thresholds** are still
   generic hardcoded assumptions, not personalized to this driver's own
   historical patterns the way deadhead/wait-time/delivery-speed now are.

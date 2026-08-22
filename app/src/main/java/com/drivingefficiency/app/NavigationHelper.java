@@ -27,18 +27,42 @@ import android.widget.Toast;
  */
 public final class NavigationHelper {
 
-    // RoadWarrior Route Planner's real Android package name.
+    // RoadWarrior Route Planner's real Android package name -- reconfirmed
+    // correct against the current Google Play Store listing on 2026-08-22
+    // during the RoadWarrior-icon fix (docs/road_warrior_icon/PRD.md), so
+    // this is NOT the cause of "the RoadWarrior icon doesn't work" and
+    // doesn't need re-checking next time that's reported.
     private static final String ROADWARRIOR_PACKAGE = "com.roadwarrior.android";
 
     private NavigationHelper() {}
 
     public static void openAddress(Context context, String address, double lat, double lon) {
+        // Confirmed real bug, fixed here: (0.0, 0.0) is the placeholder
+        // sentinel DasherAccessibilityService uses for "not geocoded yet"
+        // (its add_stop_to_buffer calls document this explicitly). Tapping
+        // the icon before geocoding resolves -- no API key configured
+        // (GoogleApiHelper.hasApiKey()), or the async callback just hasn't
+        // returned yet -- used to silently open geo:0.0,0.0, a pin in the
+        // Gulf of Guinea, with no indication anything was wrong.
+        if (lat == 0.0 && lon == 0.0) {
+            Toast.makeText(context, "Address not resolved yet -- try again in a moment.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+
         String uriString = "geo:" + lat + "," + lon + "?q=" + Uri.encode(address);
 
         Intent roadWarriorIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(uriString));
         roadWarriorIntent.setPackage(ROADWARRIOR_PACKAGE);
         try {
             context.startActivity(roadWarriorIntent);
+            // Confirmed real bug, fixed here: this branch previously gave
+            // zero on-screen confirmation that RoadWarrior specifically
+            // opened -- the entire point of this feature per the class doc
+            // above -- versus the silent fallback below. From the driver's
+            // seat the two outcomes were indistinguishable.
+            Toast.makeText(context, "Opening \"" + address + "\" in RoadWarrior.",
+                    Toast.LENGTH_SHORT).show();
             return;
         } catch (ActivityNotFoundException e) {
             // RoadWarrior isn't installed, or doesn't register for geo:
@@ -48,6 +72,11 @@ public final class NavigationHelper {
         Intent genericIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(uriString));
         try {
             context.startActivity(genericIntent);
+            // Same fix as above, fallback side: makes it visible that
+            // RoadWarrior specifically was NOT used, instead of leaving the
+            // driver to assume it was.
+            Toast.makeText(context, "RoadWarrior not available -- opening \"" + address
+                    + "\" in your default maps app instead.", Toast.LENGTH_LONG).show();
         } catch (ActivityNotFoundException e) {
             Toast.makeText(context, "No maps app found to open \"" + address + "\".",
                     Toast.LENGTH_LONG).show();
