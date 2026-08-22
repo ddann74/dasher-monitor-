@@ -204,12 +204,16 @@ Priority order top to bottom within each section; sections are roughly sequentia
       session is active, confirm the status dot does NOT flip).
 
 ## 4. Close the stubs (PRD §5, "real vs. stub vs. unconfirmed")
-- [ ] Reconcile the stale README TODO section (PRD's top-of-document contradiction note):
+- [x] Reconcile the stale README TODO section (PRD's top-of-document contradiction note):
       rewrite the three incorrect TODO lines (post-accept address reading, geocoding, battery
       optimization exemption) in `README.md`'s "Notes / TODOs" section to reflect that they ARE
       implemented but UNCONFIRMED on a real device — do not claim them fully done, since no
       device test exists yet. Verify: diff review confirms the new wording matches PRD §5
       exactly (implemented-but-unconfirmed, not done, not still-a-stub).
+      (Verified 2026-08-21, iteration 19 — see ralph/PROGRESS.log. Fixed all 3 TODO bullets
+      plus 2 directly-related contradictions of the same claims found elsewhere in the file
+      (the feature table and the permissions section, which also wrongly named Nominatim as
+      the geocoding provider instead of Google Maps). `git diff README.md` reviewed directly.)
 - [ ] Correct the traffic-risk tier count in both `README.md`'s "Real Google Maps
       integration" section and `PRD.md` FR-9: both currently say the traffic-risk factor has
       THREE tiers (live/personal/generic), but `SmartScoreEngine._get_traffic_risk` actually

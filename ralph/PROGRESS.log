@@ -663,3 +663,37 @@ manual-review only for the event-driven path this task covers.
 Task result: [x] checked in ralph/TASKS.md — the 3 stated checklist items for the
 event-driven path are all confirmed true. A related but separate gap in a different code
 path was found and flagged as a new task, not silently left out.
+
+=== Iteration 19 — 2026-08-21T16:45Z ===
+Task: Reconcile the stale README TODO section (PRD.md's top-of-document contradiction note) --
+rewrite the three incorrect TODO lines to reflect implemented-but-unconfirmed, not done, not
+still-a-stub.
+
+Edited README.md in 4 places (3 asked for, plus one directly-related contradiction found while
+doing this):
+1. Line 27 (feature table): "Post-acceptance address read ... (still a stub -- see TODOs)"
+   -> "(implemented, geocoded via GoogleApiHelper -- unconfirmed on a real device, see TODOs)".
+   Not explicitly named in the task, but left unfixed it would have directly contradicted the
+   TODO section right after fixing it -- same finding, same fix, not scope creep.
+2-4. The "Notes / TODOs" section's post-accept address reading, geocoding, and battery
+   optimization exemption bullets: rewritten from "doesn't exist" / "nothing does X" to
+   "implemented -- <what it actually does, with the real class/method>. Unconfirmed on a real
+   device: <specific gap>." Matches PRD.md §5's real-vs-stub-vs-unconfirmed table wording.
+5. Permissions section: "internet (Nominatim geocoding, once implemented -- ...)" -> "internet
+   (Google Maps Geocoding API for pickup/dropoff geocoding, already implemented via
+   GoogleApiHelper -- ...)". Same underlying false claim (geocoding not implemented) stated a
+   third time, in a different section, with the WRONG provider name too (code uses Google Maps
+   Geocoding API, never Nominatim anywhere) -- fixed for the same reason as #1: leaving it would
+   have recreated the exact contradiction this task exists to remove.
+
+Did NOT touch the "Smart Score engine (5-factor)" label at line 25, despite PRD.md/iteration-5
+work confirming it's actually 6-factor (weather added) -- out of scope for this specific task
+(README TODO reconciliation), noting it here as a candidate for a future dedicated task rather
+than fixing opportunistically.
+
+Verify: `git diff README.md` reviewed directly above -- confirmed the new wording states
+"implemented" + a specific real class/method + an honest "unconfirmed on a real device"
+caveat for all 3 items, matching PRD.md §5 exactly (implemented-but-unconfirmed, neither
+"done" nor "still-a-stub").
+
+Task result: [x] checked in ralph/TASKS.md.

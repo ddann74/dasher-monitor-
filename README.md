@@ -24,7 +24,7 @@ Generated from the Driving Efficiency App product report (v1.0 current features)
 | GPS logging / foreground service    | `TripForegroundService.java`                       |
 | Smart Score engine (5-factor)       | `drive_monitor.py` (`SmartScoreEngine`)             |
 | Offer screen parsing (on-screen, not notification) | `drive_monitor.py` (`OfferScreenParser`) + `DasherAccessibilityService.java` |
-| Post-acceptance address read        | `DasherAccessibilityService.java` (still a stub -- see TODOs) |
+| Post-acceptance address read        | `DasherAccessibilityService.java` (implemented, geocoded via `GoogleApiHelper` -- unconfirmed on a real device, see TODOs) |
 | One-Tap Instant Pinpoint / buffer   | `drive_monitor.py` (`StopsBuffer`)                  |
 | Message Intelligence (parsing)      | `drive_monitor.py` (`MessageIntelligence`)          |
 | Message read aloud on arrival (TTS) | `VoiceAnnouncer.java`, triggered from `AppNotificationListenerService.java` (immediate) and `TripForegroundService.java` (on arrival) |
@@ -606,18 +606,25 @@ Fix:
 
 Remaining real gaps, as of the current build:
 
-- **Post-accept address reading**: `DasherAccessibilityService` still
-  doesn't extract the real customer address from the post-accept screen --
-  every stop uses placeholder or manually-supplied coordinates. Needs a
-  screenshot of that real screen to build the same way the offer parser
-  was built (from real screenshots).
-- **Geocoding**: nothing converts an address string into real lat/lon
-  anywhere in the app. Combined with the above, this is the main blocker
-  for arrival detection to work on an actual real delivery rather than
-  simulated/manually-entered coordinates.
-- **Battery optimization exemption**: nothing requests exemption from
-  aggressive OEM battery managers (Samsung, Xiaomi, etc.), which could
-  kill the background service despite it being a foreground service.
+- **Post-accept address reading**: implemented -- `DasherAccessibilityService`
+  parses the post-accept "Deliver to X" screen and extracts the real
+  customer address (built from real screenshots, the same way the offer
+  parser was). **Unconfirmed on a real device**: never exercised against
+  an actual live delivery, so whether Dasher's real post-accept screen
+  still matches what this expects hasn't been verified.
+- **Geocoding**: implemented -- `GoogleApiHelper.geocodeAddress()` /
+  `geocodeAddressWithFormatted()` convert both the pickup restaurant name
+  and the post-accept dropoff address into real lat/lon via the Google
+  Maps Geocoding API. **Unconfirmed on a real device**, together with the
+  above: this is what would actually make arrival detection work on a
+  real delivery instead of simulated/manually-entered coordinates, but
+  that hasn't been exercised end-to-end yet.
+- **Battery optimization exemption**: implemented -- `PermissionsActivity`
+  has an `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` button.
+  **Unconfirmed on a real device**: never confirmed that tapping it
+  actually produces the system exemption dialog, or that the exemption
+  holds up against a real OEM's aggressive battery manager (Samsung,
+  Xiaomi, etc.).
 - **RoadWarrior's `geo:` intent is unconfirmed**: no documented deep-link
   API exists for RoadWarrior (see `NavigationHelper.java`'s comments), so
   whether it actually opens RoadWarrior specifically (vs. falling back to
@@ -638,5 +645,6 @@ Remaining real gaps, as of the current build:
 Fine/background location, foreground service, Bluetooth, notification
 listener access, accessibility access, SMS send (for the v2.3 emergency
 alert stub), overlay (status badge + Smart Score badge + arrival
-announcements), internet (Nominatim geocoding, once implemented --
+announcements), internet (Google Maps Geocoding API for pickup/dropoff
+geocoding, already implemented via `GoogleApiHelper` --
 everything else is 100% offline in SQLite).
