@@ -748,8 +748,14 @@ class SmartScoreEngine:
         deadhead_score = max(0.0, 100.0 - (deadhead_km * 10.0))
 
         # Restaurant wait / pickup friction (avg 3 min == 100, 15+ min == 0)
+        # Confirmed real bug, fixed here: unlike base_score/hourly_score
+        # just above (both min(100.0, ...)-clamped) or deadhead_score/
+        # weather_score (bounded 0-100 by construction), this had no upper
+        # clamp -- an average wait under 3 minutes (a fast, real, common
+        # pickup) pushed wait_score, and therefore final_score, above the
+        # documented 0-100 scale (e.g. avg_wait=0 -> 124).
         avg_wait, wait_samples, wait_is_restaurant_specific = self._restaurant_wait_info(restaurant_name)
-        wait_score = max(0.0, 100.0 - ((avg_wait - 3.0) * 8.0))
+        wait_score = max(0.0, min(100.0, 100.0 - ((avg_wait - 3.0) * 8.0)))
 
         # Time of day / traffic (prefers real live traffic if a Google Maps
         # API key is configured and a fresh result exists -- see
