@@ -235,15 +235,17 @@ hypothetical risks):
 
 ### Mitigations adopted
 
-- P1, P2: `NavigationHelper.openAddress()` now checks, in order, no API
-  key configured / accessibility not granted, and shows a distinct,
-  actionable toast for each instead of one generic message. **P3 is NOT
-  separately distinguished** -- a failed geocode API call (network/quota)
-  has no state `NavigationHelper` can currently inspect, so it still
-  falls into the generic "try again in a moment" message, same as a
-  genuine race condition. Honestly still a gap; would need the geocode
-  error itself threaded through to wherever the icon's tap coordinates
-  come from, which is a larger change than this loop iteration covers.
+- P1, P2, P3: `NavigationHelper.openAddress()` now checks, in order, no
+  API key configured / accessibility not granted / a recent, matching
+  geocode failure recorded for this exact address, and shows a distinct,
+  actionable toast for each instead of one generic message.
+  `NavigationHelper.recordGeocodeFailure(context, target, message)` is
+  called from `DasherAccessibilityService`'s two real geocode `onError`
+  callbacks (dropoff's `fullAddress`, pickup's `restaurantName` -- the
+  exact strings that later reach `openAddress`), persisted via
+  SharedPreferences and matched by exact string equality, time-boxed to
+  15 minutes so a stale failure from an old, unrelated stop can't wrongly
+  blame a new one reusing the same restaurant name later in a shift.
 - P4: the "Overlay" permission-revoked alert text now names the
   navigation icon specifically.
 - P5: `NavigationHelper`'s RoadWarrior package name is now
@@ -284,4 +286,7 @@ that's a follow-up decision, not blocking this task.
 - [x] Premortem (§4a) conducted and mitigations for P1-P4 implemented
 - [x] P5: RoadWarrior package name made driver-overridable (Permissions & Setup screen, mirrors the API key field)
 - [x] P6: investigated -- confirmed not a real bug, no code change needed (see §4a)
+- [x] P3: a failed geocode API call is now distinguished from a genuinely
+      in-progress one, via `NavigationHelper.recordGeocodeFailure` fed by
+      `DasherAccessibilityService`'s real geocode `onError` callbacks
 - [ ] User sign-off

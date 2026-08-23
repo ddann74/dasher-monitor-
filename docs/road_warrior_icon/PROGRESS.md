@@ -131,3 +131,22 @@ and final user sign-off. Everything code-fixable from this loop's scope
 is done.
 
 Verified by `git diff` review of all four changed files -- no syntax issues.
+
+## Continuing the loop -- P3 (2026-08-22)
+
+Picked up the last honestly-flagged gap: a failed geocode API call
+couldn't be told apart from a genuinely in-progress one.
+
+Added `NavigationHelper.recordGeocodeFailure(context, target, message)`,
+persisted via the same `navigation_prefs` SharedPreferences as the P5
+package override, keyed by the exact address/restaurant-name string
+being geocoded and time-boxed to 15 minutes. Wired it into both real
+geocode `onError` callbacks in `DasherAccessibilityService`
+(`handleDropoffScreen`'s `fullAddress`, `geocodePickupAndCheckTraffic`'s
+`restaurantName`) -- the only two call sites that feed
+`NavigationHelper`'s tap coordinates. `unresolvedAddressReason()` now
+checks this before falling back to the generic "try again" message.
+
+This closes every item in PRD §6 that doesn't require an actual device
+tap. Verified by `git diff` review of both changed files -- no syntax
+issues.

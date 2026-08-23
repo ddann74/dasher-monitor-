@@ -638,6 +638,12 @@ public class DasherAccessibilityService extends AccessibilityService {
                     // this real delivery if geocoding never resolves --
                     // same limitation as pickup geocoding failing.
                     logDiagnostic("GEOCODE", "Dropoff failed: " + message);
+                    // Premortem finding, fixed here (docs/road_warrior_icon/
+                    // PRD.md ss4a, P3): previously log-only -- the
+                    // RoadWarrior icon's "try again in a moment" toast had
+                    // no way to know this address will NEVER resolve
+                    // without a network/API fix, not just "not yet."
+                    NavigationHelper.recordGeocodeFailure(DasherAccessibilityService.this, fullAddress, message);
                 }
             });
         } catch (JSONException | RuntimeException e) { // covers PyException too -- calls
@@ -1023,6 +1029,11 @@ public class DasherAccessibilityService extends AccessibilityService {
                 // won't fire for this specific delivery if geocoding
                 // never resolves.
                 logDiagnostic("GEOCODE", "Failed: " + message + " (" + getNetworkInfo() + ")");
+                // Premortem finding, fixed here (docs/road_warrior_icon/
+                // PRD.md ss4a, P3): same fix as the dropoff onError above --
+                // the icon's toast can now tell "this geocode already
+                // failed" apart from "still resolving."
+                NavigationHelper.recordGeocodeFailure(DasherAccessibilityService.this, restaurantName, message);
             }
         });
     }
