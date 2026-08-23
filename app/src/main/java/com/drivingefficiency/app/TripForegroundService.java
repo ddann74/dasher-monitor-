@@ -371,7 +371,15 @@ public class TripForegroundService extends Service {
                 raisePermissionRevokedAlert("Location", "GPS tracking has stopped completely");
             }
             if (lastLoggedOverlay != null && lastLoggedOverlay && !hasOverlay) {
-                raisePermissionRevokedAlert("Overlay", "The Smart Score badge and status dot won't show");
+                // Premortem finding, fixed here (docs/road_warrior_icon/PRD.md
+                // ss4a, P4): this alert already fired on overlay revocation,
+                // but the text only mentioned the Smart Score badge/status
+                // dot -- OverlayHelper.showNavigationIcon and
+                // showReturnToSweetSpotIcon gate on this exact same
+                // permission and silently stop appearing too, with nothing
+                // connecting that silence back to this alert.
+                raisePermissionRevokedAlert("Overlay",
+                        "The Smart Score badge, status dot, and RoadWarrior navigation icon won't show");
             }
             if (lastLoggedNotificationAccess != null && lastLoggedNotificationAccess && !hasNotificationAccess) {
                 raisePermissionRevokedAlert("Notification Access",

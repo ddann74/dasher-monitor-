@@ -155,6 +155,89 @@ code inspection + the manual test hook in 3.3, not by an automated test
 suite, because the emulator/sandbox environment this was built in cannot
 install RoadWarrior or a real Dasher account to test against.
 
+## 4a. Premortem (2026-08-22): assume this feature has failed in the field
+
+Assume a driver reports "the RoadWarrior icon doesn't work" again, after
+the items 1-5 fix already shipped. Working backward from that, grounded
+in the actual code and a real diagnostic log from this app (not
+hypothetical risks):
+
+- **P1 -- No Google Maps API key configured.**
+  `GoogleApiHelper.hasApiKey()` false -> `DasherAccessibilityService`
+  calls `add_stop_to_buffer(fullAddress, 0.0, 0.0)` and returns
+  immediately; geocoding is never even attempted. Coordinates stay
+  `(0.0, 0.0)` for the entire session, every stop, permanently. The
+  guard shipped in items 1-5 shows "Address not resolved yet -- try
+  again in a moment" for this case -- **actively wrong**: trying again
+  will never work until a key is configured. Setting up the API key is a
+  manual `local.properties` step per the README, easy to skip.
+- **P2 -- Accessibility permission revoked mid-dash.** Confirmed
+  happening for real in the uploaded diagnostic log
+  (`2026-08-22 16:40:44`, "ALERT: Accessibility revoked while monitoring
+  active"). Once revoked, `DasherAccessibilityService` stops reading
+  post-accept screens entirely -- no new address is ever extracted for
+  the current or next stop, so coordinates are permanently stuck at
+  `(0.0, 0.0)` until the driver notices and manually re-grants it. Same
+  misleading "try again in a moment" toast as P1.
+- **P3 -- Geocode API call itself fails** (network error, quota,
+  invalid key -- the `onError` callback path in
+  `DasherAccessibilityService.handleDropoffScreen`). Same permanent
+  `(0.0, 0.0)`, same misleading toast, indistinguishable from P1/P2/a
+  genuine race condition without more context.
+- **P1-P3 share one root problem**: `NavigationHelper.openAddress()`
+  cannot currently tell a driver *why* an address is unresolved, only
+  *that* it is, so it always shows the same "try again shortly" message
+  even when trying again can never work. A driver who taps it 3 times in
+  a row, gets the same toast, and gives up has no way to know which of
+  "wait a few seconds" or "go check a permission" is the fix.
+- **P4 -- Overlay-revoked alert undersells the consequence.** Overlay
+  permission revocation IS already alerted
+  (`TripForegroundService.checkAndLogPermissions`, confirmed in code),
+  but the alert text only says "The Smart Score badge and status dot
+  won't show" -- it doesn't mention that `OverlayHelper.showNavigationIcon`
+  and `showReturnToSweetSpotIcon` gate on the exact same permission check
+  and silently stop appearing too. A driver who reads that alert has no
+  reason to connect it to "the RoadWarrior icon stopped showing."
+- **P5 -- RoadWarrior's real package name could diverge** (old sideloaded
+  APK, regional variant, future Play Store rename) from the
+  `com.roadwarrior.android` reconfirmed during the original fix. This
+  produces the exact same "RoadWarrior not available" fallback toast as
+  RoadWarrior genuinely not handling `geo:` intents at all -- the two are
+  indistinguishable to the driver, and there's currently no way to
+  self-correct without a code change. Still unverifiable without a real
+  device (unchanged from the original PRD), but a settings override would
+  at least give an affected driver a way out.
+- **P6 -- Batch-offer aggregate names leak into the pin label.**
+  Confirmed real in the log: a batch offer geocodes successfully to real
+  coordinates under the literal name **"Woolworths Fairy Meadow and 1
+  other store"** (`GEOCODE: Resolved ... -> -34.391579,150.89386`). If
+  that aggregate string is ever the `address` passed to
+  `NavigationHelper.openAddress()` instead of a real per-stop street
+  address, the pin's label is a multi-store summary, not something a
+  driver can visually pinpoint against -- undermining the exact
+  "pinpoint the location" requirement this feature exists for, and batch
+  orders are confirmed common in this driver's real usage (two in one
+  log).
+
+### Mitigations adopted
+
+- P1, P2: `NavigationHelper.openAddress()` now checks, in order, no API
+  key configured / accessibility not granted, and shows a distinct,
+  actionable toast for each instead of one generic message. **P3 is NOT
+  separately distinguished** -- a failed geocode API call (network/quota)
+  has no state `NavigationHelper` can currently inspect, so it still
+  falls into the generic "try again in a moment" message, same as a
+  genuine race condition. Honestly still a gap; would need the geocode
+  error itself threaded through to wherever the icon's tap coordinates
+  come from, which is a larger change than this loop iteration covers.
+- P4: the "Overlay" permission-revoked alert text now names the
+  navigation icon specifically.
+- P5, P6: documented above, not implemented this pass -- P5 needs a
+  settings-UI decision (where would a driver override the package name?)
+  and P6 needs tracing whether a real per-stop address is actually
+  available at icon-tap time for a batch pickup, both larger than a
+  single loop iteration. Left as open checklist items below.
+
 ## 5. Open questions
 
 None blocking -- the scope above is narrow enough that no user judgment
@@ -179,4 +262,7 @@ that's a follow-up decision, not blocking this task.
       PROGRESS.md for what was verified by code inspection instead
 - [ ] Manual verification of all 3 branches performed and recorded in
       PROGRESS.md -- **blocked**, same reason as above
+- [x] Premortem (§4a) conducted and mitigations for P1-P4 implemented
+- [ ] P5: RoadWarrior package name made driver-overridable (deferred, needs a settings-UI decision)
+- [ ] P6: batch-offer aggregate name no longer leaks into the pin label when a real per-stop address is available (deferred, needs further tracing)
 - [ ] User sign-off

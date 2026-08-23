@@ -45,8 +45,7 @@ public final class NavigationHelper {
         // returned yet -- used to silently open geo:0.0,0.0, a pin in the
         // Gulf of Guinea, with no indication anything was wrong.
         if (lat == 0.0 && lon == 0.0) {
-            Toast.makeText(context, "Address not resolved yet -- try again in a moment.",
-                    Toast.LENGTH_LONG).show();
+            Toast.makeText(context, unresolvedAddressReason(context), Toast.LENGTH_LONG).show();
             return;
         }
 
@@ -81,6 +80,33 @@ public final class NavigationHelper {
             Toast.makeText(context, "No maps app found to open \"" + address + "\".",
                     Toast.LENGTH_LONG).show();
         }
+    }
+
+    /**
+     * Premortem finding (docs/road_warrior_icon/PRD.md ss4a, P1/P2/P3):
+     * "Address not resolved yet -- try again in a moment" is only true for
+     * a genuine race against the async geocode callback. If there's no API
+     * key configured, or accessibility access has been revoked, coordinates
+     * are stuck at (0.0, 0.0) PERMANENTLY -- trying again does nothing, and
+     * the driver deserves to be told which real, fixable thing is wrong
+     * rather than sent looping on "try again" forever. Checked in order:
+     * a missing API key blocks every stop's geocoding outright, so it's
+     * checked first regardless of accessibility state.
+     */
+    private static String unresolvedAddressReason(Context context) {
+        if (!GoogleApiHelper.hasApiKey(context)) {
+            return "No Google Maps API key configured -- navigation can't resolve real "
+                    + "addresses until one is set up.";
+        }
+        String enabledServices = android.provider.Settings.Secure.getString(context.getContentResolver(),
+                android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        boolean hasAccessibility = enabledServices != null
+                && enabledServices.contains(context.getPackageName() + "/"
+                        + context.getPackageName() + ".DasherAccessibilityService");
+        if (!hasAccessibility) {
+            return "Accessibility permission is off -- turn it back on in Settings to capture this address.";
+        }
+        return "Address not resolved yet -- try again in a moment.";
     }
 
     /**

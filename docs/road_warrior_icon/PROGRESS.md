@@ -65,3 +65,36 @@ emulator or device attached, so none of that was physically exercised --
 only confirmed by reading the code paths. That verification, and final
 sign-off, are the next step whenever this can be run on a real device or
 emulator.
+
+## Premortem (2026-08-22)
+
+Before continuing the loop, worked backward from "this feature has
+failed again in the field" instead of just resuming the checklist.
+Wrote 6 mechanism-specific findings (P1-P6) into PRD §4a, two of them
+(P2 accessibility revocation, P6 batch-offer aggregate naming)
+confirmed as *actually happening* in the real diagnostic log the user
+uploaded, not hypothetical.
+
+Implemented the two highest-value, clearly in-scope mitigations:
+
+- **P1/P2**: `NavigationHelper.openAddress()`'s placeholder-coordinate
+  toast was one generic "try again in a moment" message regardless of
+  cause -- actively wrong when the real cause (no API key, or
+  accessibility revoked) is permanent, not transient. Added
+  `unresolvedAddressReason()`, checked in order: missing API key ->
+  accessibility off -> genuinely transient. **P3 (a failed geocode API
+  call) is honestly NOT distinguished** -- no state exists in
+  `NavigationHelper` to detect it; still falls into the generic message.
+- **P4**: `TripForegroundService`'s existing overlay-permission-revoked
+  alert only mentioned the Smart Score badge/status dot, not that the
+  RoadWarrior icon silently stops too (it gates on the same permission
+  check). Updated the alert text to name it.
+
+**Deferred, documented, not implemented**: P5 (make the RoadWarrior
+package name driver-overridable -- needs a settings-UI decision) and P6
+(stop the batch-offer aggregate name from leaking into the pin label --
+needs tracing whether a real per-stop address is available at tap time
+for a batch pickup). Both recorded as new unchecked PRD §6 items rather
+than silently dropped.
+
+Verified by `git diff` review of both changed files -- no syntax issues.
