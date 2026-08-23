@@ -493,9 +493,56 @@ public class AppNotificationListenerService extends NotificationListenerService 
             manager.notify(AUTO_LAUNCH_NOTIFICATION_ID, notification);
             logDiagnostic("AUTO_LAUNCH", "Requested Dasher foreground via full-screen-intent notification for offer ("
                     + restaurantName + scoreNote + ") -- " + recencyNote);
+
+            showOfferOverlayFallback(restaurantName, finalScore, launchIntent);
         } catch (RuntimeException e) {
             logDiagnostic("ERROR", "launchDasherApp exception: " + android.util.Log.getStackTraceString(e));
         }
+    }
+
+    private static final long OFFER_OVERLAY_AUTO_DISMISS_MS = 20 * 1000;
+
+    /**
+     * PREMORTEM FIX: setFullScreenIntent() above only truly auto-launches
+     * Dasher's Activity when the device is LOCKED -- confirmed Android
+     * platform behavior since Android 10. If the screen is already on and
+     * unlocked (the normal state while actively navigating with Maps/Waze
+     * open, phone mounted -- arguably the MOST common real driving
+     * scenario, not an edge case), the system downgrades it to a regular
+     * heads-up banner that still needs a manual tap. That would silently
+     * defeat the whole point of auto-launch ("the offer itself can
+     * disappear before you manually switch back to look") in exactly the
+     * situation it exists for.
+     *
+     * This overlay is a genuinely hands-free fallback that doesn't depend
+     * on lock state at all: SYSTEM_ALERT_WINDOW draws directly on top of
+     * whatever's currently on screen (already granted -- same permission
+     * OverlayHelper's status dot and Smart Score badge rely on), so the
+     * restaurant name and score are visible immediately regardless of
+     * whether the full-screen intent above actually fired or degraded.
+     * Tapping it launches Dasher directly -- a real user tap on our own
+     * window is a recognized BAL exemption, unlike the bare startActivity()
+     * call this whole fix replaced.
+     *
+     * HONESTY NOTE: like every other overlay in this app, this silently
+     * never appears at all if SYSTEM_ALERT_WINDOW was never granted --
+     * same caveat as OverlayHelper's own class doc.
+     */
+    private void showOfferOverlayFallback(String restaurantName, double finalScore, Intent launchIntent) {
+        String scoreLine = finalScore >= 0
+                ? String.format("Smart Score: %.0f/100", finalScore)
+                : "Open Dasher for details";
+        String message = "📦 New Offer: " + restaurantName + "\n" + scoreLine + "\n(tap to open Dasher)";
+        OverlayHelper.showMessage(this, message, OFFER_OVERLAY_AUTO_DISMISS_MS,
+                android.graphics.Color.parseColor("#CC1565C0"),
+                () -> {
+                    try {
+                        startActivity(launchIntent);
+                    } catch (RuntimeException e) {
+                        logDiagnostic("ERROR", "Offer overlay tap-to-launch exception: "
+                                + android.util.Log.getStackTraceString(e));
+                    }
+                });
     }
 
     /**

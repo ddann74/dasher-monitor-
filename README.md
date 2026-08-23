@@ -678,7 +678,15 @@ Remaining real gaps, as of the current build:
   high-priority notification with `setFullScreenIntent()` instead -- the
   same documented mechanism incoming-call/alarm apps use, and one of
   Android's real BAL exemptions (`USE_FULL_SCREEN_INTENT`, added to the
-  manifest). Separately, note that offers detected via the **notification
+  manifest). PREMORTEM FOLLOW-UP: `setFullScreenIntent()` itself only
+  truly auto-launches when the device is *locked* -- if the screen is on
+  and unlocked (the normal state while actively navigating, arguably the
+  most common real driving scenario), Android downgrades it to a heads-up
+  banner needing a manual tap, silently defeating the hands-free point of
+  auto-launch. `showOfferOverlayFallback` now also draws a
+  `SYSTEM_ALERT_WINDOW` overlay banner (restaurant + score, tap-to-open)
+  on every offer, independent of lock state or whether the full-screen
+  intent actually fired. Separately, note that offers detected via the **notification
   path itself** (as opposed to the on-screen path) still can't show a
   Smart Score when DoorDash's real notification text carries no
   payout/distance at all (the confirmed "New Delivery! / Go to X" format)
