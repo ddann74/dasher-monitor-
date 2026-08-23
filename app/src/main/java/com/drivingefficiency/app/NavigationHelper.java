@@ -63,6 +63,27 @@ public final class NavigationHelper {
     private NavigationHelper() {}
 
     /**
+     * REAL GAP, closed here: every outcome in this class was only ever a
+     * Toast -- visible in the moment, but leaving zero durable record.
+     * Combined with the FLAG_ACTIVITY_NEW_TASK crash (now fixed
+     * separately), this meant NO real diagnostic log uploaded so far has
+     * ever shown whether a RoadWarrior tap actually succeeded, fell back
+     * to another maps app, or found nothing at all -- the crash always
+     * happened first, and even once it doesn't, nothing here was ever
+     * logged for later review. Mirrors the Toast text at each real
+     * outcome so the next uploaded diagnostic log can finally show which
+     * one happened, without requiring anyone to have been watching the
+     * screen at the exact moment.
+     */
+    private static void logDiagnostic(Context context, String category, String message) {
+        try {
+            PythonBridge.getEngine(context).callAttr("log_diagnostic", category, message);
+        } catch (RuntimeException e) { // covers PyException too
+            FallbackLogger.log(context, category, message);
+        }
+    }
+
+    /**
      * Called from DasherAccessibilityService's geocode onError callbacks
      * (dropoff's fullAddress, pickup's restaurantName) -- the only two real
      * geocode call sites that feed NavigationHelper's tap coordinates.
@@ -105,7 +126,9 @@ public final class NavigationHelper {
         // returned yet -- used to silently open geo:0.0,0.0, a pin in the
         // Gulf of Guinea, with no indication anything was wrong.
         if (lat == 0.0 && lon == 0.0) {
-            Toast.makeText(context, unresolvedAddressReason(context, address), Toast.LENGTH_LONG).show();
+            String reason = unresolvedAddressReason(context, address);
+            Toast.makeText(context, reason, Toast.LENGTH_LONG).show();
+            logDiagnostic(context, "NAV_TAP", "Refused to navigate to \"" + address + "\" -- " + reason);
             return;
         }
 
@@ -130,10 +153,19 @@ public final class NavigationHelper {
             // seat the two outcomes were indistinguishable.
             Toast.makeText(context, "Opening \"" + address + "\" in RoadWarrior.",
                     Toast.LENGTH_SHORT).show();
+            // Confirms startActivity() itself didn't throw -- i.e. SOME app
+            // registered for this package + geo: intent and opened without
+            // crashing. Does NOT confirm RoadWarrior's own UI actually shows
+            // the pin correctly once open -- that still needs an eyes-on
+            // check, this only rules the crash/no-handler failure modes out.
+            logDiagnostic(context, "NAV_TAP", "Opened \"" + address + "\" via RoadWarrior ("
+                    + getRoadWarriorPackage(context) + ") -- geo: intent accepted without exception");
             return;
         } catch (ActivityNotFoundException e) {
             // RoadWarrior isn't installed, or doesn't register for geo:
             // intents -- fall through to the generic chooser below.
+            logDiagnostic(context, "NAV_TAP", "RoadWarrior (" + getRoadWarriorPackage(context)
+                    + ") did not handle the geo: intent for \"" + address + "\" -- falling back to generic maps chooser");
         }
 
         Intent genericIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(uriString));
@@ -145,9 +177,11 @@ public final class NavigationHelper {
             // driver to assume it was.
             Toast.makeText(context, "RoadWarrior not available -- opening \"" + address
                     + "\" in your default maps app instead.", Toast.LENGTH_LONG).show();
+            logDiagnostic(context, "NAV_TAP", "Opened \"" + address + "\" via the generic maps chooser (RoadWarrior fallback)");
         } catch (ActivityNotFoundException e) {
             Toast.makeText(context, "No maps app found to open \"" + address + "\".",
                     Toast.LENGTH_LONG).show();
+            logDiagnostic(context, "NAV_TAP", "No maps app at all found to open \"" + address + "\"");
         }
     }
 
@@ -209,10 +243,14 @@ public final class NavigationHelper {
         wazeIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
             context.startActivity(wazeIntent);
+            logDiagnostic(context, "NAV_TAP", "Opened Waze navigation to " + lat + "," + lon
+                    + " -- geo: intent accepted without exception");
             return;
         } catch (ActivityNotFoundException e) {
             // Waze isn't installed -- fall through to a generic chooser
             // rather than silently doing nothing.
+            logDiagnostic(context, "NAV_TAP", "Waze not available for " + lat + "," + lon
+                    + " -- falling back to generic maps chooser");
         }
 
         Intent genericIntent = new Intent(Intent.ACTION_VIEW,
@@ -220,8 +258,10 @@ public final class NavigationHelper {
         genericIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); // same fix as wazeIntent above
         try {
             context.startActivity(genericIntent);
+            logDiagnostic(context, "NAV_TAP", "Opened " + lat + "," + lon + " via the generic maps chooser (Waze fallback)");
         } catch (ActivityNotFoundException e) {
             Toast.makeText(context, "No maps app found to navigate there.", Toast.LENGTH_LONG).show();
+            logDiagnostic(context, "NAV_TAP", "No maps app at all found to navigate to " + lat + "," + lon);
         }
     }
 }

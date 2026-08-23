@@ -703,6 +703,19 @@ Remaining real gaps, as of the current build:
   of `openAddress()`, both branches of `openAddressWithWaze()` -- the
   latter two hadn't crashed yet in that log only because their code paths
   weren't hit, but carried the identical bug).
+- **Whether RoadWarrior's `geo:` intent actually works is still
+  unconfirmed -- but now it's finally *observable*.** Every outcome in
+  `NavigationHelper` (RoadWarrior opened / RoadWarrior not available,
+  fell back / no maps app at all) was previously only ever a Toast --
+  visible in the moment, with zero durable record, and combined with the
+  FLAG_ACTIVITY_NEW_TASK crash above, no real diagnostic log has EVER
+  shown which one happened for a real tap. Added `NAV_TAP` diagnostic log
+  entries mirroring each Toast, so the next uploaded log will finally show
+  whether `startActivity()` succeeded and which app it went to -- though
+  that still only confirms the intent was accepted without exception, not
+  that RoadWarrior's own UI actually displays the pin correctly once
+  open; there's still no documented deep-link API for RoadWarrior to
+  verify that against (see this file's class doc).
 - ~~**`scanAndRecordAcceptDeclineNodeBounds` never found the real
   Accept/Decline nodes**~~ **Resolved (2026-08-23).** Confirmed via a real
   diagnostic log: `NODE_SCAN: Accept node found=false, Decline node
