@@ -59,6 +59,16 @@
          granted manually via system Settings until that's built. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Required so the auto-launch-Dasher-for-a-new-offer notification
+         (AppNotificationListenerService.launchDasherApp) can reliably
+         start Dasher's Activity from this background service via
+         setFullScreenIntent() -- one of Android's real Background
+         Activity Launch exemptions, unlike a bare startActivity() call.
+         On Android 14+ the user can revoke this in Settings, in which
+         case it falls back to a normal tappable notification instead of
+         auto-launching; see launchDasherApp's honesty note. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
     <application
         android:name=".DasherMonitorApplication"
         android:allowBackup="true"

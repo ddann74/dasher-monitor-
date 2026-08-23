@@ -663,6 +663,27 @@ Remaining real gaps, as of the current build:
   `add_pickup`, see git history), so every real feedback submission
   threw and never actually calibrated anything despite the mechanism
   being fully built. Now fixed.
+- ~~**Smart Score never appeared for offers auto-launched from a
+  notification**: `AppNotificationListenerService.launchDasherApp` used a
+  bare `startActivity()` from this background service to bring Dasher to
+  the foreground...~~ **Resolved (2026-08-23).** Confirmed via a real
+  diagnostic log: two offers auto-launched Dasher cleanly (no exception),
+  yet `DasherAccessibilityService` never logged a single MODE/EVENT_DEBUG/
+  NODE_SCAN line afterward for the rest of the session -- Dasher's own
+  screen was never actually read, so the real on-screen Smart Score badge
+  (computed from `parse_offer_screen`) never got a chance to show. Root
+  cause: since Android 10, `startActivity()` from a background service
+  context is subject to Background Activity Launch restrictions, which can
+  silently drop the call with no exception. Fixed by posting a
+  high-priority notification with `setFullScreenIntent()` instead -- the
+  same documented mechanism incoming-call/alarm apps use, and one of
+  Android's real BAL exemptions (`USE_FULL_SCREEN_INTENT`, added to the
+  manifest). Separately, note that offers detected via the **notification
+  path itself** (as opposed to the on-screen path) still can't show a
+  Smart Score when DoorDash's real notification text carries no
+  payout/distance at all (the confirmed "New Delivery! / Go to X" format)
+  -- that's an inherent data-availability gap, not a bug, and only this
+  auto-launch mechanism was fixed.
 - **Speed-limit-based speeding detection and fuel cost estimates** are
   still generic (`DEFAULT_SPEED_LIMIT_KMH = 60` everywhere,
   `distance_km * $0.12` flat) -- genuinely can't be improved without map

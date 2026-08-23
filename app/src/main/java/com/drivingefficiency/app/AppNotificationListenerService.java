@@ -1,7 +1,11 @@
 package com.drivingefficiency.app;
 
 import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -405,19 +409,36 @@ public class AppNotificationListenerService extends NotificationListenerService 
         });
     }
 
+    private static final String AUTO_LAUNCH_CHANNEL_ID = "dasher_auto_launch_channel";
+    private static final int AUTO_LAUNCH_NOTIFICATION_ID = 9200;
+
     /**
-     * Brings Dasher to the foreground automatically -- called for any
-     * offer except "Poor" (see handleDasherNotification). Uses
-     * FLAG_ACTIVITY_NEW_TASK since this launches from a service context,
-     * not an Activity. Logged explicitly either way (success or Dasher
-     * simply not being installed/launchable) so this is verifiable
-     * after the fact, not a silent action -- including an honest
-     * approximation of whether this was likely a resume or a cold
-     * restart (see DasherAccessibilityService.lastDasherForegroundMs's
-     * own honesty note: Android doesn't allow directly checking whether
-     * a DIFFERENT app's process is actually still alive in the
-     * background, so this is the closest available signal, not a
-     * certainty).
+     * Requests that Dasher be brought to the foreground automatically --
+     * called for any offer except "Poor" (see handleDasherNotification).
+     *
+     * REAL BUG FIX, confirmed via a real diagnostic log: this used to call
+     * startActivity() directly from this NotificationListenerService.
+     * Since Android 10, starting an Activity from a background service
+     * context is subject to Background Activity Launch (BAL) restrictions
+     * -- the OS can silently drop the call with no exception thrown, so
+     * the old "Brought Dasher to foreground" log line only ever proved
+     * this method didn't crash, not that Dasher actually appeared on
+     * screen. A real log showed two AUTO_LAUNCH calls fire cleanly, yet
+     * DasherAccessibilityService never logged a single MODE/EVENT_DEBUG/
+     * NODE_SCAN line for the rest of that session -- Dasher's own screen
+     * was never actually read, meaning the on-screen Smart Score badge
+     * never got a chance to compute or show either.
+     *
+     * Fix: post a high-priority notification with setFullScreenIntent(),
+     * the same documented mechanism incoming-call and alarm apps use to
+     * reliably launch an Activity from the background (including over the
+     * lock screen) -- one of Android's actual BAL exemptions, unlike a
+     * bare startActivity() call. Requires USE_FULL_SCREEN_INTENT (see
+     * manifest). HONESTY NOTE: on Android 14+ this permission can be
+     * revoked by the user (Settings), in which case Android falls back to
+     * a normal heads-up notification the user must tap themselves rather
+     * than launching automatically -- still strictly better than the
+     * previous silent-drop failure mode, but not a 100% guarantee either.
      */
     private void launchDasherApp(String restaurantName, double finalScore) {
         try {
@@ -427,6 +448,24 @@ public class AppNotificationListenerService extends NotificationListenerService 
                         + DASHER_PACKAGE);
                 return;
             }
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager == null) {
+                logDiagnostic("AUTO_LAUNCH", "Could not launch Dasher -- NotificationManager unavailable");
+                return;
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                NotificationChannel channel = new NotificationChannel(AUTO_LAUNCH_CHANNEL_ID,
+                        "Auto-Launch Dasher for Offers", NotificationManager.IMPORTANCE_HIGH);
+                channel.setDescription("Brings Dasher to the foreground the moment a new offer is detected");
+                manager.createNotificationChannel(channel);
+            }
+
+            PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(
+                    this, restaurantName.hashCode(), launchIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
             long lastSeenMs = DasherAccessibilityService.lastDasherForegroundMs;
             String recencyNote;
             if (lastSeenMs == 0) {
@@ -439,11 +478,21 @@ public class AppNotificationListenerService extends NotificationListenerService 
                 recencyNote = "Dasher last seen in foreground " + agoLabel
                         + " (approximation only, not a certainty -- see class docs)";
             }
-            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(launchIntent);
             String scoreNote = finalScore >= 0 ? ", score " + Math.round(finalScore) : " (no score available)";
-            logDiagnostic("AUTO_LAUNCH", "Brought Dasher to foreground for offer (" + restaurantName
-                    + scoreNote + ") -- " + recencyNote);
+
+            Notification notification = new Notification.Builder(this, AUTO_LAUNCH_CHANNEL_ID)
+                    .setContentTitle("New offer: " + restaurantName)
+                    .setContentText("Opening Dasher" + scoreNote)
+                    .setSmallIcon(android.R.drawable.ic_menu_directions)
+                    .setPriority(Notification.PRIORITY_HIGH)
+                    .setCategory(Notification.CATEGORY_CALL)
+                    .setFullScreenIntent(fullScreenPendingIntent, true)
+                    .setContentIntent(fullScreenPendingIntent)
+                    .setAutoCancel(true)
+                    .build();
+            manager.notify(AUTO_LAUNCH_NOTIFICATION_ID, notification);
+            logDiagnostic("AUTO_LAUNCH", "Requested Dasher foreground via full-screen-intent notification for offer ("
+                    + restaurantName + scoreNote + ") -- " + recencyNote);
         } catch (RuntimeException e) {
             logDiagnostic("ERROR", "launchDasherApp exception: " + android.util.Log.getStackTraceString(e));
         }
