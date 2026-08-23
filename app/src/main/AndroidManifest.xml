@@ -33,7 +33,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Vibrate for accept/decline suggestion (v3.2 roadmap) -->
+    <!-- Vibrate cues for the Smart Score label (Excellent/Good/Fair/Poor),
+         implemented in HapticFeedback.vibrateForLabel. Stale comment fixed
+         2026-08-23: this previously said "(v3.2 roadmap)" as if unbuilt,
+         same staleness class as the fuel-cost README bullet. -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- Floating overlay bubble for arrival instructions (Zero Interaction While Driving) -->
