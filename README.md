@@ -703,11 +703,19 @@ Remaining real gaps, as of the current build:
   of `openAddress()`, both branches of `openAddressWithWaze()` -- the
   latter two hadn't crashed yet in that log only because their code paths
   weren't hit, but carried the identical bug).
-- **Speed-limit-based speeding detection and fuel cost estimates** are
-  still generic (`DEFAULT_SPEED_LIMIT_KMH = 60` everywhere,
-  `distance_km * $0.12` flat) -- genuinely can't be improved without map
-  speed-limit data or vehicle-specific fuel info this app doesn't
-  currently collect.
+- **Speed-limit-based speeding detection is still generic**
+  (`DEFAULT_SPEED_LIMIT_KMH = 60` everywhere) -- genuinely can't be
+  improved without map speed-limit data this app doesn't currently
+  collect.
+- ~~**Fuel cost estimates are a permanent flat guess**~~ **Stale --
+  already resolved.** `distance_km * $0.12` is only the fallback now
+  (`DEFAULT_FUEL_COST_PER_KM`). `DriveMonitorEngine.get_fuel_cost_settings`/
+  `set_fuel_cost_settings` let the driver enter their real fuel efficiency
+  (L/100km) and local fuel price, wired to a real UI field on the
+  Permissions & Setup screen (`PermissionsActivity.java`) -- this bullet
+  just never got updated when that shipped. Left as another reminder (see
+  the battery-optimization bullet above) that this list itself needs to
+  be kept honest, not just the code.
 - This is a v1.0 (current features) skeleton only -- the v2.x-v4.0 roadmap
   items in the original product report are not implemented here.
 
