@@ -217,7 +217,21 @@ hypothetical risks):
   driver can visually pinpoint against -- undermining the exact
   "pinpoint the location" requirement this feature exists for, and batch
   orders are confirmed common in this driver's real usage (two in one
-  log).
+  log). **Investigated further and found NOT to be a real bug**: that
+  aggregate string comes from `AppNotificationListenerService`'s
+  notification-based offer detection, which only ever calls
+  `record_pickup_location()` -- a separate, append-only history table
+  used for sweet-spot learning, never read back by the icon. `add_pickup`
+  -- the only call that populates `self.pickup["restaurant_name"]`, what
+  the icon's tap payload actually falls back to -- is called exclusively
+  from `DasherAccessibilityService`'s real screen-parsed Accept handler
+  (`app/.../DasherAccessibilityService.java:911`), which correctly
+  extracted just "Woolworths Fairy Meadow" for this exact log's batch
+  offer (`[BATCH OFFER]` tag). The dropoff icon is likewise unaffected --
+  it only ever uses `parse_dropoff_screen`'s real per-stop address. No
+  code change made; a hypothesis this session raised on its own turned
+  out wrong once traced, and that's recorded here rather than "fixed"
+  anyway for the sake of closing the box.
 
 ### Mitigations adopted
 
@@ -232,11 +246,16 @@ hypothetical risks):
   come from, which is a larger change than this loop iteration covers.
 - P4: the "Overlay" permission-revoked alert text now names the
   navigation icon specifically.
-- P5, P6: documented above, not implemented this pass -- P5 needs a
-  settings-UI decision (where would a driver override the package name?)
-  and P6 needs tracing whether a real per-stop address is actually
-  available at icon-tap time for a batch pickup, both larger than a
-  single loop iteration. Left as open checklist items below.
+- P5: `NavigationHelper`'s RoadWarrior package name is now
+  runtime-overridable, same SharedPreferences pattern as the existing
+  Google Maps API key field, exposed on the same Permissions & Setup
+  screen (`PermissionsActivity`). Still can't verify the *default* value
+  actually opens RoadWarrior on a real device (unchanged, unverifiable in
+  this environment) -- but an affected driver now has a way to self-correct
+  if it turns out to be wrong for their install, without needing a code
+  change.
+- P6: investigated, found not to be a real bug (see above) -- no code
+  change needed.
 
 ## 5. Open questions
 
@@ -263,6 +282,6 @@ that's a follow-up decision, not blocking this task.
 - [ ] Manual verification of all 3 branches performed and recorded in
       PROGRESS.md -- **blocked**, same reason as above
 - [x] Premortem (§4a) conducted and mitigations for P1-P4 implemented
-- [ ] P5: RoadWarrior package name made driver-overridable (deferred, needs a settings-UI decision)
-- [ ] P6: batch-offer aggregate name no longer leaks into the pin label when a real per-stop address is available (deferred, needs further tracing)
+- [x] P5: RoadWarrior package name made driver-overridable (Permissions & Setup screen, mirrors the API key field)
+- [x] P6: investigated -- confirmed not a real bug, no code change needed (see §4a)
 - [ ] User sign-off

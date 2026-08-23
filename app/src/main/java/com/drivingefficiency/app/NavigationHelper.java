@@ -32,9 +32,38 @@ public final class NavigationHelper {
     // during the RoadWarrior-icon fix (docs/road_warrior_icon/PRD.md), so
     // this is NOT the cause of "the RoadWarrior icon doesn't work" and
     // doesn't need re-checking next time that's reported.
-    private static final String ROADWARRIOR_PACKAGE = "com.roadwarrior.android";
+    private static final String DEFAULT_ROADWARRIOR_PACKAGE = "com.roadwarrior.android";
+
+    // Premortem finding, fixed here (docs/road_warrior_icon/PRD.md ss4a,
+    // P5): a future RoadWarrior update, regional variant, or old sideloaded
+    // APK could genuinely use a different package name than the one
+    // reconfirmed above -- indistinguishable from "RoadWarrior doesn't
+    // handle geo: intents at all" (both silently fall back to the generic
+    // chooser). Runtime-overridable the same way GoogleApiHelper's API key
+    // is, so an affected driver has a way out without a code change.
+    private static final String PREFS_NAME = "navigation_prefs";
+    private static final String KEY_ROADWARRIOR_PACKAGE = "roadwarrior_package_override";
 
     private NavigationHelper() {}
+
+    /** Runtime-entered override takes priority; falls back to the reconfirmed default. */
+    public static String getRoadWarriorPackage(Context context) {
+        String override = context.getApplicationContext()
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_ROADWARRIOR_PACKAGE, "");
+        if (override != null && !override.isEmpty()) {
+            return override;
+        }
+        return DEFAULT_ROADWARRIOR_PACKAGE;
+    }
+
+    public static void setRoadWarriorPackage(Context context, String packageName) {
+        context.getApplicationContext()
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_ROADWARRIOR_PACKAGE, packageName == null ? "" : packageName.trim())
+                .apply();
+    }
 
     public static void openAddress(Context context, String address, double lat, double lon) {
         // Confirmed real bug, fixed here: (0.0, 0.0) is the placeholder
@@ -52,7 +81,7 @@ public final class NavigationHelper {
         String uriString = "geo:" + lat + "," + lon + "?q=" + Uri.encode(address);
 
         Intent roadWarriorIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(uriString));
-        roadWarriorIntent.setPackage(ROADWARRIOR_PACKAGE);
+        roadWarriorIntent.setPackage(getRoadWarriorPackage(context));
         try {
             context.startActivity(roadWarriorIntent);
             // Confirmed real bug, fixed here: this branch previously gave

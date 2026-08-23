@@ -98,3 +98,36 @@ for a batch pickup). Both recorded as new unchecked PRD §6 items rather
 than silently dropped.
 
 Verified by `git diff` review of both changed files -- no syntax issues.
+
+## Continuing the loop -- P5 and P6 (2026-08-22)
+
+Picked up the two deferred premortem items left unchecked in PRD §6.
+
+**P5**: Made the RoadWarrior package name runtime-overridable.
+`NavigationHelper` gained `getRoadWarriorPackage`/`setRoadWarriorPackage`,
+same SharedPreferences pattern as `GoogleApiHelper`'s API key
+(`navigation_prefs` / `roadwarrior_package_override`, falls back to the
+reconfirmed `com.roadwarrior.android` default when blank). Exposed on
+the same Permissions & Setup screen as the API key field --
+`activity_permissions.xml` gained a matching heading/subtext/input/button
+block, wired in `PermissionsActivity.java`. `openAddress()` now calls
+`getRoadWarriorPackage(context)` instead of a hardcoded constant.
+
+**P6**: Traced the actual code path instead of implementing a fix on
+spec. The aggregate "X and 1 other store" string that worried the
+premortem only ever reaches `record_pickup_location()` (a separate
+history table for sweet-spot learning, via `AppNotificationListenerService`'s
+notification-based detection) -- it never reaches `add_pickup()`, the
+only call that sets `self.pickup["restaurant_name"]`, which is what the
+icon's tap payload actually falls back to. That's called exclusively
+from `DasherAccessibilityService`'s real screen-parsed Accept handler,
+which correctly extracted the clean single-restaurant name for this
+exact log's batch offer. Confirmed not a real bug -- no code change made,
+written up in PRD §4a instead of silently checking the box.
+
+PRD §6 is now down to the three items that genuinely require a real
+device: on-approach icon confirmation, the 3-branch tap verification,
+and final user sign-off. Everything code-fixable from this loop's scope
+is done.
+
+Verified by `git diff` review of all four changed files -- no syntax issues.

@@ -14,6 +14,10 @@
     <string name="google_maps_api_key_subtext">Used for geocoding and live traffic. Entering it here takes priority over local.properties, and survives re-extracting the project into a new folder.</string>
     <string name="api_key_hint">Paste your API key here</string>
     <string name="save_api_key">Save API Key</string>
+    <string name="roadwarrior_package_heading">RoadWarrior App Package (Advanced)</string>
+    <string name="roadwarrior_package_subtext">Only needed if the RoadWarrior navigation icon keeps falling back to another maps app even though RoadWarrior is installed -- override the package name it targets. Leave blank to use the default (com.roadwarrior.android).</string>
+    <string name="roadwarrior_package_hint">com.roadwarrior.android</string>
+    <string name="save_roadwarrior_package">Save RoadWarrior Package</string>
     <string name="view_last_trip_summary">View Last Trip Summary</string>
     <string name="view_trip_history">View Trip History</string>
     <string name="open_in_roadwarrior">Open in RoadWarrior</string>
