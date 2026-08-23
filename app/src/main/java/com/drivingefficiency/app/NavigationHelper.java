@@ -113,6 +113,14 @@ public final class NavigationHelper {
 
         Intent roadWarriorIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(uriString));
         roadWarriorIntent.setPackage(getRoadWarriorPackage(context));
+        // REAL BUG FIX, confirmed via 6 identical crashes in a real
+        // diagnostic log: this is called from TripForegroundService (a
+        // Service, not an Activity) whenever the RoadWarrior/navigation
+        // overlay icon is tapped. Android requires FLAG_ACTIVITY_NEW_TASK
+        // for startActivity() from a non-Activity context and otherwise
+        // throws AndroidRuntimeException, killing the whole app process --
+        // it did, every single time the icon was tapped in that log.
+        roadWarriorIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
             context.startActivity(roadWarriorIntent);
             // Confirmed real bug, fixed here: this branch previously gave
@@ -129,6 +137,7 @@ public final class NavigationHelper {
         }
 
         Intent genericIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(uriString));
+        genericIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); // same fix as roadWarriorIntent above
         try {
             context.startActivity(genericIntent);
             // Same fix as above, fallback side: makes it visible that
@@ -194,6 +203,10 @@ public final class NavigationHelper {
         Uri wazeUri = Uri.parse("waze://?ll=" + lat + "," + lon + "&navigate=yes");
         Intent wazeIntent = new Intent(Intent.ACTION_VIEW, wazeUri);
         wazeIntent.setPackage("com.waze");
+        // Same fix as openAddress() above: called from TripForegroundService
+        // (a Service), so FLAG_ACTIVITY_NEW_TASK is required or Android
+        // throws and kills the whole app process.
+        wazeIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
             context.startActivity(wazeIntent);
             return;
@@ -204,6 +217,7 @@ public final class NavigationHelper {
 
         Intent genericIntent = new Intent(Intent.ACTION_VIEW,
                 Uri.parse("geo:" + lat + "," + lon + "?q=" + lat + "," + lon));
+        genericIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); // same fix as wazeIntent above
         try {
             context.startActivity(genericIntent);
         } catch (ActivityNotFoundException e) {

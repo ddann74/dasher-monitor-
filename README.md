@@ -692,6 +692,17 @@ Remaining real gaps, as of the current build:
   payout/distance at all (the confirmed "New Delivery! / Go to X" format)
   -- that's an inherent data-availability gap, not a bug, and only this
   auto-launch mechanism was fixed.
+- ~~**Tapping the RoadWarrior navigation icon (or the "return to sweet
+  spot" icon) crashed the whole app**~~ **Resolved (2026-08-23).**
+  Confirmed via a real diagnostic log: 6 identical crashes, all
+  `AndroidRuntimeException: ... requires the FLAG_ACTIVITY_NEW_TASK
+  flag`, from `NavigationHelper.openAddress()` -- called from
+  `TripForegroundService` (a Service, not an Activity) every time the
+  overlay icon was tapped. Fixed by adding `FLAG_ACTIVITY_NEW_TASK` to
+  all 4 `startActivity()` calls in `NavigationHelper.java` (both branches
+  of `openAddress()`, both branches of `openAddressWithWaze()` -- the
+  latter two hadn't crashed yet in that log only because their code paths
+  weren't hit, but carried the identical bug).
 - **Speed-limit-based speeding detection and fuel cost estimates** are
   still generic (`DEFAULT_SPEED_LIMIT_KMH = 60` everywhere,
   `distance_km * $0.12` flat) -- genuinely can't be improved without map
