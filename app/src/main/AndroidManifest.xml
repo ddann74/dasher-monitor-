@@ -62,7 +62,7 @@
     <!-- Required so the auto-launch-Dasher-for-a-new-offer notification
          (AppNotificationListenerService.launchDasherApp) can reliably
          start Dasher's Activity from this background service via
-         setFullScreenIntent() -- one of Android's real Background
+         setFullScreenIntent(), one of Android's real Background
          Activity Launch exemptions, unlike a bare startActivity() call.
          On Android 14+ the user can revoke this in Settings, in which
          case it falls back to a normal tappable notification instead of
