@@ -3154,14 +3154,15 @@ class DriveMonitorEngine:
         All default to None (skippable) since forcing every category on
         every trip would be more friction than the data is worth.
 
-        NOTE ON SCOPE: this collects the data, which is the real
-        prerequisite for ever calibrating the Smart Score's weights
-        against genuine outcomes instead of the fixed values currently
-        used (see get_feedback_summary) -- but it does NOT yet feed back
-        into scoring automatically. That's a larger, separate step:
-        deciding HOW past feedback should adjust future weights needs
-        enough real data first to do meaningfully, not from day one with
-        a handful of ratings.
+        NOTE ON SCOPE: this collects the data, which recalculate_personal_
+        calibration (see below, called right after this by the caller)
+        DOES feed back into scoring automatically via
+        SmartScoreEngine._get_calibrated_weights -- bounded, and gated on
+        a minimum sample count so a handful of early ratings can't swing
+        future weights too far. (Previously this docstring said that
+        feedback loop wasn't built yet -- it was, but unreachable from a
+        real feedback submission due to a missing wrapper method, see
+        recalculate_personal_calibration's own comment.)
         """
         self.db.conn.execute("""
             INSERT INTO trip_feedback
@@ -3180,13 +3181,55 @@ class DriveMonitorEngine:
               merchant_wait_rating, customer_rating, overall_rating, time.time()))
         self.db.conn.commit()
 
+    def recalculate_personal_calibration(self):
+        """
+        CRITICAL BUG FIX, same class as add_pickup's (see its own comment
+        above): this wrapper was completely missing from DriveMonitorEngine
+        -- only SmartScoreEngine had recalculate_personal_calibration.
+        Every real call from Java (MainActivity's showFeedbackDialog, right
+        after save_trip_feedback succeeds) threw AttributeError, caught by
+        the surrounding try/catch, which then wrongly toasted "Could not
+        save feedback" even though the rating HAD already been saved --
+        and skipped the parking-difficulty-feedback and
+        clear_last_parking_gap_for_feedback calls after it in the same try
+        block, since Java aborts the rest of a try on an uncaught throw.
+        Net effect: the whole personal-calibration learning loop this
+        method exists for has likely never actually run from a real
+        feedback submission, despite testing correctly against
+        SmartScoreEngine directly. Found by tracing the real call path
+        instead of assuming it worked because the underlying logic did.
+        """
+        return self.smart_score.recalculate_personal_calibration()
+
+    def get_last_parking_gap_for_feedback(self):
+        """
+        Same missing-wrapper bug as recalculate_personal_calibration above
+        -- only TripManager had this. Its caller (showFeedbackDialog)
+        already guards this specific call in its own try/catch and falls
+        back to a plain "Parking" label, so this failure was silent rather
+        than misleading -- but it meant the measured-park-to-walk-duration
+        context label never actually showed, and finalPendingParkingRestaurant
+        stayed null every time, so record_parking_difficulty_feedback was
+        never reachable either.
+        """
+        return self.trip_manager.get_last_parking_gap_for_feedback()
+
+    def clear_last_parking_gap_for_feedback(self):
+        """Same missing-wrapper bug as the two methods above."""
+        return self.trip_manager.clear_last_parking_gap_for_feedback()
+
     def get_feedback_summary(self):
         """
         Aggregate view of your own ratings vs. what the Smart Score
         predicted for the same trips -- the first step toward answering
-        "does the score actually track what I think is a good delivery,"
-        though (see save_trip_feedback) using this to actually adjust
-        the weights is still a separate, not-yet-built step.
+        "does the score actually track what I think is a good delivery."
+        UPDATED: recalculate_personal_calibration (see above, now fixed)
+        DOES adjust the weights SmartScoreEngine.calculate() actually uses,
+        via _get_calibrated_weights -- this docstring previously called
+        that "a separate, not-yet-built step," which was accidentally true
+        in practice (the wrapper bug above meant it silently never ran),
+        but wrong about intent: the mechanism was already built, just
+        unreachable from a real feedback submission until now.
         """
         rows = self.db.conn.execute("""
             SELECT tf.rating, t.composite_score
