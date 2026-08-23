@@ -623,9 +623,12 @@ Remaining real gaps, as of the current build:
   `NavigationHelper.openAddress()` now detects that case explicitly and
   refuses to navigate instead of silently opening a pin in the ocean
   (`docs/road_warrior_icon/PRD.md`).
-- **Battery optimization exemption**: nothing requests exemption from
-  aggressive OEM battery managers (Samsung, Xiaomi, etc.), which could
-  kill the background service despite it being a foreground service.
+- ~~**Battery optimization exemption**: nothing requests exemption...~~
+  **Resolved, and was already resolved when this bullet was written** --
+  see the "Battery optimization exemption" entry higher up in this same
+  README (`PermissionsActivity`'s `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`
+  flow), which directly contradicted this one. Left as a reminder that
+  this TODO list itself needs to be kept honest, not just the code.
 - **RoadWarrior's `geo:` intent is still unconfirmed on a real device**:
   `com.roadwarrior.android` was reconfirmed as the correct Play Store
   package name (2026-08-22), and `NavigationHelper.openAddress()` now
@@ -635,14 +638,31 @@ Remaining real gaps, as of the current build:
   single-stop `geo:` intent at all -- no documented deep-link API exists
   for RoadWarrior, see `NavigationHelper.java`'s comments -- still hasn't
   been verified on a real device with RoadWarrior installed.
-- **Peak-hour traffic windows and harsh-accel/brake thresholds** are still
-  generic hardcoded assumptions, not personalized to this driver's own
-  historical patterns the way deadhead/wait-time/delivery-speed now are.
-- **Speed-limit-based speeding detection, fuel cost estimates, and Smart
-  Score weights/thresholds** can't currently be learned or fixed without
-  data this app doesn't have access to (map speed-limit data, vehicle
-  fuel efficiency, and a way to track whether offers were actually
-  accepted/declined, respectively).
+- ~~**Peak-hour traffic windows... are still generic hardcoded
+  assumptions**~~ **Half-resolved.** Peak-hour traffic IS personalized --
+  `SmartScoreEngine._is_peak_hour` learns your actual average speed by
+  hour-of-day from completed trips (5+ trips needed), same pattern as
+  deadhead/wait-time/delivery-speed, falling back to the generic
+  lunch/dinner guess until then. **Harsh-accel/brake thresholds are
+  still genuinely hardcoded** (`HARSH_ACCEL_MS2 = 2.5`,
+  `HARSH_BRAKE_MS2 = -2.5`, no per-driver learning) -- that half of this
+  bullet is still accurate.
+- ~~**Smart Score weights/thresholds can't currently be learned... no way
+  to track whether offers were actually accepted/declined**~~
+  **Resolved.** A real `offer_outcomes` table and
+  `recalculate_personal_calibration` correlate each Smart Score factor
+  against real accept/decline decisions and delivery ratings, nudging
+  future weights (bounded, gated on 25+ samples). This WAS silently
+  broken until 2026-08-22 -- `recalculate_personal_calibration` was
+  missing its `DriveMonitorEngine` wrapper (same bug class as
+  `add_pickup`, see git history), so every real feedback submission
+  threw and never actually calibrated anything despite the mechanism
+  being fully built. Now fixed.
+- **Speed-limit-based speeding detection and fuel cost estimates** are
+  still generic (`DEFAULT_SPEED_LIMIT_KMH = 60` everywhere,
+  `distance_km * $0.12` flat) -- genuinely can't be improved without map
+  speed-limit data or vehicle-specific fuel info this app doesn't
+  currently collect.
 - This is a v1.0 (current features) skeleton only -- the v2.x-v4.0 roadmap
   items in the original product report are not implemented here.
 
