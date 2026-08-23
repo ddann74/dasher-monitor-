@@ -638,15 +638,20 @@ Remaining real gaps, as of the current build:
   single-stop `geo:` intent at all -- no documented deep-link API exists
   for RoadWarrior, see `NavigationHelper.java`'s comments -- still hasn't
   been verified on a real device with RoadWarrior installed.
-- ~~**Peak-hour traffic windows... are still generic hardcoded
-  assumptions**~~ **Half-resolved.** Peak-hour traffic IS personalized --
-  `SmartScoreEngine._is_peak_hour` learns your actual average speed by
-  hour-of-day from completed trips (5+ trips needed), same pattern as
-  deadhead/wait-time/delivery-speed, falling back to the generic
-  lunch/dinner guess until then. **Harsh-accel/brake thresholds are
-  still genuinely hardcoded** (`HARSH_ACCEL_MS2 = 2.5`,
-  `HARSH_BRAKE_MS2 = -2.5`, no per-driver learning) -- that half of this
-  bullet is still accurate.
+- ~~**Peak-hour traffic windows and harsh-accel/brake thresholds are
+  still generic hardcoded assumptions**~~ **Resolved, both halves.**
+  Peak-hour traffic is personalized via `SmartScoreEngine._is_peak_hour`
+  (learns your actual average speed by hour-of-day from completed trips,
+  5+ trips needed). Harsh-accel/brake thresholds are personalized too
+  (2026-08-22) via `TripManager._learned_accel_brake_thresholds` -- a
+  running Welford's-algorithm mean/std of every real per-tick
+  acceleration sample (not just already-harsh ones, which would be
+  circular), replacing the fixed `HARSH_ACCEL_MS2`/`HARSH_BRAKE_MS2`
+  defaults once 300+ real samples exist (much higher than the 5-trip
+  gates elsewhere, since these are per-GPS-tick, not per-trip). Computed
+  once per trip and merged into the cross-trip running stats once at
+  trip end, not per GPS tick -- this app doesn't write to the DB on
+  every 1-second location update anywhere else, and this doesn't either.
 - ~~**Smart Score weights/thresholds can't currently be learned... no way
   to track whether offers were actually accepted/declined**~~
   **Resolved.** A real `offer_outcomes` table and

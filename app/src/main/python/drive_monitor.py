@@ -108,6 +108,23 @@ HARSH_ACCEL_MS2 = 2.5
 HARSH_BRAKE_MS2 = -2.5
 DEFAULT_SPEED_LIMIT_KMH = 60
 
+# UNCONFIRMED placeholder, same honesty status as every other threshold
+# guess in this file -- how many standard deviations from YOUR OWN mean
+# per-tick acceleration counts as "harsh" for you specifically, once a
+# personal mean/std can actually be computed (see
+# TripManager._record_accel_sample_in_memory / _learned_accel_brake_thresholds).
+ACCEL_BRAKE_STD_MULTIPLIER = 2.5
+# Deliberately much higher than the 5-trip thresholds used for deadhead/
+# wait-time/delivery-speed/peak-hour learning elsewhere in this file --
+# those are per-TRIP aggregates; this is per-GPS-TICK samples (many per
+# trip), so meaningfully estimating a personal accel/brake distribution
+# needs a lot more raw data points before it's trustworthy.
+ACCEL_BRAKE_MIN_SAMPLES_TO_LEARN = 300
+# Floor so a driver with an unusually smooth/uniform early sample (small
+# std by chance, not by true driving style) doesn't get a hypersensitive
+# threshold that flags ordinary driving as harsh.
+ACCEL_BRAKE_MIN_THRESHOLD_MS2 = 1.5
+
 STOPS_BUFFER_MAX = 10
 STOPS_BUFFER_TTL_SECONDS = 24 * 60 * 60
 
@@ -281,6 +298,21 @@ class Database:
             id INTEGER PRIMARY KEY CHECK (id = 1),
             avg_speed_kmh REAL,
             sample_count INTEGER
+        );
+
+        -- Running Welford's-algorithm mean/variance of every real per-tick
+        -- acceleration sample (m/s^2, signed -- both accel and brake are
+        -- just the two tails of one distribution), not just ones that
+        -- already crossed the fixed HARSH_ACCEL_MS2/HARSH_BRAKE_MS2
+        -- thresholds -- learning from only-already-harsh events would be
+        -- circular. mean_squared_diff is Welford's M2 accumulator, not a
+        -- variance itself (divide by sample_count to get variance -- see
+        -- TripManager._learned_accel_brake_thresholds).
+        CREATE TABLE IF NOT EXISTS accel_dynamics_history (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            sample_count INTEGER,
+            mean_accel_ms2 REAL,
+            mean_squared_diff REAL
         );
 
         CREATE TABLE IF NOT EXISTS park_to_walk_gap_history (
@@ -1646,6 +1678,23 @@ class TripManager:
         self.trip_id = None
         self._last_partial_save_ts = 0.0
 
+        # In-memory Welford's-algorithm accel-sample accumulators for THIS
+        # trip only -- deliberately NOT written to the DB per GPS tick
+        # (unlike self.events above, which is also in-memory-only until
+        # trip end): GPS updates arrive as often as 1/sec while driving
+        # (see TripForegroundService.GPS_INTERVAL_MOVING_MS), and nothing
+        # else in this class does a DB write on every single tick. Merged
+        # into the persisted accel_dynamics_history table once, at trip
+        # end (see _merge_accel_samples_into_history), same one-write-per-
+        # trip cost as the rest of trip persistence.
+        self._trip_accel_count = 0
+        self._trip_accel_mean = 0.0
+        self._trip_accel_m2 = 0.0
+        # Loaded once per trip (see _start_trip), not re-queried every
+        # tick -- same reasoning as above.
+        self._cached_accel_threshold = HARSH_ACCEL_MS2
+        self._cached_brake_threshold = HARSH_BRAKE_MS2
+
         # Dedicated to walking detection specifically -- separate from
         # _parked_since above (which exists for major-delay logging and
         # gets cleared the instant speed ticks up even slightly, so it
@@ -1989,6 +2038,14 @@ class TripManager:
         self._last_message_cutoff = ts
         self._trip_mode = self.get_mode()
         self._cumulative_distance_km = 0.0
+        self._trip_accel_count = 0
+        self._trip_accel_mean = 0.0
+        self._trip_accel_m2 = 0.0
+        # One DB read per trip, not per tick -- see the attribute comment
+        # in __init__.
+        self._cached_accel_threshold, self._cached_brake_threshold, _, _ = (
+            self._learned_accel_brake_thresholds()
+        )
         self._deadhead_distance_km = None
         self._distance_at_departure_km = None
         self._departure_timestamp = None
@@ -2037,18 +2094,98 @@ class TripManager:
             return
         dv_ms = (speed_kmh - last_speed) * (1000.0 / 3600.0)
         accel = dv_ms / dt
-        if accel > HARSH_ACCEL_MS2:
+        # Personalized once enough real samples exist -- see
+        # _learned_accel_brake_thresholds. Uses the threshold cached at
+        # _start_trip, not re-queried per tick (see __init__'s comment on
+        # _cached_accel_threshold).
+        if accel > self._cached_accel_threshold:
             self._log_event("harsh_accel", lat, lon, ts, accel)
-        elif accel < HARSH_BRAKE_MS2:
+        elif accel < self._cached_brake_threshold:
             self._log_event("harsh_brake", lat, lon, ts, accel)
         if speed_kmh > DEFAULT_SPEED_LIMIT_KMH:
             self._log_event("speeding", lat, lon, ts, speed_kmh)
+        self._record_accel_sample_in_memory(accel)
 
     def _log_event(self, event_type, lat, lon, ts, magnitude):
         self.events.append({
             "event_type": event_type, "lat": lat, "lon": lon,
             "timestamp": ts, "magnitude": magnitude,
         })
+
+    def _record_accel_sample_in_memory(self, accel):
+        """
+        Welford's online algorithm, updated in memory only (see __init__'s
+        comment on why this never writes to the DB per tick) -- folds
+        every real per-tick accel sample into THIS trip's running mean/M2,
+        regardless of whether it crossed the harsh threshold. Learning a
+        personal baseline from only-already-harsh samples would be
+        circular: the current threshold would gate what data the next
+        threshold gets learned from, never converging on your actual
+        normal driving distribution.
+        """
+        self._trip_accel_count += 1
+        delta = accel - self._trip_accel_mean
+        self._trip_accel_mean += delta / self._trip_accel_count
+        delta2 = accel - self._trip_accel_mean
+        self._trip_accel_m2 += delta * delta2
+
+    def _learned_accel_brake_thresholds(self):
+        """
+        Returns (harsh_accel_ms2, harsh_brake_ms2, sample_count,
+        is_learned). Falls back to the fixed HARSH_ACCEL_MS2/
+        HARSH_BRAKE_MS2 defaults until ACCEL_BRAKE_MIN_SAMPLES_TO_LEARN
+        real per-tick accel samples have been recorded across all trips
+        (see _merge_accel_samples_into_history) -- same "start generic,
+        replace with a real personal baseline once there's enough data"
+        pattern as deadhead/wait-time/delivery-speed/peak-hour, just at
+        per-tick rather than per-trip granularity, so it needs a much
+        larger sample count (ACCEL_BRAKE_MIN_SAMPLES_TO_LEARN) before
+        it's trustworthy.
+        """
+        row = self.db.conn.execute(
+            "SELECT sample_count, mean_accel_ms2, mean_squared_diff FROM accel_dynamics_history WHERE id = 1"
+        ).fetchone()
+        sample_count = row["sample_count"] if row and row["sample_count"] else 0
+        if sample_count < ACCEL_BRAKE_MIN_SAMPLES_TO_LEARN:
+            return HARSH_ACCEL_MS2, HARSH_BRAKE_MS2, sample_count, False
+
+        variance = row["mean_squared_diff"] / sample_count
+        std = variance ** 0.5
+        mean = row["mean_accel_ms2"]
+        accel_threshold = max(ACCEL_BRAKE_MIN_THRESHOLD_MS2, mean + ACCEL_BRAKE_STD_MULTIPLIER * std)
+        brake_threshold = min(-ACCEL_BRAKE_MIN_THRESHOLD_MS2, mean - ACCEL_BRAKE_STD_MULTIPLIER * std)
+        return accel_threshold, brake_threshold, sample_count, True
+
+    def _merge_accel_samples_into_history(self):
+        """
+        Folds this trip's in-memory accel Welford summary into the
+        persisted cross-trip one -- ONE DB read + ONE DB write, at trip
+        end, not per tick (see __init__'s comment). Uses Chan et al.'s
+        parallel-variance combine formula to merge two independent
+        Welford summaries (this trip's, and everything before it) into
+        one, rather than needing every individual raw sample.
+        """
+        if self._trip_accel_count == 0:
+            return
+        row = self.db.conn.execute(
+            "SELECT sample_count, mean_accel_ms2, mean_squared_diff FROM accel_dynamics_history WHERE id = 1"
+        ).fetchone()
+        if row and row["sample_count"]:
+            count_a, mean_a, m2_a = row["sample_count"], row["mean_accel_ms2"], row["mean_squared_diff"]
+            count_b, mean_b, m2_b = self._trip_accel_count, self._trip_accel_mean, self._trip_accel_m2
+            count = count_a + count_b
+            delta = mean_b - mean_a
+            mean = mean_a + delta * count_b / count
+            m2 = m2_a + m2_b + (delta ** 2) * count_a * count_b / count
+        else:
+            count, mean, m2 = self._trip_accel_count, self._trip_accel_mean, self._trip_accel_m2
+        self.db.conn.execute("""
+            INSERT INTO accel_dynamics_history (id, sample_count, mean_accel_ms2, mean_squared_diff)
+            VALUES (1, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET sample_count = excluded.sample_count,
+                mean_accel_ms2 = excluded.mean_accel_ms2, mean_squared_diff = excluded.mean_squared_diff
+        """, (count, mean, m2))
+        self.db.conn.commit()
 
     def _detect_major_delay(self, speed_kmh, ts, lat, lon):
         """
@@ -2479,6 +2616,7 @@ class TripManager:
     def _end_trip(self, ts):
         summary = self._compute_summary(ts)
         delivery_speed_event = self._persist_trip(summary)
+        self._merge_accel_samples_into_history()
         self.state = self.STATE_IDLE
         self._above_start_speed_since = None
         self._below_stop_speed_since = None
