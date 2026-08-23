@@ -18,6 +18,11 @@
     <string name="roadwarrior_package_subtext">Only needed if the RoadWarrior navigation icon keeps falling back to another maps app even though RoadWarrior is installed -- override the package name it targets. Leave blank to use the default (com.roadwarrior.android).</string>
     <string name="roadwarrior_package_hint">com.roadwarrior.android</string>
     <string name="save_roadwarrior_package">Save RoadWarrior Package</string>
+    <string name="fuel_cost_heading">Fuel Cost Estimate</string>
+    <string name="fuel_cost_subtext_default">Currently using a flat, generic $0.12/km guess. Enter your real vehicle\'s fuel efficiency and current fuel price below for an accurate per-trip estimate -- you can change these again any time (fuel prices move, vehicles change).</string>
+    <string name="fuel_efficiency_hint">Fuel efficiency (L per 100km)</string>
+    <string name="fuel_price_hint">Fuel price ($ per liter)</string>
+    <string name="save_fuel_cost">Save Fuel Cost Settings</string>
     <string name="view_last_trip_summary">View Last Trip Summary</string>
     <string name="view_trip_history">View Trip History</string>
     <string name="open_in_roadwarrior">Open in RoadWarrior</string>

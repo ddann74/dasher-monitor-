@@ -125,6 +125,16 @@ ACCEL_BRAKE_MIN_SAMPLES_TO_LEARN = 300
 # threshold that flags ordinary driving as harsh.
 ACCEL_BRAKE_MIN_THRESHOLD_MS2 = 1.5
 
+# UNCONFIRMED placeholder -- the original flat-rate fuel cost estimate
+# ($0.12/km), kept as the fallback for a driver who hasn't entered their
+# own vehicle's real fuel efficiency/price (see
+# DriveMonitorEngine.get_fuel_cost_settings/set_fuel_cost_settings). This
+# is NOT learned from anything -- there's no real telemetry signal for
+# actual fuel spend the way there is for deadhead/wait-time/accel-brake,
+# so unlike those, this can only ever be as accurate as what the driver
+# tells it, never automatically improved from driving data alone.
+DEFAULT_FUEL_COST_PER_KM = 0.12
+
 STOPS_BUFFER_MAX = 10
 STOPS_BUFFER_TTL_SECONDS = 24 * 60 * 60
 
@@ -319,6 +329,20 @@ class Database:
             id INTEGER PRIMARY KEY CHECK (id = 1),
             avg_gap_seconds REAL,
             sample_count INTEGER
+        );
+
+        -- Driver-entered, not learned (see DEFAULT_FUEL_COST_PER_KM's
+        -- comment) -- NULL/absent means "not configured yet," in which
+        -- case the flat DEFAULT_FUEL_COST_PER_KM estimate is used
+        -- instead. Runtime-editable at any time (same as the Google Maps
+        -- API key and RoadWarrior package override) via
+        -- DriveMonitorEngine.set_fuel_cost_settings -- never hardcoded
+        -- once set, and can be changed again later if fuel prices move
+        -- or the vehicle changes.
+        CREATE TABLE IF NOT EXISTS fuel_cost_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            fuel_efficiency_l_per_100km REAL,
+            fuel_price_per_liter REAL
         );
 
         CREATE TABLE IF NOT EXISTS diagnostic_log (
@@ -2667,7 +2691,7 @@ class TripManager:
         safety_score = self._safety_score(distance_km)
         geofence_ratio = self._geofence_hit_ratio()
         composite = round(0.4 * time_eff_score + 0.3 * safety_score + 0.3 * geofence_ratio, 1)
-        fuel_cost = round(distance_km * 0.12, 2)  # simple $/km estimate
+        fuel_cost = round(distance_km * self._get_fuel_cost_per_km(), 2)
 
         return {
             "start_time": self.gps_points[0][3] if self.gps_points else end_ts,
@@ -2682,6 +2706,25 @@ class TripManager:
             "composite_score": composite,
             "fuel_cost_estimate": fuel_cost,
         }
+
+    def _get_fuel_cost_per_km(self):
+        """
+        Returns the current effective $/km fuel cost rate. If the driver
+        has entered their own vehicle's real fuel efficiency AND fuel
+        price (see DriveMonitorEngine.set_fuel_cost_settings), computes a
+        real vehicle-specific rate from those; otherwise falls back to
+        the original flat DEFAULT_FUEL_COST_PER_KM guess. Unlike
+        deadhead/wait-time/accel-brake, this can never be learned purely
+        from driving data -- there's no real telemetry signal for actual
+        fuel spend, only what the driver tells it, so "learned" here
+        means "driver-configured," not "observed."
+        """
+        row = self.db.conn.execute(
+            "SELECT fuel_efficiency_l_per_100km, fuel_price_per_liter FROM fuel_cost_settings WHERE id = 1"
+        ).fetchone()
+        if not row or not row["fuel_efficiency_l_per_100km"] or not row["fuel_price_per_liter"]:
+            return DEFAULT_FUEL_COST_PER_KM
+        return (row["fuel_efficiency_l_per_100km"] / 100.0) * row["fuel_price_per_liter"]
 
     def _estimate_distance_km(self):
         return self._cumulative_distance_km
@@ -3355,6 +3398,51 @@ class DriveMonitorEngine:
     def clear_last_parking_gap_for_feedback(self):
         """Same missing-wrapper bug as the two methods above."""
         return self.trip_manager.clear_last_parking_gap_for_feedback()
+
+    def get_fuel_cost_settings(self):
+        """
+        Current fuel cost configuration -- called to pre-fill the settings
+        screen, and to show the currently-effective $/km rate whether or
+        not the driver has entered real values yet (see
+        set_fuel_cost_settings). Directly on DriveMonitorEngine, not just
+        TripManager -- same lesson as add_pickup/recalculate_personal_
+        calibration/the two parking-gap methods above, all previously
+        broken by exactly this mistake.
+        """
+        row = self.db.conn.execute(
+            "SELECT fuel_efficiency_l_per_100km, fuel_price_per_liter FROM fuel_cost_settings WHERE id = 1"
+        ).fetchone()
+        configured = bool(row and row["fuel_efficiency_l_per_100km"] and row["fuel_price_per_liter"])
+        return json.dumps({
+            "configured": configured,
+            "fuel_efficiency_l_per_100km": row["fuel_efficiency_l_per_100km"] if row else None,
+            "fuel_price_per_liter": row["fuel_price_per_liter"] if row else None,
+            "effective_cost_per_km": round(self.trip_manager._get_fuel_cost_per_km(), 4),
+        })
+
+    def set_fuel_cost_settings(self, fuel_efficiency_l_per_100km, fuel_price_per_liter):
+        """
+        Saves the driver's real vehicle fuel efficiency (L/100km) and
+        current fuel price ($/L), replacing the flat
+        DEFAULT_FUEL_COST_PER_KM guess with distance_km *
+        (efficiency/100) * price for every future trip's fuel_cost_estimate
+        -- see TripManager._get_fuel_cost_per_km.
+
+        Explicitly overwritable at any time -- fuel prices change, and a
+        driver could change vehicles -- there's no reason this should ever
+        be a one-time, unchangeable setting. Pass 0 or None for either
+        value to clear it back to "not configured" (falls back to the
+        flat default again) rather than silently keeping a stale value.
+        """
+        efficiency = fuel_efficiency_l_per_100km if fuel_efficiency_l_per_100km and fuel_efficiency_l_per_100km > 0 else None
+        price = fuel_price_per_liter if fuel_price_per_liter and fuel_price_per_liter > 0 else None
+        self.db.conn.execute("""
+            INSERT INTO fuel_cost_settings (id, fuel_efficiency_l_per_100km, fuel_price_per_liter)
+            VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET fuel_efficiency_l_per_100km = excluded.fuel_efficiency_l_per_100km,
+                fuel_price_per_liter = excluded.fuel_price_per_liter
+        """, (efficiency, price))
+        self.db.conn.commit()
 
     def get_feedback_summary(self):
         """
