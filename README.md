@@ -703,6 +703,31 @@ Remaining real gaps, as of the current build:
   of `openAddress()`, both branches of `openAddressWithWaze()` -- the
   latter two hadn't crashed yet in that log only because their code paths
   weren't hit, but carried the identical bug).
+- ~~**`scanAndRecordAcceptDeclineNodeBounds` never found the real
+  Accept/Decline nodes**~~ **Resolved (2026-08-23).** Confirmed via a real
+  diagnostic log: `NODE_SCAN: Accept node found=false, Decline node
+  found=false` fired 5-for-5, even though `FULL_TEXT_DUMP` confirmed
+  "Accept"/"Decline" text was genuinely on screen, and a real tap's
+  `TYPE_VIEW_CLICKED` event fired with `class=android.view.ViewGroup,
+  text=[Decline]` -- the clickable element is a container, but
+  `findAccessibilityNodeInfosByText` matches the (non-clickable) text
+  node inside it, which the old `node.isClickable()` check discarded
+  every time. Fixed by walking up the matched node's ancestor chain
+  (`nearestClickableAncestor`) to find the real clickable target. Was
+  effectively dead code before this fix -- the actual outcome recording
+  worked anyway via the separate `TYPE_VIEW_CLICKED` text-matching path,
+  so no user-facing impact, just an unused backup mechanism.
+- **Auto-launching Dasher for a new offer only ever *requested* the
+  foreground, never confirmed switching to it.** As of 2026-08-23,
+  `launchDasherApp` also attempts a direct `startActivity()` immediately
+  after showing the offer overlay -- an app with an active
+  `SYSTEM_ALERT_WINDOW` overlay is one of Android's real Background
+  Activity Launch exemptions, unlike the plain background-service context
+  the original (removed) bare `startActivity()` call ran from. HONEST GAP:
+  a blocked BAL launch fails silently, so this can't actually confirm
+  whether the direct switch worked -- only that it's now attempted under a
+  condition where it plausibly can succeed. The full-screen-intent
+  notification and overlay tap-to-open remain as independent fallbacks.
 - **Speed-limit-based speeding detection is still generic**
   (`DEFAULT_SPEED_LIMIT_KMH = 60` everywhere) -- genuinely can't be
   improved without map speed-limit data this app doesn't currently

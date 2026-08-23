@@ -450,6 +450,42 @@ public class AppNotificationListenerService extends NotificationListenerService 
             }
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
 
+            // Explicit request: bring Dasher to the foreground automatically
+            // again, the way it did before the BAL restriction was
+            // discovered -- not just a notification the driver has to tap.
+            //
+            // showOfferOverlayFallback() is called FIRST, before the direct
+            // startActivity() attempt below, specifically so its
+            // SYSTEM_ALERT_WINDOW overlay window is genuinely on screen
+            // by the time startActivity() runs: an app currently showing a
+            // visible overlay window is one of Android's real Background
+            // Activity Launch exemptions, unlike the plain background
+            // service context the original bare startActivity() call ran
+            // from (see commit 2719d00's honesty note on why that one was
+            // silently dropped). This wasn't available before, since no
+            // overlay window existed at the moment of that original call.
+            //
+            // HONESTY NOTE: a blocked BAL launch fails SILENTLY -- no
+            // exception, same as before -- so this can't actually confirm
+            // whether the direct switch worked, only that it was attempted
+            // under a condition where it plausibly can now succeed. The
+            // full-screen-intent notification below still runs regardless,
+            // as a second, independent mechanism (reliable when locked),
+            // and the overlay's own tap-to-open remains a manual fallback
+            // if both automatic paths are blocked on a given device/OS
+            // version.
+            showOfferOverlayFallback(restaurantName, finalScore, launchIntent);
+            try {
+                startActivity(launchIntent);
+                logDiagnostic("AUTO_LAUNCH", "Attempted direct foreground launch for offer (" + restaurantName
+                        + ") while an overlay window was active -- not confirmable whether it actually "
+                        + "switched to Dasher, see class docs");
+            } catch (RuntimeException e) {
+                logDiagnostic("AUTO_LAUNCH", "Direct foreground launch attempt failed/blocked for offer ("
+                        + restaurantName + "): " + e.getClass().getSimpleName()
+                        + " -- falling back to full-screen-intent notification + overlay tap");
+            }
+
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager == null) {
                 logDiagnostic("AUTO_LAUNCH", "Could not launch Dasher -- NotificationManager unavailable");
@@ -493,8 +529,6 @@ public class AppNotificationListenerService extends NotificationListenerService 
             manager.notify(AUTO_LAUNCH_NOTIFICATION_ID, notification);
             logDiagnostic("AUTO_LAUNCH", "Requested Dasher foreground via full-screen-intent notification for offer ("
                     + restaurantName + scoreNote + ") -- " + recencyNote);
-
-            showOfferOverlayFallback(restaurantName, finalScore, launchIntent);
         } catch (RuntimeException e) {
             logDiagnostic("ERROR", "launchDasherApp exception: " + android.util.Log.getStackTraceString(e));
         }
