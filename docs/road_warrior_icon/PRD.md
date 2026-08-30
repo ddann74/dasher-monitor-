@@ -231,24 +231,24 @@ call is needed before starting.
 
 ## 6. Success criteria (implementation-phase checklist)
 
-- [ ] `NavigationHelper` (or renamed equivalent)'s tap action copies the
+- [x] `NavigationHelper` (or renamed equivalent)'s tap action copies the
       resolved address text to the clipboard instead of launching a
       navigation intent
-- [ ] Empty/unresolved address text is guarded: tap shows a distinct
+- [x] Empty/unresolved address text is guarded: tap shows a distinct
       "address not available yet" toast and does not copy
-- [ ] Successful copy shows a confirmation toast naming/previewing the
+- [x] Successful copy shows a confirmation toast naming/previewing the
       address copied
-- [ ] Old RoadWarrior/fallback intent-launch code path is removed
-- [ ] RoadWarrior package-override setting (Permissions & Setup screen) is
+- [x] Old RoadWarrior/fallback intent-launch code path is removed
+- [x] RoadWarrior package-override setting (Permissions & Setup screen) is
       removed
-- [ ] `DeveloperTestingActivity` hooks updated: one exercises successful
+- [x] `DeveloperTestingActivity` hooks updated: one exercises successful
       copy, one exercises blocked-copy-when-unresolved
-- [ ] README updated to describe copy-to-clipboard behavior
+- [x] README updated to describe copy-to-clipboard behavior
 - [ ] Core requirement manually confirmed on-device: tapping the icon for
       a real, resolved stop copies exactly that address text to the
-      clipboard (verified by pasting it somewhere) -- **likely blocked**:
-      no Android emulator/device is available in this environment; see
+      clipboard (verified by pasting it somewhere) -- **blocked**: no
+      Android emulator/device is available in this environment; see
       PROGRESS.md for what was verified by code inspection instead
-- [ ] Batch-order pickup case re-verified against the new copy call site
+- [x] Batch-order pickup case re-verified against the new copy call site
       (per §4a P6)
 - [ ] User sign-off

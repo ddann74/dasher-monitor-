@@ -271,19 +271,19 @@ public class DeveloperTestingActivity extends AppCompatActivity {
         }
 
         /**
-         * Registers a fake stop with the exact (0.0, 0.0) placeholder
-         * coordinates DasherAccessibilityService uses for "not geocoded
-         * yet" -- so the guard added to NavigationHelper.openAddress() for
-         * that case (docs/road_warrior_icon/PRD.md) can be exercised on
-         * demand, without waiting for a real geocode failure or a missing
-         * API key. Tapping the RoadWarrior icon for this stop should show
-         * the "Address not resolved yet" toast and open nothing.
+         * Requirement change (2026-08-30, docs/road_warrior_icon/PRD.md):
+         * registers a fake stop with an empty address string -- so the
+         * empty/unresolved-address guard in
+         * NavigationHelper.copyAddressToClipboard() can be exercised on
+         * demand, without waiting for a real extraction failure. Tapping
+         * the RoadWarrior icon for this stop should show the "Address not
+         * available yet" toast and copy nothing to the clipboard.
          */
         private void addPlaceholderTestStop() {
             try {
-                engine.callAttr("add_stop_to_buffer", "Test Stop (Unresolved Address)", 0.0, 0.0);
-                Toast.makeText(this, "Placeholder test stop added -- tap the RoadWarrior icon "
-                        + "for it to verify the unresolved-address guard.", Toast.LENGTH_LONG).show();
+                engine.callAttr("add_stop_to_buffer", "", 0.0, 0.0);
+                Toast.makeText(this, "Test stop with no address added -- tap the RoadWarrior icon "
+                        + "for it to verify the unavailable-address guard.", Toast.LENGTH_LONG).show();
             } catch (RuntimeException e) {
                 Toast.makeText(this, "Could not add placeholder test stop: " + e.getMessage(),
                         Toast.LENGTH_LONG).show();

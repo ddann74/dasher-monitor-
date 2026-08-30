@@ -49,8 +49,6 @@ public class PermissionsActivity extends AppCompatActivity {
         Button cannedRepliesButton = findViewById(R.id.cannedRepliesButton);
         EditText apiKeyInput = findViewById(R.id.apiKeyInput);
         Button saveApiKeyButton = findViewById(R.id.saveApiKeyButton);
-        EditText roadWarriorPackageInput = findViewById(R.id.roadWarriorPackageInput);
-        Button saveRoadWarriorPackageButton = findViewById(R.id.saveRoadWarriorPackageButton);
         TextView fuelCostSubtext = findViewById(R.id.fuelCostSubtext);
         EditText fuelEfficiencyInput = findViewById(R.id.fuelEfficiencyInput);
         EditText fuelPriceInput = findViewById(R.id.fuelPriceInput);
@@ -67,22 +65,6 @@ public class PermissionsActivity extends AppCompatActivity {
             String key = apiKeyInput.getText().toString().trim();
             GoogleApiHelper.setApiKey(this, key);
             Toast.makeText(this, key.isEmpty() ? "API key cleared." : "API key saved.",
-                    Toast.LENGTH_SHORT).show();
-        });
-
-        // Premortem finding (docs/road_warrior_icon/PRD.md ss4a, P5): a
-        // future RoadWarrior update, regional variant, or old sideloaded
-        // APK could use a different package name than the one reconfirmed
-        // in NavigationHelper -- indistinguishable, from the driver's seat,
-        // from RoadWarrior simply not handling geo: intents. Same
-        // runtime-override pattern as the API key above, so an affected
-        // driver has a way out without a code change.
-        roadWarriorPackageInput.setText(NavigationHelper.getRoadWarriorPackage(this));
-        saveRoadWarriorPackageButton.setOnClickListener(v -> {
-            String packageName = roadWarriorPackageInput.getText().toString().trim();
-            NavigationHelper.setRoadWarriorPackage(this, packageName);
-            Toast.makeText(this, packageName.isEmpty()
-                    ? "RoadWarrior package reset to default." : "RoadWarrior package saved.",
                     Toast.LENGTH_SHORT).show();
         });
 

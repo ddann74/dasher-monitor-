@@ -178,3 +178,75 @@ batch-order finding against the new copy call site.
 No code changed in this entry -- planning/documentation only, per the
 user's request to update the PRD and Ralph loop. Implementation starts on
 the next loop iteration, on PRD §6's first unchecked box.
+
+## Implementation -- copy-to-clipboard (2026-08-30)
+
+Implemented PRD §6 items 1-7 and 9 in one pass (following this repo's own
+precedent from the original design's "Implementation (2026-08-22)" entry
+above, which likewise did items 1-5 together rather than one per
+message):
+
+- `NavigationHelper.java`: replaced `openAddress(context, address, lat,
+  lon)` with `copyAddressToClipboard(context, address)` --
+  `ClipboardManager.setPrimaryClip` instead of building/launching a
+  `geo:` intent. Guards on `address` being null/blank (not on
+  coordinates, which this action no longer uses) with a distinct
+  "Address not available yet" toast; a successful copy shows "Copied to
+  clipboard: <address>". Removed `getRoadWarriorPackage`/
+  `setRoadWarriorPackage`, `DEFAULT_ROADWARRIOR_PACKAGE`,
+  `KEY_ROADWARRIOR_PACKAGE`, and `unresolvedAddressReason()` (moot per
+  §4a re-assessment). Kept `recordGeocodeFailure()` and its backing
+  SharedPreferences keys as write-only: `DasherAccessibilityService`'s
+  two real geocode `onError` callbacks still call it, and that file is
+  out of scope for this PRD to touch -- nothing in `NavigationHelper`
+  reads that stored failure back anymore, documented in-code so it isn't
+  mistaken for dead code. `openAddressWithWaze()` untouched (separate,
+  explicitly out-of-scope path); restored the `Intent`/`Uri`/
+  `ActivityNotFoundException` imports it still needs after an earlier
+  edit in this same pass accidentally dropped them.
+- `TripForegroundService.java`: both nav-icon tap lambdas (dropoff,
+  pickup) call `copyAddressToClipboard` instead of `openAddress`; dropped
+  the now-unused `stopLat`/`stopLon`/`pickupLat`/`pickupLon` locals.
+- `MainActivity.java`: `openMostRecentStopInRoadWarrior()` renamed to
+  `copyMostRecentStopAddress()`, same clipboard-copy call, same
+  early-return for an empty stops buffer.
+- `strings.xml` / `activity_main.xml`: manual button relabeled "Copy
+  Delivery Address" (kept the same view id/variable name to minimize
+  diff -- only the visible text changed).
+- `PermissionsActivity.java` / `activity_permissions.xml` / `strings.xml`:
+  removed the RoadWarrior package-override field, button, and its two
+  backing strings -- no intent is launched from this icon anymore, so
+  there's nothing left to override.
+- `DeveloperTestingActivity.java` / `strings.xml`: `addPlaceholderTestStop`
+  now registers a stop with an **empty address string** (was: real address
+  text with placeholder `(0.0, 0.0)` coordinates) -- exercises the new
+  text-based guard instead of the retired coordinate-based one. Button
+  label changed from "...Unresolved (0,0) Address" to "...No Address
+  Yet". `addTestStopNearby` unchanged -- still exercises the
+  successful-copy path.
+- `README.md`: updated the pickup-icon description (copies address, not
+  "opens navigation"); marked the two now-stale "RoadWarrior's `geo:`
+  intent is unconfirmed" TODO bullets as **Superseded (2026-08-30)**,
+  following the file's own resolved/superseded convention, rather than
+  deleting the history; updated the geocoding-TODO bullet's placeholder
+  -coordinate note to reflect that the copy action doesn't use
+  coordinates at all.
+- §4a P6 (batch-offer aggregate name) re-verified against the new copy
+  call site by re-tracing the source, not re-run from scratch: `add_pickup`
+  (`drive_monitor.py:1831`/`4189`) is still the only writer to the
+  `restaurant_name` that reaches this tap handler, and
+  `record_pickup_location` (`drive_monitor.py:3076`, the aggregate
+  -name path) remains a separate, unread-by-this-call-site history table
+  -- neither was touched by this change, so the original finding still
+  holds.
+
+**Not done, and can't be from here**: on-device confirmation (PRD §6's
+remaining unchecked box) needs an actual tap on a running app with a
+clipboard to paste from -- this sandbox has no Android emulator or
+device, same limitation as the original design's verification gap.
+
+Verified by direct review of every changed file (not a build -- no
+Android SDK available in this sandbox to run Gradle) -- checked for
+balanced braces, consistent method signatures, and that no removed
+symbol (`getRoadWarriorPackage`, `setRoadWarriorPackage`, `openAddress`)
+is still referenced anywhere in the app module.

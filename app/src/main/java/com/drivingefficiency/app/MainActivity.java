@@ -139,10 +139,10 @@ public class MainActivity extends AppCompatActivity {
                         .show();
             });
 
-            // One-Tap Instant Pinpoint (report section 3): opens the most
-            // recently added delivery address in RoadWarrior, or whatever
-            // maps app is available if RoadWarrior can't handle it.
-            openRoadWarriorButton.setOnClickListener(v -> openMostRecentStopInRoadWarrior());
+            // Requirement change (2026-08-30, docs/road_warrior_icon/PRD.md):
+            // copies the most recently added delivery address to the
+            // clipboard instead of auto-launching RoadWarrior.
+            openRoadWarriorButton.setOnClickListener(v -> copyMostRecentStopAddress());
 
             // Each of these opens a dedicated screen -- previously this
             // activity had 23 buttons stacked in one long scroll with no
@@ -545,25 +545,24 @@ public class MainActivity extends AppCompatActivity {
         }
 
     /**
-         * One-Tap Instant Pinpoint: grabs the most recently added delivery
-         * address from the stops buffer and opens it via NavigationHelper
-         * (RoadWarrior first, falling back to whatever maps app is available).
+         * Requirement change (2026-08-30, docs/road_warrior_icon/PRD.md):
+         * grabs the most recently added delivery address from the stops
+         * buffer and copies it to the clipboard, instead of auto-launching
+         * navigation, so the driver can paste it wherever they choose.
          */
-        private void openMostRecentStopInRoadWarrior() {
+        private void copyMostRecentStopAddress() {
             try {
                 String stopsJson = engine.callAttr("get_stops_buffer_json").toString();
                 JSONArray stops = new JSONArray(stopsJson);
                 if (stops.length() == 0) {
-                    Toast.makeText(this, "No recent address to navigate to yet.", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "No recent address to copy yet.", Toast.LENGTH_SHORT).show();
                     return;
                 }
                 JSONObject mostRecent = stops.getJSONObject(0);
                 String address = mostRecent.optString("address", "");
-                double lat = mostRecent.optDouble("lat", 0);
-                double lon = mostRecent.optDouble("lon", 0);
-                NavigationHelper.openAddress(this, address, lat, lon);
+                NavigationHelper.copyAddressToClipboard(this, address);
             } catch (JSONException | PyException e) {
-                Toast.makeText(this, "Could not open navigation: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "Could not copy address: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }
 

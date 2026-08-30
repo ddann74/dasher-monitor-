@@ -297,10 +297,11 @@ a new one:
 - **RoadWarrior icon while approaching pickup**: the same quick-nav icon
   already shown while approaching a dropoff now also appears while
   approaching the pickup (`TripManager.check_approaching_pickup`,
-  mirroring `_check_approaching_stop`), tappable to open navigation. If
-  the icon appears before the formatted address has resolved, it falls
-  back to the restaurant name + coordinates -- still enough for real
-  navigation, just a less precise pin.
+  mirroring `_check_approaching_stop`), tappable to copy the address to
+  the clipboard (requirement change 2026-08-30, see
+  `docs/road_warrior_icon/PRD.md` -- previously auto-launched
+  navigation). If the icon appears before the formatted address has
+  resolved, it falls back to copying the restaurant name instead.
 - **"Waiting for pickup address"**: a brief overlay message the first
   time the pickup icon would show but the address hasn't resolved yet --
   a visible signal rather than the icon just silently appearing with
@@ -619,25 +620,26 @@ Remaining real gaps, as of the current build:
   `GoogleApiHelper.geocodeAddress` / `geocodeAddressWithFormatted` do
   this for both dropoff and pickup, gated on a configured Google Maps API
   key (`GoogleApiHelper.hasApiKey`). Without a key, or before an async
-  geocode resolves, stops still carry the `(0.0, 0.0)` placeholder --
-  `NavigationHelper.openAddress()` now detects that case explicitly and
-  refuses to navigate instead of silently opening a pin in the ocean
-  (`docs/road_warrior_icon/PRD.md`).
+  geocode resolves, stops still carry the `(0.0, 0.0)` placeholder for
+  coordinates, but the RoadWarrior icon's tap action (see below,
+  requirement change 2026-08-30) no longer uses coordinates at all --
+  it copies the address text, guarded separately on that text being
+  present.
 - ~~**Battery optimization exemption**: nothing requests exemption...~~
   **Resolved, and was already resolved when this bullet was written** --
   see the "Battery optimization exemption" entry higher up in this same
   README (`PermissionsActivity`'s `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`
   flow), which directly contradicted this one. Left as a reminder that
   this TODO list itself needs to be kept honest, not just the code.
-- **RoadWarrior's `geo:` intent is still unconfirmed on a real device**:
-  `com.roadwarrior.android` was reconfirmed as the correct Play Store
-  package name (2026-08-22), and `NavigationHelper.openAddress()` now
-  shows a distinct toast for a RoadWarrior-specific open vs. a
-  fallback-to-another-maps-app open, so which one actually happened is at
-  least visible. Whether RoadWarrior's app itself accepts and pre-fills a
-  single-stop `geo:` intent at all -- no documented deep-link API exists
-  for RoadWarrior, see `NavigationHelper.java`'s comments -- still hasn't
-  been verified on a real device with RoadWarrior installed.
+- ~~**RoadWarrior's `geo:` intent is still unconfirmed on a real
+  device**...~~ **Superseded (2026-08-30).** Per the driver's request
+  (`docs/road_warrior_icon/PRD.md`), the RoadWarrior icon no longer
+  launches any intent at all -- it copies the stop's address to the
+  clipboard (`NavigationHelper.copyAddressToClipboard()`), sidestepping
+  the never-confirmed `geo:` handling question entirely instead of
+  continuing to investigate it. Still unverified on a real device: that
+  the clipboard copy itself behaves correctly when actually tapped (PRD
+  §6).
 - ~~**Peak-hour traffic windows and harsh-accel/brake thresholds are
   still generic hardcoded assumptions**~~ **Resolved, both halves.**
   Peak-hour traffic is personalized via `SmartScoreEngine._is_peak_hour`
@@ -703,19 +705,13 @@ Remaining real gaps, as of the current build:
   of `openAddress()`, both branches of `openAddressWithWaze()` -- the
   latter two hadn't crashed yet in that log only because their code paths
   weren't hit, but carried the identical bug).
-- **Whether RoadWarrior's `geo:` intent actually works is still
-  unconfirmed -- but now it's finally *observable*.** Every outcome in
-  `NavigationHelper` (RoadWarrior opened / RoadWarrior not available,
-  fell back / no maps app at all) was previously only ever a Toast --
-  visible in the moment, with zero durable record, and combined with the
-  FLAG_ACTIVITY_NEW_TASK crash above, no real diagnostic log has EVER
-  shown which one happened for a real tap. Added `NAV_TAP` diagnostic log
-  entries mirroring each Toast, so the next uploaded log will finally show
-  whether `startActivity()` succeeded and which app it went to -- though
-  that still only confirms the intent was accepted without exception, not
-  that RoadWarrior's own UI actually displays the pin correctly once
-  open; there's still no documented deep-link API for RoadWarrior to
-  verify that against (see this file's class doc).
+- ~~**Whether RoadWarrior's `geo:` intent actually works is still
+  unconfirmed**...~~ **Superseded (2026-08-30).** `NavigationHelper` no
+  longer launches any intent for this icon -- see the entry above. The
+  `NAV_TAP` diagnostic log entries this bullet added are kept (now
+  logging copy-succeeded / copy-refused instead of RoadWarrior-opened /
+  fell-back-to-generic-maps), so a driver's next uploaded log still shows
+  what actually happened on a tap.
 - ~~**`scanAndRecordAcceptDeclineNodeBounds` never found the real
   Accept/Decline nodes**~~ **Resolved (2026-08-23).** Confirmed via a real
   diagnostic log: `NODE_SCAN: Accept node found=false, Decline node

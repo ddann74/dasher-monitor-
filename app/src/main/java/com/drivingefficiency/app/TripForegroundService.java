@@ -812,16 +812,14 @@ public class TripForegroundService extends Service {
             String approachingAddress = approachingStop != null
                     ? approachingStop.optString("address", "") : null;
             if (approachingAddress != null && !approachingAddress.equals(lastApproachingAddress)) {
-                double stopLat = approachingStop.optDouble("lat", 0);
-                double stopLon = approachingStop.optDouble("lon", 0);
                 OverlayHelper.showNavigationIcon(this, () -> {
                     // Previously no way to tell whether a tap was ever
                     // actually received at all, versus being received but
                     // NavigationHelper failing silently afterward -- this
                     // confirms which one, if the icon is ever reported not
                     // to work again.
-                    logDiagnostic("NAV_ICON", "Tapped -- opening " + approachingAddress);
-                    NavigationHelper.openAddress(this, approachingAddress, stopLat, stopLon);
+                    logDiagnostic("NAV_ICON", "Tapped -- copying " + approachingAddress);
+                    NavigationHelper.copyAddressToClipboard(this, approachingAddress);
                 });
                 logDiagnostic("NAV_ICON", "Showing -- approaching: " + approachingAddress);
             } else if (approachingAddress == null && lastApproachingAddress != null) {
@@ -843,8 +841,6 @@ public class TripForegroundService extends Service {
             String approachingPickupRestaurant = approachingPickup != null
                     ? approachingPickup.optString("restaurant_name", "") : null;
             if (approachingPickupRestaurant != null && !approachingPickupRestaurant.equals(lastApproachingPickupRestaurant)) {
-                double pickupLat = approachingPickup.optDouble("lat", 0);
-                double pickupLon = approachingPickup.optDouble("lon", 0);
                 // Real street address (see GoogleApiHelper.geocodeAddressWithFormatted /
                 // DasherAccessibilityService.geocodePickupAndCheckTraffic) if it's
                 // resolved by now, else null -- the restaurant name/coordinates
@@ -863,13 +859,12 @@ public class TripForegroundService extends Service {
                 String finalPickupAddress = pickupAddress;
                 OverlayHelper.showNavigationIcon(this, () -> {
                     // Falls back to the restaurant name if the address hasn't
-                    // resolved yet -- NavigationHelper/Maps can still route on
-                    // that plus real coordinates, just with a less precise
-                    // pin than a real street address would give.
+                    // resolved yet -- there's still something to copy and
+                    // paste, just less precise than a real street address.
                     String target = (finalPickupAddress != null && !finalPickupAddress.isEmpty())
                             ? finalPickupAddress : approachingPickupRestaurant;
-                    logDiagnostic("NAV_ICON", "Pickup icon tapped -- opening " + target);
-                    NavigationHelper.openAddress(this, target, pickupLat, pickupLon);
+                    logDiagnostic("NAV_ICON", "Pickup icon tapped -- copying " + target);
+                    NavigationHelper.copyAddressToClipboard(this, target);
                 });
                 logDiagnostic("NAV_ICON", "Showing pickup icon -- approaching: " + approachingPickupRestaurant
                         + (pickupAddress != null && !pickupAddress.isEmpty() ? " (" + pickupAddress + ")" : " (address pending)"));
