@@ -489,6 +489,38 @@ public class TripHistoryActivity extends AppCompatActivity {
                             formatMinutesSeconds(phaseBreakdown.optDouble("completing_dropoff_seconds", 0))));
                 }
                 body.append("\n");
+
+                // Same phases as a share of this trip's total elapsed time
+                // (end_time - start_time) -- shows which phase actually ate
+                // the shift, not just its raw duration. Omitted entirely,
+                // not guessed, if the total itself isn't available (older
+                // trip missing either timestamp) -- same "omit rather than
+                // guess" rule as the phase breakdown above.
+                double totalTripSeconds = summary.optDouble("end_time", 0) - summary.optDouble("start_time", 0);
+                if (totalTripSeconds > 0) {
+                    body.append("As % of total trip time:\n");
+                    if (!phaseBreakdown.isNull("driving_to_pickup_seconds")) {
+                        body.append(String.format("Driving to pickup: %s\n",
+                                formatPercentOfTotal(phaseBreakdown.optDouble("driving_to_pickup_seconds", 0), totalTripSeconds)));
+                    }
+                    if (!phaseBreakdown.isNull("wait_at_restaurant_seconds")) {
+                        body.append(String.format("Waiting at restaurant: %s\n",
+                                formatPercentOfTotal(phaseBreakdown.optDouble("wait_at_restaurant_seconds", 0), totalTripSeconds)));
+                    }
+                    if (!phaseBreakdown.isNull("driving_to_dropoff_seconds")) {
+                        body.append(String.format("Driving to dropoff: %s\n",
+                                formatPercentOfTotal(phaseBreakdown.optDouble("driving_to_dropoff_seconds", 0), totalTripSeconds)));
+                    }
+                    if (!phaseBreakdown.isNull("parking_to_walking_seconds")) {
+                        body.append(String.format("Parking to walking: %s\n",
+                                formatPercentOfTotal(phaseBreakdown.optDouble("parking_to_walking_seconds", 0), totalTripSeconds)));
+                    }
+                    if (!phaseBreakdown.isNull("completing_dropoff_seconds")) {
+                        body.append(String.format("Completing dropoff: %s\n",
+                                formatPercentOfTotal(phaseBreakdown.optDouble("completing_dropoff_seconds", 0), totalTripSeconds)));
+                    }
+                    body.append("\n");
+                }
             }
             JSONObject deadlineComparison = summary.optJSONObject("deadline_comparison");
             if (deadlineComparison != null) {
@@ -577,6 +609,12 @@ public class TripHistoryActivity extends AppCompatActivity {
             int minutes = rounded / 60;
             int seconds = rounded % 60;
             return minutes > 0 ? minutes + "m " + seconds + "s" : seconds + "s";
+        }
+
+    /** Formats a phase duration as a rounded percentage of the trip's total elapsed time, for the "As % of total trip time" section. */
+        private String formatPercentOfTotal(double phaseSeconds, double totalSeconds) {
+            long pct = Math.round((phaseSeconds / totalSeconds) * 100);
+            return pct + "%";
         }
 
     /** Maps raw event_type strings from the events table to readable labels. */
