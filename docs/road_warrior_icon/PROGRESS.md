@@ -150,3 +150,31 @@ checks this before falling back to the generic "try again" message.
 This closes every item in PRD §6 that doesn't require an actual device
 tap. Verified by `git diff` review of both changed files -- no syntax
 issues.
+
+## Requirement change -- copy address instead of auto-navigate (2026-08-30)
+
+User requested the icon's tap behavior be changed: "change it to copy the
+address so I can paste it myself," instead of auto-launching RoadWarrior
+or a fallback maps app. Confirmed by code inspection that the auto
+-navigate behavior from the sections above is still the current code (no
+`ClipboardManager` usage exists for this icon yet) -- none of it had been
+superseded before this change was requested.
+
+Rewrote `PRD.md` §0a, §2, §3, §4a, and §6 for the new copy-to-clipboard
+requirement. This **supersedes**, not invalidates, the work logged above:
+the placeholder-coordinate guard, RoadWarrior/fallback outcome toasts, and
+package-name override were correct fixes for the auto-navigate design;
+that design is being replaced, not corrected further. §6 in `PRD.md` is
+reset to a new, all-unchecked list reflecting the copy-to-clipboard
+requirement -- the boxes checked in the sections above are historical
+record of the superseded design's completion, not carried forward.
+
+`RALPH_PROMPT.md` rewritten to match: implement the clipboard-copy
+action, the text-based (not coordinate-based) empty-address guard, remove
+the now-unused RoadWarrior intent/package-override code, update the
+`DeveloperTestingActivity` hooks and README, and re-verify the P6
+batch-order finding against the new copy call site.
+
+No code changed in this entry -- planning/documentation only, per the
+user's request to update the PRD and Ralph loop. Implementation starts on
+the next loop iteration, on PRD §6's first unchecked box.

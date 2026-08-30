@@ -1,292 +1,254 @@
-# PRD: Fix the RoadWarrior navigation icon and make it functional
+# PRD: RoadWarrior icon -- copy address to clipboard (supersedes auto-navigate)
 
 Status: DRAFT -- awaiting sign-off before implementation begins.
 Scope: this one feature only. Not a general codebase pass.
 
 ## 0. What this is / isn't
 
-This is a **bug-fix + hardening** PRD for the existing RoadWarrior
+This is a **behavior-change** PRD for the existing RoadWarrior
 quick-navigation icon (`OverlayHelper.showNavigationIcon`,
 `NavigationHelper.openAddress`, wired from `TripForegroundService` for
 both dropoff and pickup, plus the manual "Open in RoadWarrior" button on
-`MainActivity`). It is **not** a rewrite and **not** a new feature -- the
-icon, the tap wiring, and real geocoding for both stop types already
-exist and are already connected end-to-end. This PRD closes the specific
-gaps that make it unreliable/silently wrong in the field.
+`MainActivity`). It is **not** a rewrite of the icon's appearance/trigger
+logic and **not** a new feature location -- the icon and the tap wiring
+already exist and are already connected end-to-end. What changes is what
+happens when the icon is tapped: instead of auto-launching a navigation
+app, it copies the stop's address to the clipboard so the driver can
+paste it wherever they choose.
 
-Anything requiring a real device with RoadWarrior actually installed, or
-a real live Dasher delivery, is called out explicitly as **unverifiable
-in this environment** rather than silently assumed to work.
+## 0a. Requirement change (2026-08-30)
 
-## 1. Why (root-cause investigation, code-verified)
+User request: "When the road warrior icon appears change it to copy the
+address so I can paste it myself." This **replaces** the tap behavior
+designed in the original version of this PRD (auto-launch RoadWarrior, or
+fall back to a generic maps chooser, via a `geo:lat,lon?q=address`
+intent) with: tapping the icon copies the stop's address text to the
+clipboard and shows a confirmation toast; the driver pastes it into
+whichever app they choose themselves. Section 1 below (the original
+root-cause investigation of the intent-launch approach) is kept as
+historical context for the code being replaced. Sections 2, 3, and 6 are
+rewritten for the new copy behavior and supersede the auto-navigate
+acceptance criteria that were previously checked off in this file --
+those items are no longer the target behavior, not because they were
+implemented incorrectly.
+
+Verified (2026-08-30, code inspection): as of this rewrite, the icon
+still performs the *old* auto-navigate behavior -- `NavigationHelper.java`
+has no `ClipboardManager` usage tied to this icon. The copy-to-clipboard
+behavior described below has not been implemented yet.
+
+## 1. Why the original design looked the way it did (historical, root-cause investigation, code-verified)
 
 Read `NavigationHelper.java`, `OverlayHelper.java` (nav-icon section),
 `TripForegroundService.java` (icon wiring, ~L797-840), `MainActivity.java`
 (`openMostRecentStopInRoadWarrior`), `DasherAccessibilityService.java`
 (dropoff/pickup geocoding, ~L560-650 and ~L920-960), and
-`GoogleApiHelper.java`. Findings:
+`GoogleApiHelper.java`. Findings from the original (auto-navigate) PRD:
 
 1. **Real bug -- no placeholder-coordinate guard.** Every other place in
    this codebase that touches stop coordinates explicitly treats
    `(0.0, 0.0)` as "not geocoded yet" (see
    `DasherAccessibilityService.java` L575, L616, L931, L1021 -- all named
-   "placeholder"). `NavigationHelper.openAddress()` has **no such guard**.
-   If the icon is tapped before the async geocode callback resolves (no
+   "placeholder"). `NavigationHelper.openAddress()` had **no such guard**.
+   If the icon was tapped before the async geocode callback resolved (no
    API key configured -- `GoogleApiHelper.hasApiKey()` is a real,
-   silent no-op path -- or a slow/failed geocode), it opens navigation to
-   `geo:0.0,0.0`, the Gulf of Guinea. From the driver's seat this is
-   indistinguishable from "the icon is broken."
-2. **Real bug -- RoadWarrior vs. fallback is invisible.** `openAddress()`
-   tries the RoadWarrior-targeted intent, then silently falls through to
+   silent no-op path -- or a slow/failed geocode), it opened navigation to
+   `geo:0.0,0.0`, the Gulf of Guinea.
+2. **Real bug -- RoadWarrior vs. fallback was invisible.** `openAddress()`
+   tried the RoadWarrior-targeted intent, then silently fell through to
    a generic chooser intent with zero user-visible difference between the
-   two outcomes. The entire point of this feature (per its own doc
-   comment) is opening RoadWarrior specifically; today a driver has no
-   way to tell whether that actually happened.
+   two outcomes.
 3. **Unverified, NOT fixable by code alone.** Whether RoadWarrior's app
-   actually accepts and pre-fills a single-stop `geo:` intent has never
-   been confirmed on a real device with RoadWarrior installed (flagged
-   already in `NavigationHelper.java`'s own comments and the README TODO
-   list). The package name itself, `com.roadwarrior.android`, **was
-   reconfirmed correct** via the current Google Play Store listing during
-   this investigation (2026-08-22) -- so a wrong package name is ruled
-   out as the cause. Whether RoadWarrior's app declares an intent-filter
-   for `geo:` at all is still unverified; RoadWarrior's own site
-   describes their real API integration as a business-tier bulk-manifest
-   API, not a consumer deep-link scheme, which is a plausible reason a
-   single-stop `geo:` intent might never be handled by RoadWarrior
-   specifically, no matter how correct the code is.
-4. **Stale documentation.** README's "Notes/TODOs" section still says
-   "nothing converts an address string into real lat/lon anywhere in the
-   app" -- false as of the dropoff/pickup geocoding work already merged.
-   Left uncorrected, it will keep sending the next investigation down the
-   wrong path (as it nearly did here).
+   actually accepts and pre-fills a single-stop `geo:` intent was never
+   confirmed on a real device with RoadWarrior installed. The package
+   name itself, `com.roadwarrior.android`, was reconfirmed correct via
+   the Google Play Store listing (2026-08-22). Whether RoadWarrior
+   declares an intent-filter for `geo:` at all was never confirmed --
+   this unresolved uncertainty is part of why the driver asked for a
+   copy-to-clipboard alternative instead: it sidesteps the question
+   entirely by letting the driver paste into whatever app actually works
+   for them.
+4. **Stale documentation.** README's "Notes/TODOs" section said "nothing
+   converts an address string into real lat/lon anywhere in the app" --
+   false as of the dropoff/pickup geocoding work already merged. This was
+   corrected during the original PRD's implementation.
+
+The mitigations this investigation drove (placeholder guard, RoadWarrior
+package override, outcome-distinguishing toasts -- see the "Previously
+implemented, now retired" note in §3.4) are being retired by this PRD, not
+because they were wrong, but because the feature they protected (an
+auto-launched navigation intent) is being replaced.
 
 ## 2. Definition of "functional" for this task
 
-User-confirmed core requirement (2026-08-22): the icon must **appear
-once approaching the stop's address**, and tapping it must **open
-navigation already loaded with that target address**, so the driver can
-visually pinpoint the exact location before arriving. This is not new
-scope -- it is already the intended design
-(`TripManager.check_approaching_pickup` / `_check_approaching_stop` show
-the icon within `APPROACHING_RADIUS_METERS` = 500m;
-`NavigationHelper.openAddress()` already builds `geo:lat,lon?q=address`,
-a pin at the coordinates plus the address text as a label). It is called
-out explicitly here because it's the acceptance test everything else in
-this PRD serves: the placeholder-coordinate bug in item 1 below is
-exactly the failure mode that would break this ("pinpoint the location"
-silently becomes "pinpoint the ocean").
-
-Tapping the icon must never silently do the wrong thing. Concretely:
+New core requirement (2026-08-30): the icon must still **appear once
+approaching the stop's address** (unchanged -- this trigger logic is out
+of scope, see Non-goals), and tapping it must **copy that stop's address
+text to the clipboard** with a confirmation toast, so the driver can paste
+it into RoadWarrior (or any other app) themselves. It must never silently
+copy an empty or not-yet-resolved value.
 
 - [ ] Manually confirmed: the icon appears within the ~500m approach
-      radius of a stop with a real (non-placeholder) address, and tapping
-      it opens navigation centered on that address's real coordinates
-      with the address itself visible/labeled -- not just "some pin."
-- [ ] If coordinates are still the `(0.0, 0.0)` placeholder (geocoding
-      hasn't resolved, or no API key configured), the tap **refuses to
-      navigate** and shows a clear, distinct on-screen message instead of
-      opening a pin in the ocean.
-- [ ] A successful RoadWarrior-specific open and a fallback-to-generic-maps
-      open are **visibly distinguishable** to the driver (different toast
-      text, at minimum).
-- [ ] The existing `DeveloperTestingActivity.addTestStopNearby()` manual
-      test flow (or a small addition to it) can exercise all three
-      outcomes -- RoadWarrior opens, fallback opens, placeholder-blocked
-      -- without a live delivery.
-- [ ] README's stale geocoding TODO note is corrected to match actual
-      code behavior.
-- [ ] No change to `ROADWARRIOR_PACKAGE` is needed (reconfirmed correct);
-      this is documented in-code so it isn't re-litigated next time.
+      radius of a stop with a real (non-placeholder) address (unchanged
+      trigger, `TripManager.check_approaching_pickup` /
+      `_check_approaching_stop`).
+- [ ] Tapping the icon when the stop's address text is available copies
+      exactly that address text to the clipboard and shows a confirmation
+      toast that names (or previews) what was copied.
+- [ ] Tapping the icon when the address text is not yet available (empty
+      string / not yet extracted or geocoded) refuses to copy and shows a
+      clear, distinct "address not available yet" toast instead of
+      copying an empty value.
+- [ ] The old auto-launch-navigation behavior (RoadWarrior-targeted intent,
+      fallback to a generic maps chooser) is removed from this icon's tap
+      handler -- it no longer opens any app itself.
+- [ ] The RoadWarrior package-override setting on the Permissions & Setup
+      screen (added for the old design's P5 mitigation, see §4a) is
+      removed, since no intent is launched from this icon anymore.
+- [ ] The existing `DeveloperTestingActivity` manual test hooks are
+      updated to exercise the two new outcomes -- successful copy,
+      blocked-copy-when-unresolved -- replacing the old
+      RoadWarrior-opens / fallback-opens / placeholder-blocked hooks.
+- [ ] README's description of this icon's tap behavior is updated to
+      describe copy-to-clipboard, replacing the auto-navigate description.
 
 Non-goals (explicitly out of scope for this task):
-- Confirming RoadWarrior's real `geo:` handling on a physical device --
-  no such device/app is available in this environment. If the driver can
-  test this in the field, that's the one remaining unverifiable step.
+- Any change to the icon's appearance trigger (approach-radius logic) --
+  unchanged, works today.
 - Any change to pickup/dropoff address extraction or geocoding itself --
-  both already work; this task only touches what happens *after* a
-  coordinate (real or placeholder) reaches `NavigationHelper`.
+  both already work; this task only touches what happens *after* an
+  address (real or unresolved) reaches the tap handler. Note: since the
+  copy action no longer needs lat/lon, only the address text, geocoding
+  failures that only affected coordinates (not the address string itself)
+  may no longer need to block the copy -- see §3.2.
 - The Waze-specific `openAddressWithWaze()` path (return-to-sweet-spot
   icon) -- separate feature, not reported broken, not touched here.
 
 ## 3. Design
 
-### 3.1 Placeholder-coordinate guard
+### 3.1 Clipboard copy action
 
-`NavigationHelper.openAddress(context, address, lat, lon)` gains an
-early check: if `lat == 0.0 && lon == 0.0`, skip both intents entirely
-and show a `Toast` explaining the address hasn't resolved yet (distinct
-wording from the existing "no maps app found" toast, since the cause and
-the fix are different -- one is "try again shortly," the other is
-"install a maps app").
+Replace the body of `NavigationHelper.openAddress(context, address, lat,
+lon)` -- or a renamed equivalent, e.g. `copyAddressToClipboard(context,
+address)`, updating call sites in `OverlayHelper`, `TripForegroundService`,
+and `MainActivity`'s manual "Open in RoadWarrior" button (also renamed to
+reflect the new action, e.g. "Copy Address") -- so tapping the icon calls
+`ClipboardManager.setPrimaryClip(ClipData.newPlainText("Delivery address",
+address))` instead of building and launching a navigation `Intent`. The
+`lat`/`lon` parameters are no longer needed by this action once the intent
+-launch code is removed; whether to drop them from the signature or leave
+them unused is an implementation-time call, but the intent-building code
+itself must be removed, not just dead code left behind.
 
-### 3.2 Visible outcome feedback
+### 3.2 Empty-address guard
 
-Add a `Toast` on the RoadWarrior-success path (currently the `return;`
-right after `context.startActivity(roadWarriorIntent)` does nothing
-user-visible) and a different one on the fallback path, so all three
-branches (RoadWarrior / fallback / no maps app at all) are distinguishable
-in real use, not just in `logDiagnostic` output a driver never sees.
+Keep a guard, but change what it checks: since coordinates are no longer
+used by this action, guard on the `address` text itself being null/blank
+rather than on the `(0.0, 0.0)` coordinate sentinel. If address extraction
+genuinely can produce a non-empty address string even when geocoding
+(lat/lon) failed, that case should still be copyable -- the driver only
+needs the text, not the coordinates, to paste it themselves.
 
-### 3.3 Manual verification hook
+### 3.3 Confirmation feedback
 
-Extend `DeveloperTestingActivity.addTestStopNearby()` (or add a sibling
-method) with an explicit way to register a stop at the `(0.0, 0.0)`
-placeholder on purpose, so the guard from 3.1 can be exercised by tapping
-the icon without waiting for a real geocode failure.
+A single "Address copied to clipboard" toast (optionally including a
+truncated preview of the address) replaces the old three-outcome toast
+set (RoadWarrior-success / fallback-opened / placeholder-blocked). There
+are now only two outcomes: copied, or blocked-because-unresolved.
 
-### 3.4 Documentation fix
+### 3.4 Retire now-unused RoadWarrior intent/package-override code
 
-Update the stale geocoding bullet in README's "Notes / TODOs" section to
-reflect that dropoff and pickup geocoding are both implemented, and add a
-note recording that the RoadWarrior package name was reconfirmed
-correct (with date), so this isn't re-investigated from scratch next time.
+Previously implemented, now retired: the `ROADWARRIOR_PACKAGE` intent
+-building logic, and the runtime package-name override added to the
+Permissions & Setup screen (`PermissionsActivity.java`,
+`activity_permissions.xml`) as the P5 premortem mitigation in the original
+version of this PRD. Both existed solely to make the auto-launched
+navigation intent more reliable; with no intent being launched from this
+icon, they no longer serve a purpose and should be removed rather than
+left as dead, confusing settings.
+
+### 3.5 Manual verification hook
+
+Update `DeveloperTestingActivity`'s existing placeholder-test button
+(`addPlaceholderTestStop`, added for the old placeholder-coordinate guard)
+to instead register a stop with an empty/unresolved address, exercising
+the new blocked-copy path. Keep `addTestStopNearby()` to exercise the
+successful-copy path (a real address available, tap, confirm clipboard
+contents).
+
+### 3.6 Documentation fix
+
+Update README to describe the icon's tap behavior as copying the address
+to the clipboard, replacing any remaining auto-navigate description left
+over from the original PRD's documentation fix.
 
 ## 4. Testing / verification approach
 
 This repo has no JVM/instrumented unit test source set yet (`app/build.gradle`
 has no `test`/`androidTest` config), and this task doesn't warrant adding
-one just for a Toast-and-guard change. Verification is manual, via the
-existing `DeveloperTestingActivity` pattern (the same one the code
-comments already point to for this exact icon: "the RoadWarrior
-navigation icon can actually be exercised by physically walking around").
-This is disclosed, not hidden: this PRD's checklist items are verified by
-code inspection + the manual test hook in 3.3, not by an automated test
-suite, because the emulator/sandbox environment this was built in cannot
-install RoadWarrior or a real Dasher account to test against.
+one just for a clipboard-copy change. Verification is manual, via the
+existing `DeveloperTestingActivity` pattern, same as the original PRD.
+Clipboard contents after a tap can be confirmed by pasting into any text
+field on the test device -- this is a real, actionable verification step
+(unlike the old design's RoadWarrior-specific behavior, which required an
+app this environment can't install).
 
-## 4a. Premortem (2026-08-22): assume this feature has failed in the field
+## 4a. Premortem -- status under the new design
 
-Assume a driver reports "the RoadWarrior icon doesn't work" again, after
-the items 1-5 fix already shipped. Working backward from that, grounded
-in the actual code and a real diagnostic log from this app (not
-hypothetical risks):
+The original PRD's premortem (P1-P6) investigated failure modes of the
+auto-launched navigation intent. Re-assessed here now that the tap action
+no longer launches an intent:
 
-- **P1 -- No Google Maps API key configured.**
-  `GoogleApiHelper.hasApiKey()` false -> `DasherAccessibilityService`
-  calls `add_stop_to_buffer(fullAddress, 0.0, 0.0)` and returns
-  immediately; geocoding is never even attempted. Coordinates stay
-  `(0.0, 0.0)` for the entire session, every stop, permanently. The
-  guard shipped in items 1-5 shows "Address not resolved yet -- try
-  again in a moment" for this case -- **actively wrong**: trying again
-  will never work until a key is configured. Setting up the API key is a
-  manual `local.properties` step per the README, easy to skip.
-- **P2 -- Accessibility permission revoked mid-dash.** Confirmed
-  happening for real in the uploaded diagnostic log
-  (`2026-08-22 16:40:44`, "ALERT: Accessibility revoked while monitoring
-  active"). Once revoked, `DasherAccessibilityService` stops reading
-  post-accept screens entirely -- no new address is ever extracted for
-  the current or next stop, so coordinates are permanently stuck at
-  `(0.0, 0.0)` until the driver notices and manually re-grants it. Same
-  misleading "try again in a moment" toast as P1.
-- **P3 -- Geocode API call itself fails** (network error, quota,
-  invalid key -- the `onError` callback path in
-  `DasherAccessibilityService.handleDropoffScreen`). Same permanent
-  `(0.0, 0.0)`, same misleading toast, indistinguishable from P1/P2/a
-  genuine race condition without more context.
-- **P1-P3 share one root problem**: `NavigationHelper.openAddress()`
-  cannot currently tell a driver *why* an address is unresolved, only
-  *that* it is, so it always shows the same "try again shortly" message
-  even when trying again can never work. A driver who taps it 3 times in
-  a row, gets the same toast, and gives up has no way to know which of
-  "wait a few seconds" or "go check a permission" is the fix.
-- **P4 -- Overlay-revoked alert undersells the consequence.** Overlay
-  permission revocation IS already alerted
-  (`TripForegroundService.checkAndLogPermissions`, confirmed in code),
-  but the alert text only says "The Smart Score badge and status dot
-  won't show" -- it doesn't mention that `OverlayHelper.showNavigationIcon`
-  and `showReturnToSweetSpotIcon` gate on the exact same permission check
-  and silently stop appearing too. A driver who reads that alert has no
-  reason to connect it to "the RoadWarrior icon stopped showing."
-- **P5 -- RoadWarrior's real package name could diverge** (old sideloaded
-  APK, regional variant, future Play Store rename) from the
-  `com.roadwarrior.android` reconfirmed during the original fix. This
-  produces the exact same "RoadWarrior not available" fallback toast as
-  RoadWarrior genuinely not handling `geo:` intents at all -- the two are
-  indistinguishable to the driver, and there's currently no way to
-  self-correct without a code change. Still unverifiable without a real
-  device (unchanged from the original PRD), but a settings override would
-  at least give an affected driver a way out.
-- **P6 -- Batch-offer aggregate names leak into the pin label.**
-  Confirmed real in the log: a batch offer geocodes successfully to real
-  coordinates under the literal name **"Woolworths Fairy Meadow and 1
-  other store"** (`GEOCODE: Resolved ... -> -34.391579,150.89386`). If
-  that aggregate string is ever the `address` passed to
-  `NavigationHelper.openAddress()` instead of a real per-stop street
-  address, the pin's label is a multi-store summary, not something a
-  driver can visually pinpoint against -- undermining the exact
-  "pinpoint the location" requirement this feature exists for, and batch
-  orders are confirmed common in this driver's real usage (two in one
-  log). **Investigated further and found NOT to be a real bug**: that
-  aggregate string comes from `AppNotificationListenerService`'s
-  notification-based offer detection, which only ever calls
-  `record_pickup_location()` -- a separate, append-only history table
-  used for sweet-spot learning, never read back by the icon. `add_pickup`
-  -- the only call that populates `self.pickup["restaurant_name"]`, what
-  the icon's tap payload actually falls back to -- is called exclusively
-  from `DasherAccessibilityService`'s real screen-parsed Accept handler
-  (`app/.../DasherAccessibilityService.java:911`), which correctly
-  extracted just "Woolworths Fairy Meadow" for this exact log's batch
-  offer (`[BATCH OFFER]` tag). The dropoff icon is likewise unaffected --
-  it only ever uses `parse_dropoff_screen`'s real per-stop address. No
-  code change made; a hypothesis this session raised on its own turned
-  out wrong once traced, and that's recorded here rather than "fixed"
-  anyway for the sake of closing the box.
-
-### Mitigations adopted
-
-- P1, P2, P3: `NavigationHelper.openAddress()` now checks, in order, no
-  API key configured / accessibility not granted / a recent, matching
-  geocode failure recorded for this exact address, and shows a distinct,
-  actionable toast for each instead of one generic message.
-  `NavigationHelper.recordGeocodeFailure(context, target, message)` is
-  called from `DasherAccessibilityService`'s two real geocode `onError`
-  callbacks (dropoff's `fullAddress`, pickup's `restaurantName` -- the
-  exact strings that later reach `openAddress`), persisted via
-  SharedPreferences and matched by exact string equality, time-boxed to
-  15 minutes so a stale failure from an old, unrelated stop can't wrongly
-  blame a new one reusing the same restaurant name later in a shift.
-- P4: the "Overlay" permission-revoked alert text now names the
-  navigation icon specifically.
-- P5: `NavigationHelper`'s RoadWarrior package name is now
-  runtime-overridable, same SharedPreferences pattern as the existing
-  Google Maps API key field, exposed on the same Permissions & Setup
-  screen (`PermissionsActivity`). Still can't verify the *default* value
-  actually opens RoadWarrior on a real device (unchanged, unverifiable in
-  this environment) -- but an affected driver now has a way to self-correct
-  if it turns out to be wrong for their install, without needing a code
-  change.
-- P6: investigated, found not to be a real bug (see above) -- no code
-  change needed.
+- **P1 (no API key configured), P2 (accessibility revoked), P3 (geocode
+  API call fails), P5 (RoadWarrior package divergence)** -- all were
+  about *coordinates* being wrong or missing, or about which *app* opens.
+  None of that applies once the action is "copy this text string" instead
+  of "launch navigation to these coordinates in this app." **Moot under
+  the new design.** The mitigations built for them (guard, package
+  override, outcome toasts) are retired per §3.4, not reused.
+- **P4 (overlay-revoked alert undersells consequence)** -- still
+  relevant: if the overlay permission is revoked, this icon (like the
+  Smart Score badge) still won't show at all. The existing alert-text fix
+  (naming the navigation icon specifically) remains valid and should not
+  be reverted.
+- **P6 (batch-offer aggregate name leaking into the pin label)** -- still
+  directly relevant, arguably more so: if a batch order's aggregate
+  string ("Woolworths Fairy Meadow and 1 other store") ever reached the
+  tap payload, the driver would copy and paste a wrong/ambiguous address
+  instead of just seeing a mislabeled pin. The original investigation
+  found this call site only ever receives the real per-stop address
+  (`self.pickup["restaurant_name"]`, set exclusively by
+  `DasherAccessibilityService`'s screen-parsed Accept handler, never by
+  the notification-based aggregate path). This finding is about *which
+  address reaches the tap handler*, not about what the handler does with
+  it, so it should still hold -- but re-verify it against the new copy
+  code path rather than assuming, since the call site is being edited.
 
 ## 5. Open questions
 
 None blocking -- the scope above is narrow enough that no user judgment
-call is needed before starting. If a real-device test later shows
-RoadWarrior genuinely never accepts *any* `geo:` intent (not just an
-edge case), the next step would be asking the user whether to drop
-RoadWarrior-targeting entirely and just use the generic chooser -- but
-that's a follow-up decision, not blocking this task.
+call is needed before starting.
 
 ## 6. Success criteria (implementation-phase checklist)
 
-- [x] `NavigationHelper.openAddress()` refuses `(0.0, 0.0)` with a clear toast
-- [x] RoadWarrior-open and fallback-open are each toast-distinguishable
-- [x] `DeveloperTestingActivity` has a way to exercise the placeholder-blocked path
-- [x] README's stale geocoding TODO is corrected
-- [x] Package name correctness is documented in-code with the verification date
-- [ ] Core requirement manually confirmed: icon appears within the
-      approach radius of a real (non-placeholder) address, and tapping it
-      opens navigation pinned to that address's real coordinates with the
-      address labeled/visible -- **blocked**: no Android emulator/device
-      is available in this environment to physically tap the icon; see
+- [ ] `NavigationHelper` (or renamed equivalent)'s tap action copies the
+      resolved address text to the clipboard instead of launching a
+      navigation intent
+- [ ] Empty/unresolved address text is guarded: tap shows a distinct
+      "address not available yet" toast and does not copy
+- [ ] Successful copy shows a confirmation toast naming/previewing the
+      address copied
+- [ ] Old RoadWarrior/fallback intent-launch code path is removed
+- [ ] RoadWarrior package-override setting (Permissions & Setup screen) is
+      removed
+- [ ] `DeveloperTestingActivity` hooks updated: one exercises successful
+      copy, one exercises blocked-copy-when-unresolved
+- [ ] README updated to describe copy-to-clipboard behavior
+- [ ] Core requirement manually confirmed on-device: tapping the icon for
+      a real, resolved stop copies exactly that address text to the
+      clipboard (verified by pasting it somewhere) -- **likely blocked**:
+      no Android emulator/device is available in this environment; see
       PROGRESS.md for what was verified by code inspection instead
-- [ ] Manual verification of all 3 branches performed and recorded in
-      PROGRESS.md -- **blocked**, same reason as above
-- [x] Premortem (§4a) conducted and mitigations for P1-P4 implemented
-- [x] P5: RoadWarrior package name made driver-overridable (Permissions & Setup screen, mirrors the API key field)
-- [x] P6: investigated -- confirmed not a real bug, no code change needed (see §4a)
-- [x] P3: a failed geocode API call is now distinguished from a genuinely
-      in-progress one, via `NavigationHelper.recordGeocodeFailure` fed by
-      `DasherAccessibilityService`'s real geocode `onError` callbacks
+- [ ] Batch-order pickup case re-verified against the new copy call site
+      (per §4a P6)
 - [ ] User sign-off
