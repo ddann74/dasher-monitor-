@@ -229,17 +229,18 @@ independent follow-up decisions.
 
 ## 6. Success criteria (implementation-phase checklist)
 
-- [ ] `_detect_harsh_events`'s `speeding` branch rewritten to be
+- [x] `_detect_harsh_events`'s `speeding` branch rewritten to be
       edge-triggered (one event per continuous violation period)
-- [ ] Per-trip state (`_currently_speeding`/`_open_speeding_event`)
-      reset correctly at trip start
-- [ ] Logged event's magnitude reflects the peak speed during the
+- [x] Per-trip state (`_open_speeding_event`) reset correctly at trip
+      start (and initialized in `__init__`)
+- [x] Logged event's magnitude reflects the peak speed during the
       period, not just the entry speed
-- [ ] `harsh_accel`/`harsh_brake` logging confirmed unchanged by diff
+- [x] `harsh_accel`/`harsh_brake` logging confirmed unchanged by diff
       review
-- [ ] `_safety_score` formula confirmed unchanged by diff review
-- [ ] Executable test written and RUN in this sandbox (not just
+- [x] `_safety_score` formula confirmed unchanged by diff review
+- [x] Executable test written and RUN in this sandbox (not just
       reviewed) -- confirms one event per period, confirms two separate
       periods produce two separate events, confirms peak-magnitude
-      capture
+      capture. All assertions passed; see PROGRESS.md for the real
+      output.
 - [ ] User sign-off
