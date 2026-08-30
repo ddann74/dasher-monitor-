@@ -212,14 +212,14 @@ concrete fixes.
 
 ## 6. Success criteria (implementation-phase checklist)
 
-- [ ] `maybeLogHeartbeat()` periodically re-calls
+- [x] `maybeLogHeartbeat()` periodically re-calls
       `MonitoringWatchdogReceiver.scheduleWatchdog()`, throttled to a
       coarse interval, not on every heartbeat
-- [ ] `scheduleWatchdog()` logs confirmation (interval, mode) that the
+- [x] `scheduleWatchdog()` logs confirmation (interval, mode) that the
       alarm was scheduled
-- [ ] `onCreate()` logs manufacturer/model/SDK version and
+- [x] `onCreate()` logs manufacturer/model/SDK version and
       `isKnownAggressiveOem()` once per session
-- [ ] No change to `MonitoringWatchdogReceiver`'s alert-notification
+- [x] No change to `MonitoringWatchdogReceiver`'s alert-notification
       content, check intervals, or restart-attempt logic -- confirmed by
       diff review
 - [ ] On-device confirmation that a simulated dropped alarm actually

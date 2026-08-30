@@ -89,7 +89,8 @@ public class MonitoringWatchdogReceiver extends BroadcastReceiver {
             return;
         }
         PendingIntent pendingIntent = buildPendingIntent(context);
-        long intervalMs = isDasherModeActive(context) ? WATCHDOG_INTERVAL_DASHER_MS : WATCHDOG_INTERVAL_GENERAL_MS;
+        boolean dasherMode = isDasherModeActive(context);
+        long intervalMs = dasherMode ? WATCHDOG_INTERVAL_DASHER_MS : WATCHDOG_INTERVAL_GENERAL_MS;
         // Confirmed via a real incident: the previous setInexactRepeating
         // approach let a real 17-minute gap occur despite a 5-minute
         // nominal interval -- Android is explicitly allowed to delay
@@ -107,6 +108,14 @@ public class MonitoringWatchdogReceiver extends BroadcastReceiver {
             alarmManager.setExact(AlarmManager.RTC_WAKEUP,
                     System.currentTimeMillis() + intervalMs, pendingIntent);
         }
+        // Requirement change (2026-08-30, docs/watchdog_reliability/PRD.md):
+        // this call had no logging at all before -- a real uploaded field
+        // log covering two full monitoring blackouts couldn't even confirm
+        // whether the watchdog was ever armed to begin with, only that it
+        // never fired. Logged here, not just in onReceive, so a future log
+        // can tell scheduling itself apart from the alarm never firing.
+        logToEngine(context, "WATCHDOG", "Scheduled next check in " + (intervalMs / 1000)
+                + "s (" + (dasherMode ? "DASHER" : "GENERAL") + " mode interval)");
     }
 
     public static void cancelWatchdog(Context context) {
@@ -176,7 +185,7 @@ public class MonitoringWatchdogReceiver extends BroadcastReceiver {
         }
     }
 
-    private void logToEngine(Context context, String category, String message) {
+    private static void logToEngine(Context context, String category, String message) {
         try {
             PyObject engine = PythonBridge.getEngine(context);
             engine.callAttr("log_diagnostic", category, message);

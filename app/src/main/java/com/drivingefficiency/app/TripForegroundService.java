@@ -115,6 +115,15 @@ public class TripForegroundService extends Service {
         // see DasherAccessibilityService's identical-logic twin for why
         // this is duplicated rather than shared.
         logDiagnostic("SERVICE", "onCreate() -- service process started. " + buildInstallTimingNote());
+        // Requirement change (2026-08-30, docs/watchdog_reliability/PRD.md):
+        // a real uploaded field log covering two full monitoring blackouts
+        // couldn't answer "which phone was this" at all -- OemBackgroundHelper
+        // already has isKnownAggressiveOem() logic gating the autostart
+        // -settings guidance button, but nothing ever logged the value it
+        // depends on. Logged once per session, not per-heartbeat -- this
+        // never changes while the process is alive.
+        logDiagnostic("DEVICE", "manufacturer=" + Build.MANUFACTURER + " model=" + Build.MODEL
+                + " sdk=" + Build.VERSION.SDK_INT + " knownAggressiveOem=" + OemBackgroundHelper.isKnownAggressiveOem());
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
 
         locationCallback = new LocationCallback() {
@@ -679,6 +688,27 @@ public class TripForegroundService extends Service {
     private long lastHeartbeatMs = 0;
     private static final long HEARTBEAT_INTERVAL_MS = 15 * 1000; // 15 sec
 
+    // Requirement change (2026-08-30, docs/watchdog_reliability/PRD.md):
+    // real uploaded field log evidence -- two full monitoring blackouts,
+    // ~15min and ~7min, with ZERO WATCHDOG: log entries during either one
+    // -- showed MonitoringWatchdogReceiver's alarm chain is a single point
+    // of failure: it only ever reschedules itself from inside its own
+    // firing, so one alarm the OS fails to deliver (a documented risk on
+    // aggressive OEMs, which can clear an app's pending alarms alongside a
+    // force-stop, not just kill the process) silently disables it for the
+    // rest of the session with nothing else to re-arm it. Re-arming it
+    // here too, from the heartbeat path already proven to keep running
+    // reliably for hours in that same real log, gives it a second,
+    // independent chance to recover -- but only for as long as this
+    // service itself is still alive; it can't help if the whole process
+    // is already dead (that's what MonitoringWatchdogReceiver's own
+    // OS-invoked, cross-process design exists for). Throttled well below
+    // the heartbeat's own 15s cadence -- AlarmManager.setExactAndAllowWhileIdle
+    // with FLAG_UPDATE_CURRENT safely replaces any still-pending alarm, so
+    // this doesn't need to be frequent to be effective.
+    private long lastWatchdogRearmMs = 0;
+    private static final long WATCHDOG_REARM_INTERVAL_MS = 5 * 60 * 1000; // 5 min
+
     /**
      * Logs a periodic "still alive" entry while actively tracking -- not
      * every GPS tick. The real value: if these suddenly stop appearing
@@ -709,6 +739,13 @@ public class TripForegroundService extends Service {
                 .edit()
                 .putLong(MonitoringWatchdogReceiver.KEY_LAST_HEARTBEAT_MS, nowMs)
                 .apply();
+
+        // See lastWatchdogRearmMs's own comment above -- redundant re-arm,
+        // not a replacement for the watchdog's own self-reschedule.
+        if (nowMs - lastWatchdogRearmMs >= WATCHDOG_REARM_INTERVAL_MS) {
+            lastWatchdogRearmMs = nowMs;
+            MonitoringWatchdogReceiver.scheduleWatchdog(this);
+        }
     }
 
     @Override
