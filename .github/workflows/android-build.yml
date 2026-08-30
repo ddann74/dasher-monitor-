@@ -38,6 +38,23 @@ jobs:
 
       # No local.properties / GOOGLE_MAPS_API_KEY needed -- app/build.gradle
       # already defaults that BuildConfig field to an empty string when the
-      # file (deliberately gitignored, never committed) is absent.
+      # file (deliberately gitignored, never committed) is absent. NOTE:
+      # a debug build with no API key means geocoding/traffic features
+      # won't work in this APK -- fine for checking that the RoadWarrior/
+      # feedback-page/scoring changes build and run, not a substitute for
+      # a real build with your own key for full functional testing.
       - name: Build debug APK
         run: ./gradlew assembleDebug --stacktrace
+
+      # Makes the APK downloadable from this run's page (Summary tab, or
+      # the Artifacts section at the bottom of the run's Actions page) --
+      # download on your phone's browser and tap the file to sideload it
+      # (needs "install from unknown sources" allowed for your browser/
+      # files app in Android Settings). This is a debug-signed build for
+      # testing only, not a release build.
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dasher-monitor-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
