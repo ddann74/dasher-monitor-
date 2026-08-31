@@ -1981,10 +1981,21 @@ class TripManager:
         real column names (never user input), so this is safe despite
         the f-string.
         """
-        self.db.conn.execute(
+        cursor = self.db.conn.execute(
             f"UPDATE trips SET {column_name} = ? WHERE end_time IS NULL", (ts,)
         )
         self.db.conn.commit()
+        # CONFIRMED REAL GAP, fixed here (silent-failure audit): this write
+        # had ZERO diagnostic trace -- unlike every other phase-timestamp
+        # write in this file (dropoff_arrival_ts/walking_confirmed_ts just
+        # below both already set _last_phase_capture_log, same for the
+        # text-column writer right after this method), this one -- used for
+        # pickup_arrival_ts AND pickup_departure_ts, the two phase
+        # timestamps docs/deadhead_stacked_order_baseline/PRD.md ss7 already
+        # flagged as the riskiest (no IS NULL guard, last-wins) -- gave no
+        # way to confirm from the log whether it actually hit a row.
+        if cursor.rowcount > 0:
+            self._last_phase_capture_log = f"Captured {column_name} = {ts}"
 
     def _update_current_trip_text_column(self, column_name, value):
         """
