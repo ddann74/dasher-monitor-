@@ -190,14 +190,17 @@ appropriate.
 
 ## 6. Success criteria (implementation-phase checklist)
 
-- [ ] `_deadhead_baseline_km` added, snapshotted in `add_pickup`
-- [ ] `_evaluate_pickup`'s arrival branch computes deadhead as
+- [x] `_deadhead_baseline_km` added, snapshotted in `add_pickup`
+- [x] `_evaluate_pickup`'s arrival branch computes deadhead as
       `cumulative - baseline`, not raw cumulative
-- [ ] `_start_trip` resets the new baseline alongside its other per-trip
+- [x] `_start_trip` resets the new baseline alongside its other per-trip
       state
-- [ ] No change to `deadhead_score`, `WEIGHT_DEADHEAD`, or
+- [x] No change to `deadhead_score`, `WEIGHT_DEADHEAD`, or
       `_estimate_deadhead_km`'s fallback logic (diff-reviewed)
-- [ ] Executable test written and RUN in this sandbox: single-pickup case
-      unchanged, stacked-order case corrected (both before/after the fix,
-      proving the bug was real and is now closed)
+- [x] Executable test written and RUN in this sandbox: single-pickup case
+      unchanged (1.95km measured for a ~2km leg), stacked-order case
+      corrected (0.95km measured for the second pickup's own ~1km leg,
+      vs. 9.97km the old raw-cumulative approach would have recorded for
+      the same real tracking data) - proving the bug was real and is now
+      closed
 - [ ] User sign-off
