@@ -204,3 +204,22 @@ actually work" question the way the three fixes above are, and logging
 every one would mostly add noise. Judgment call, not an oversight -
 flagged here so it's clear this was considered, not missed.
 
+## Fourth pass (2026-08-31): "are there any gaps" - documented, not fixed
+
+Driver asked a broader question than the previous two passes (which
+targeted failure paths and silent logging specifically). Found two real
+scope gaps, neither a bug - written into `PRD.md` §4a as P7/P8 rather
+than fixed, since both are real design/scope decisions, not
+straightforward code fixes:
+
+- **P7**: recordings have no link to this app's own trip database -
+  reviewing a specific delivery has no way to find its recording, or
+  vice versa, beyond comparing timestamps by hand.
+- **P8**: the `VirtualDisplay`'s capture dimensions are fixed at whatever
+  the screen's orientation was the moment recording started - a
+  mid-trip physical rotation would not be reflected, likely producing a
+  squished/misoriented recording for whatever happens afterward. Low
+  real-world likelihood for a phone mounted for driving, but genuinely
+  unconfirmed, and a different KIND of gap than the first two passes
+  checked for (steady-state correctness, not a failure/logging path).
+

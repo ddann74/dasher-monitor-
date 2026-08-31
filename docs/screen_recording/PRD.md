@@ -253,6 +253,32 @@ this is the least independently-verifiable PRD in this repo so far.
   alongside the existing reuse-across-trips uncertainty in
   `ScreenRecordingController`'s own class doc, not treated as resolved.
 
+### Third pass (2026-08-31): "are there any gaps" - not bugs, real scope gaps
+
+- **P7 - no link between a stored recording and the trip it belongs to.**
+  Recordings are timestamped files (`trip_YYYYMMDD_HHMMSS.mp4`) in a flat
+  directory with zero connection to this app's own trip database or
+  "View Last Trip Summary"/"Trip History" screens. Reviewing a specific
+  past delivery has no way to jump to its recording (or vice versa) -
+  matching them requires comparing timestamps by hand. Not a bug (§2's
+  "basic review" requirement - count/size - was met as scoped), but a
+  real, previously-undisclosed usability gap once the feature is looked
+  at as a whole rather than one requirement at a time.
+- **P8 - screen rotation during a trip is not handled.** `start()`
+  captures `width`/`height`/`density` once, from
+  `windowManager.getDefaultDisplay().getRealMetrics()` at the moment
+  recording begins, and creates the `VirtualDisplay` at that fixed size
+  for the rest of the trip. If the device actually rotates mid-trip, the
+  capture surface does not follow - the likely result is a squished or
+  incorrectly-oriented recording for whatever happens after the
+  rotation, not a crash. Real-world likelihood is low for this
+  specific app (a phone mounted for driving is unlikely to physically
+  rotate mid-trip), which is why this wasn't caught in the first two
+  audit passes (both focused on failure paths and logging, not this kind
+  of steady-state correctness question) - low probability is not the
+  same as confirmed-fine, and no device is available here to check
+  either way.
+
 ## 5. Open questions - genuinely blocking, not just disclosed
 
 1. **Given §1.3, should this feature exist as designed at all, or with a
