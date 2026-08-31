@@ -1,8 +1,11 @@
 # PRD — the dropoff screen's own delivery instruction is parsed, then discarded
 
-Status: DRAFT. Investigation only, grounded in the real code. Nothing
-implemented yet — do not start coding from this PRD until the driver
-says "yes implement it."
+Status: IMPLEMENTED and tested (Python half). §5's UX open question
+(distinct "from the screen" vs. "new message" source labels) was NOT
+answered by the driver -- resolved instead by reusing the existing
+"delivery_note:" category unchanged (see PROGRESS.md), not by
+inventing a new label scheme. Awaiting user sign-off and on-device
+confirmation of the Java-side changes.
 
 ## 1. The real bug found
 
@@ -135,19 +138,21 @@ condition.
   the driver knowing this isn't guaranteed-accurate before it starts
   actually surfacing, in case an early false-positive shows up.
 
-## 6. Success criteria (not started — nothing here is implemented yet)
+## 6. Success criteria
 
-- [ ] `delivery_instruction` read in `handleDropoffScreen` and threaded
+- [x] `delivery_instruction` read in `handleDropoffScreen` and threaded
       through to the stop's stored data.
-- [ ] Surfaced via the existing approach-instruction overlay mechanism
+- [x] Surfaced via the existing approach-instruction overlay mechanism
       when nearing that stop.
-- [ ] Real executable test (Python side): a stop added with a
+- [x] Real executable test (Python side): a stop added with a
       delivery_instruction produces that instruction in
       `_check_approach_instruction`'s output when approached, without
       needing any chat message.
-- [ ] §2's diagnostic-logging gap closed: the work-message path logs
+- [x] §2's diagnostic-logging gap closed: the work-message path logs
       why a Dasher/SMS notification was NOT turned into an instruction
       (failed classify, failed extraction), mirroring the personal-
       message path's existing "Ignored (not on trusted list)" logging.
+- [ ] On-device confirmation -- **blocked**: no Android emulator/device
+      available in this environment.
 - [ ] Driver sign-off (ideally after seeing it work on a real delivery,
       given §5's accuracy caveat).

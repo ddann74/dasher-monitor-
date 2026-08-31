@@ -657,12 +657,23 @@ public class DasherAccessibilityService extends AccessibilityService {
             }
             lastDropoffAddressKey = fullAddress;
             logDiagnostic("DROPOFF", "Detected: " + fullAddress);
+            // docs/dropoff_delivery_instruction_wiring/PRD.md -- this was
+            // already parsed correctly by parse_dropoff_screen (confirmed
+            // against real screenshots) and then silently discarded here:
+            // only full_address was ever read from the same result. Real
+            // driver report: "I've also not seen any customer instructions
+            // appear as I near their address."
+            final String deliveryInstruction = parsed.isNull("delivery_instruction")
+                    ? null : parsed.optString("delivery_instruction", null);
+            if (deliveryInstruction != null) {
+                logDiagnostic("DROPOFF", "Delivery instruction: " + deliveryInstruction);
+            }
 
             if (!GoogleApiHelper.hasApiKey(this)) {
                 // Still register the stop with a placeholder so arrival
                 // detection has SOMETHING to work with -- geocoding will
                 // just never upgrade it to real coordinates without a key.
-                engine.callAttr("add_stop_to_buffer", fullAddress, 0.0, 0.0);
+                engine.callAttr("add_stop_to_buffer", fullAddress, 0.0, 0.0, deliveryInstruction);
                 return;
             }
             GoogleApiHelper.geocodeAddress(this, fullAddress, new GoogleApiHelper.GeocodeCallback() {
@@ -673,7 +684,7 @@ public class DasherAccessibilityService extends AccessibilityService {
                     // an uncaught exception here would crash the entire
                     // app process, not just this call.
                     try {
-                        engine.callAttr("add_stop_to_buffer", fullAddress, lat, lon);
+                        engine.callAttr("add_stop_to_buffer", fullAddress, lat, lon, deliveryInstruction);
                         logDiagnostic("GEOCODE", "Resolved dropoff " + fullAddress + " -> " + lat + "," + lon);
                     } catch (RuntimeException e) {
                         logDiagnostic("ERROR", "Dropoff geocode callback exception: "

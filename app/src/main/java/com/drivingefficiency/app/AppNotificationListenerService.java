@@ -198,6 +198,25 @@ public class AppNotificationListenerService extends NotificationListenerService 
                 }
             }
 
+            // docs/dropoff_delivery_instruction_wiring/PRD.md ss2/ss4 --
+            // previously silent whenever a Dasher/SMS notification failed
+            // classification or extraction, unlike the personal-message
+            // path just below (which already logs both "Read aloud" and
+            // "Ignored"). PyObject is Java null (not a "None"-string) when
+            // the Python side returns None -- same mapping the workResult
+            // null-check right above already relies on -- so this is null
+            // for every notification that was never a real candidate in
+            // the first place (on_message only sets this for the two
+            // packages MessageIntelligence actually considers), cheap and
+            // non-noisy to check unconditionally here.
+            PyObject skipLogResult = engine.callAttr("get_last_notification_skip_log");
+            if (skipLogResult != null) {
+                String skipLog = skipLogResult.toString();
+                if (!skipLog.isEmpty()) {
+                    logDiagnostic("WORK_MSG", skipLog);
+                }
+            }
+
             // --- Personal: trusted-contacts allowlist (SMS / Messenger) ---
             if (isPersonalMessagingApp) {
                 boolean trusted = engine.callAttr("is_trusted_sender", title.toString())

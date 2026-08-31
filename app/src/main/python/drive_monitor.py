@@ -1173,12 +1173,15 @@ class MessageIntelligence:
                              "buzz", "apartment", "unit", "leave it"]
     ADDRESS_CORRECTION_KEYWORDS = ["not ", "actually ", "it's ", "its "]
     LATE_KEYWORDS = ["running late", "be there", "few more minutes", "on my way"]
+    # Named constant (was a local tuple inside classify()) so on_message can
+    # also check package membership on its own, for the skip-logging fix in
+    # docs/dropoff_delivery_instruction_wiring/PRD.md ss2/ss4.
+    ALLOWED_PACKAGES = ("com.doordash.driverapp", "com.google.android.apps.messaging")
 
     @classmethod
     def classify(cls, package_name, is_messaging_style):
         """Only process Dasher-app or SMS customer messages (MessagingStyle)."""
-        allowed_packages = ("com.doordash.driverapp", "com.google.android.apps.messaging")
-        return is_messaging_style and package_name in allowed_packages
+        return is_messaging_style and package_name in cls.ALLOWED_PACKAGES
 
     @classmethod
     def extract_instruction(cls, body: str):
@@ -1774,6 +1777,7 @@ class TripManager:
         self._approach_instruction_shown_for_stop_ids = set()
         self._last_gap_sample_log = None
         self._last_phase_capture_log = None
+        self._last_notification_skip_log = None
         self._last_gap_restaurant_name = None
         self._last_gap_seconds = None
 
@@ -2089,10 +2093,17 @@ class TripManager:
     def set_dasher_foreground(self, is_foreground):
         self.dasher_app_foreground = bool(is_foreground)
 
-    def add_stop(self, address, lat, lon):
+    def add_stop(self, address, lat, lon, delivery_instruction=None):
         self.stops.append({
             "address": address, "lat": lat, "lon": lon,
             "matched": False, "arrival_time": None,
+            # docs/dropoff_delivery_instruction_wiring/PRD.md -- the real
+            # delivery note from the dropoff screen itself (e.g. "Leave it
+            # at the door"), already parsed correctly by
+            # DropoffScreenParser.parse() but previously never threaded
+            # this far -- see _check_approach_instruction for where it
+            # actually gets surfaced.
+            "delivery_instruction": delivery_instruction,
         })
 
     def take_pending_arrival(self):
@@ -2122,9 +2133,28 @@ class TripManager:
         used as a fallback -- single deliveries are unaffected either
         way, since there's only ever one possible stop to match.
         """
+        # GAP, fixed here (docs/dropoff_delivery_instruction_wiring/PRD.md
+        # ss2/ss4): a Dasher/SMS notification that failed classification or
+        # extraction had zero diagnostic trace, unlike the personal-message
+        # path (AppNotificationListenerService's "Ignored (not on trusted
+        # list)" log) a few hundred lines away in the same Java file. Only
+        # logged for the two packages MessageIntelligence actually
+        # considers -- every OTHER app's notification also reaches this
+        # method and would otherwise spam a skip log for something that was
+        # never a candidate in the first place (same "avoid noise" pattern
+        # used elsewhere, e.g. handleOfferResult's non-offer-screen branch).
+        is_candidate_package = package_name in MessageIntelligence.ALLOWED_PACKAGES
         if not MessageIntelligence.classify(package_name, is_messaging_style):
+            if is_candidate_package:
+                self._last_notification_skip_log = (
+                    f"Skipped ({package_name}): not a MessagingStyle notification"
+                )
             return None
         instruction = MessageIntelligence.extract_instruction(body)
+        if instruction is None:
+            self._last_notification_skip_log = (
+                f"Skipped ({package_name}): no known instruction keyword matched"
+            )
         stop_id = None
         if lat is not None and lon is not None and self.stops:
             closest_stop = min(
@@ -2487,12 +2517,27 @@ class TripManager:
         if stop_id in self._approach_instruction_shown_for_stop_ids:
             return  # already shown for this specific stop, don't repeat
 
-        instructions = [
+        # The dropoff screen's own delivery instruction (docs/dropoff_
+        # delivery_instruction_wiring/PRD.md) -- present on every delivery
+        # that has one, not just deliveries where a customer happens to
+        # send a follow-up chat message. Tagged with the same
+        # "delivery_note:" category MessageIntelligence.extract_instruction
+        # already uses for this exact kind of note (see its
+        # INSTRUCTION_KEYWORDS), so it displays through the existing
+        # VoiceAnnouncer.stripCategoryPrefix path unchanged -- no new Java-
+        # side formatting needed. Surfaces exactly once, same as any chat-
+        # derived instruction, via the _approach_instruction_shown_for_
+        # stop_ids guard just above.
+        instructions = []
+        if approaching_stop.get("delivery_instruction"):
+            instructions.append(f"delivery_note: {approaching_stop['delivery_instruction']}")
+
+        instructions.extend([
             m["extracted_instruction"] for m in self.messages
             if m["extracted_instruction"]
             and self._last_message_cutoff < m["timestamp"] <= ts
             and (m.get("stop_id") is None or m["stop_id"] == stop_id)
-        ]
+        ])
         if instructions:
             self._approach_instruction_shown_for_stop_ids.add(stop_id)
             self.pending_approach_instruction = {
@@ -4694,9 +4739,9 @@ class DriveMonitorEngine:
         return json.dumps({"found": True, "content": content})
 
     # One-Tap Instant Pinpoint -----------------------------------------
-    def add_stop_to_buffer(self, address, lat, lon):
+    def add_stop_to_buffer(self, address, lat, lon, delivery_instruction=None):
         self.stops_buffer.add(address, lat, lon)
-        self.trip_manager.add_stop(address, lat, lon)
+        self.trip_manager.add_stop(address, lat, lon, delivery_instruction)
 
     def get_stops_buffer_json(self):
         return self.stops_buffer.as_json()
@@ -4706,6 +4751,23 @@ class DriveMonitorEngine:
         return self.trip_manager.on_message(
             package_name, title, text, timestamp_ms, is_messaging_style, lat, lon
         )
+
+    def get_last_notification_skip_log(self):
+        """
+        docs/dropoff_delivery_instruction_wiring/PRD.md ss2/ss4. Separate
+        getter rather than bundling this into on_notification's own return
+        value -- on_notification's return contract (the extracted
+        instruction string, or None) is read directly by
+        AppNotificationListenerService as the real, live TTS/overlay
+        trigger, and changing its shape risks that live path; this is
+        purely a diagnostic side-channel, called by Java only when
+        on_notification's result was empty, mirroring how
+        _last_phase_capture_log/_last_gap_sample_log are consumed
+        separately from on_gps_update's own primary result.
+        """
+        result = self.trip_manager._last_notification_skip_log
+        self.trip_manager._last_notification_skip_log = None
+        return result
 
     def is_instruction_urgent(self, instruction):
         """
