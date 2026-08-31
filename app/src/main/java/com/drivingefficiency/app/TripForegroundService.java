@@ -268,7 +268,28 @@ public class TripForegroundService extends Service {
         // fixed schedule regardless of GPS tier, specifically to help
         // pin down the real pattern.
         accessibilityHeartbeatHandler.postDelayed(accessibilityHeartbeatRunnable, ACCESSIBILITY_HEARTBEAT_INTERVAL_MS);
+        // Requirement change (2026-08-31, docs/watchdog_gps_independent_rearm/PRD.md):
+        // the watchdog's redundant re-arm used to live inside maybeLogHeartbeat,
+        // which only runs when a GPS location callback actually arrives -- sharing
+        // a failure dependency with the exact self-perpetuating-alarm-chain risk it
+        // was built to backstop (if GPS updates and the alarm chain both stall
+        // together, plausible under the same aggressive-OEM class of kill already
+        // evidenced in docs/watchdog_reliability/PRD.md, neither layer helps).
+        // Mirrors accessibilityHeartbeatHandler above, which already solved this
+        // identical GPS-tied-gap shape for a different reason.
+        watchdogRearmHandler.postDelayed(watchdogRearmRunnable, WATCHDOG_REARM_INTERVAL_MS);
     }
+
+    private final android.os.Handler watchdogRearmHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable watchdogRearmRunnable = new Runnable() {
+        @Override
+        public void run() {
+            MonitoringWatchdogReceiver.scheduleWatchdog(TripForegroundService.this);
+            if (monitoringActive) {
+                watchdogRearmHandler.postDelayed(this, WATCHDOG_REARM_INTERVAL_MS);
+            }
+        }
+    };
 
     private static final long ACCESSIBILITY_HEARTBEAT_INTERVAL_MS = 15 * 1000;
     private final android.os.Handler accessibilityHeartbeatHandler = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -697,16 +718,19 @@ public class TripForegroundService extends Service {
     // aggressive OEMs, which can clear an app's pending alarms alongside a
     // force-stop, not just kill the process) silently disables it for the
     // rest of the session with nothing else to re-arm it. Re-arming it
-    // here too, from the heartbeat path already proven to keep running
-    // reliably for hours in that same real log, gives it a second,
-    // independent chance to recover -- but only for as long as this
-    // service itself is still alive; it can't help if the whole process
-    // is already dead (that's what MonitoringWatchdogReceiver's own
-    // OS-invoked, cross-process design exists for). Throttled well below
-    // the heartbeat's own 15s cadence -- AlarmManager.setExactAndAllowWhileIdle
-    // with FLAG_UPDATE_CURRENT safely replaces any still-pending alarm, so
-    // this doesn't need to be frequent to be effective.
-    private long lastWatchdogRearmMs = 0;
+    // here too gives it a second, independent chance to recover -- but
+    // only for as long as this service itself is still alive; it can't
+    // help if the whole process is already dead (that's what
+    // MonitoringWatchdogReceiver's own OS-invoked, cross-process design
+    // exists for). AS OF 2026-08-31 (docs/watchdog_gps_independent_rearm/
+    // PRD.md), this fires from watchdogRearmRunnable above -- a fixed
+    // Handler.postDelayed schedule -- rather than from maybeLogHeartbeat,
+    // which only ran when a GPS callback actually arrived and so shared a
+    // failure dependency with the exact alarm-drop scenario this re-arm
+    // exists to catch. Throttled well below the heartbeat's own 15s
+    // cadence -- AlarmManager.setExactAndAllowWhileIdle with
+    // FLAG_UPDATE_CURRENT safely replaces any still-pending alarm, so this
+    // doesn't need to be frequent to be effective.
     private static final long WATCHDOG_REARM_INTERVAL_MS = 5 * 60 * 1000; // 5 min
 
     /**
@@ -739,13 +763,10 @@ public class TripForegroundService extends Service {
                 .edit()
                 .putLong(MonitoringWatchdogReceiver.KEY_LAST_HEARTBEAT_MS, nowMs)
                 .apply();
-
-        // See lastWatchdogRearmMs's own comment above -- redundant re-arm,
-        // not a replacement for the watchdog's own self-reschedule.
-        if (nowMs - lastWatchdogRearmMs >= WATCHDOG_REARM_INTERVAL_MS) {
-            lastWatchdogRearmMs = nowMs;
-            MonitoringWatchdogReceiver.scheduleWatchdog(this);
-        }
+        // Redundant watchdog re-arm used to live here, gated on a GPS
+        // callback actually arriving -- moved to watchdogRearmRunnable
+        // (see startTracking()), which fires on its own fixed schedule
+        // instead. See WATCHDOG_REARM_INTERVAL_MS's own comment for why.
     }
 
     @Override
@@ -790,6 +811,7 @@ public class TripForegroundService extends Service {
         isRunning = false;
         releaseTripWakeLock(); // safety net -- in case the trip never properly transitioned to IDLE first
         accessibilityHeartbeatHandler.removeCallbacks(accessibilityHeartbeatRunnable);
+        watchdogRearmHandler.removeCallbacks(watchdogRearmRunnable);
         if (fusedLocationClient != null && locationCallback != null) {
             fusedLocationClient.removeLocationUpdates(locationCallback);
         }
@@ -1323,6 +1345,7 @@ public class TripForegroundService extends Service {
             logDiagnostic("ERROR", "force_end_trip in onDestroy exception: " + android.util.Log.getStackTraceString(e));
         }
         accessibilityHeartbeatHandler.removeCallbacks(accessibilityHeartbeatRunnable);
+        watchdogRearmHandler.removeCallbacks(watchdogRearmRunnable);
         releaseTripWakeLock(); // final safety net -- must not leak a held wakelock if the service dies unexpectedly
         isRunning = false;
         serviceExists = false;

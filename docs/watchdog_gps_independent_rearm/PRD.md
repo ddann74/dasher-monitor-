@@ -134,9 +134,9 @@ mitigation, not a new design decision.
 
 ## 6. Success criteria (implementation-phase checklist)
 
-- [ ] `watchdogRearmHandler`/`watchdogRearmRunnable` added, mirroring the
+- [x] `watchdogRearmHandler`/`watchdogRearmRunnable` added, mirroring the
       accessibility-heartbeat pattern
-- [ ] Started in `startTracking()`, stopped in `stopTracking()`/`onDestroy()`
-- [ ] GPS-gated re-arm removed from `maybeLogHeartbeat`
-- [ ] Diff-reviewed to confirm no change to `MonitoringWatchdogReceiver`
+- [x] Started in `startTracking()`, stopped in `stopTracking()`/`onDestroy()`
+- [x] GPS-gated re-arm removed from `maybeLogHeartbeat`
+- [x] Diff-reviewed to confirm no change to `MonitoringWatchdogReceiver`
 - [ ] User sign-off
