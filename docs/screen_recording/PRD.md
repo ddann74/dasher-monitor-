@@ -229,32 +229,48 @@ this is the least independently-verifiable PRD in this repo so far.
    cost of gaps in the recording whenever the driver legitimately checks
    another app mid-trip)? This changes §3's design meaningfully depending
    on the answer.
+   **RESOLVED (2026-08-31, driver): "Record everything while the trip is
+   active."** Whole-screen capture for the full trip duration, as
+   originally designed in §3 - not scoped to Dasher's own foreground.
 2. **Storage cap/retention**: keep every trip's recording forever (until
    manually deleted), auto-delete after N days, or cap total size with
    oldest-first eviction (same pattern `tiktok-feed-filter`'s
    `RepeatViewRepository` uses for its own capped history, a sibling
    repo's already-proven approach to bounding unbounded local storage)?
+   **Not resolved - implemented with NO cap for v1** (manual delete-all
+   only, per §3). Flagged as real, near-term follow-up in the premortem
+   (§4a-P2), not silently deferred.
 3. **Should recording require BOTH the toggle on AND a per-trip
    confirmation**, or is toggle-once-then-automatic (as designed in §3)
    the right default? An always-record-once-enabled design is more
    convenient but has a higher accidental-capture risk than a
    per-trip prompt.
-
-None of these are implementation details - they materially change what
-gets built. Recommend resolving at least #1 before any code is written.
+   **Not explicitly resolved - implemented as toggle-once-then-automatic**
+   (§3's original default), since #1's answer confirmed the driver wants
+   full trip-duration coverage without narrower scoping, which reads as
+   the same intent (convenience over a per-trip prompt). Worth confirming
+   explicitly if this turns out to be the wrong read.
 
 ## 6. Success criteria (implementation-phase checklist)
 
-- [ ] Open questions (§5) resolved with the driver
-- [ ] Setup toggle added, off by default
-- [ ] `MediaProjection` consent flow wired via `ActivityResultLauncher`
-- [ ] `ScreenRecordingController` (or equivalent) added, start/stop tied
-      to `startTracking()`/`stopTracking()`
-- [ ] `foregroundServiceType="mediaProjection"` added to
-      `TripForegroundService`'s manifest entry
-- [ ] Process-restart invalidation handled visibly (not silent)
-- [ ] Recordings written to private app storage, not shared/public
-- [ ] Basic in-app review (count + total size) of stored recordings
-- [ ] No change to existing GPS/accessibility/notification behavior when
-      the toggle is off (diff-reviewed)
+- [x] Open question §5.1 (the one flagged as actually blocking)
+      resolved with the driver; §5.2/§5.3 implemented with their
+      documented defaults, not silently skipped
+- [x] Setup toggle added, off by default
+- [x] `MediaProjection` consent flow wired via `ActivityResultLauncher`
+- [x] `ScreenRecordingController` added, start/stop tied to
+      `startTracking()`/`stopTracking()`
+- [x] `foregroundServiceType="mediaProjection"` added to
+      `TripForegroundService`'s manifest entry (alongside the existing
+      `location` type)
+- [x] Process-restart invalidation handled visibly (not silent) - the
+      same `raisePermissionRevokedAlert` mechanism already used for a
+      revoked permission
+- [x] Recordings written to private app storage
+      (`getExternalFilesDir()/ScreenRecordings/`), not shared/public
+- [x] Basic in-app review (count + total size) of stored recordings, plus
+      a delete-all action with a confirmation dialog
+- [x] No change to existing GPS/accessibility/notification behavior when
+      the toggle is off (diff-reviewed - every new code path is gated
+      behind `ScreenRecordingController.isEnabled()`/`hasPendingConsent()`)
 - [ ] User sign-off

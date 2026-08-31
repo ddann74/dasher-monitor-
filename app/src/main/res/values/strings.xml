@@ -19,6 +19,11 @@
     <string name="fuel_efficiency_hint">Fuel efficiency (L per 100km)</string>
     <string name="fuel_price_hint">Fuel price ($ per liter)</string>
     <string name="save_fuel_cost">Save Fuel Cost Settings</string>
+    <string name="screen_recording_heading">Screen Recording</string>
+    <string name="screen_recording_subtext">Records the WHOLE device screen for the duration of each trip, using Android\'s own screen-capture permission -- not just this app\'s UI. If you switch to another app mid-trip (messages, banking, anything), that is captured too. Off by default. Recordings are saved privately on this device only, never uploaded anywhere.</string>
+    <string name="screen_recording_toggle">Record screen during trips</string>
+    <string name="screen_recording_status_default">No recordings yet.</string>
+    <string name="delete_all_recordings">Delete All Recordings</string>
     <string name="view_last_trip_summary">View Last Trip Summary</string>
     <string name="view_trip_history">View Trip History</string>
     <string name="open_in_roadwarrior">Copy Delivery Address</string>

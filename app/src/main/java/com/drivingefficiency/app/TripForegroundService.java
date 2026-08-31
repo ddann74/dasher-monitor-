@@ -102,6 +102,11 @@ public class TripForegroundService extends Service {
     private PyObject engine;
     private String lastKnownMode = null;
     private volatile boolean monitoringActive = false;
+    // Opt-in screen recording (docs/screen_recording/PRD.md) - the
+    // controller instance itself always exists; whether it actually
+    // records anything is gated on the Setup toggle + a held consent
+    // grant, checked in startTracking().
+    private final ScreenRecordingController screenRecordingController = new ScreenRecordingController();
 
     @Override
     public void onCreate() {
@@ -278,6 +283,35 @@ public class TripForegroundService extends Service {
         // Mirrors accessibilityHeartbeatHandler above, which already solved this
         // identical GPS-tied-gap shape for a different reason.
         watchdogRearmHandler.postDelayed(watchdogRearmRunnable, WATCHDOG_REARM_INTERVAL_MS);
+
+        // Opt-in screen recording (docs/screen_recording/PRD.md) - off
+        // unless the driver both enabled the Setup toggle AND granted the
+        // MediaProjection consent dialog. Called last, after the service
+        // is already running in the foreground with the manifest's
+        // location|mediaProjection type declared, which Android requires
+        // before createVirtualDisplay can succeed.
+        if (ScreenRecordingController.isEnabled(this)) {
+            boolean started = screenRecordingController.start(this);
+            if (started) {
+                logDiagnostic("SCREEN_RECORDING", "Started recording for this trip");
+            } else if (!ScreenRecordingController.hasPendingConsent()) {
+                // The most likely real cause: the process restarted since
+                // consent was last granted (a watchdog-recovered kill, a
+                // crash, a manual reopen) - Android does not allow that
+                // grant to be silently reused, and there is no way to
+                // re-request it without a driver tap. Surfaced loudly
+                // (the same alert channel used for a revoked permission),
+                // not left as a silent gap in coverage the driver only
+                // discovers after the fact.
+                logDiagnostic("SCREEN_RECORDING", "Enabled, but no consent held (process likely "
+                        + "restarted since it was last granted) - this trip will not be recorded");
+                raisePermissionRevokedAlert("Screen Recording",
+                        "Re-grant screen recording consent in Setup - this trip is not being recorded");
+            } else {
+                logDiagnostic("SCREEN_RECORDING", "Enabled and consent held, but starting the "
+                        + "recorder failed - see the preceding ERROR-level Android log for the cause");
+            }
+        }
     }
 
     private final android.os.Handler watchdogRearmHandler = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -812,6 +846,12 @@ public class TripForegroundService extends Service {
         releaseTripWakeLock(); // safety net -- in case the trip never properly transitioned to IDLE first
         accessibilityHeartbeatHandler.removeCallbacks(accessibilityHeartbeatRunnable);
         watchdogRearmHandler.removeCallbacks(watchdogRearmRunnable);
+        if (screenRecordingController.isRecording()) {
+            java.io.File finishedFile = screenRecordingController.currentFile();
+            screenRecordingController.stop();
+            logDiagnostic("SCREEN_RECORDING", "Stopped recording for this trip"
+                    + (finishedFile != null ? " (" + finishedFile.length() + " bytes)" : ""));
+        }
         if (fusedLocationClient != null && locationCallback != null) {
             fusedLocationClient.removeLocationUpdates(locationCallback);
         }
@@ -1346,6 +1386,13 @@ public class TripForegroundService extends Service {
         }
         accessibilityHeartbeatHandler.removeCallbacks(accessibilityHeartbeatRunnable);
         watchdogRearmHandler.removeCallbacks(watchdogRearmRunnable);
+        // Final safety net, same reasoning as force_end_trip just above --
+        // must not leave MediaRecorder/MediaProjection resources held if
+        // the service is torn down through a path that didn't already
+        // call stopTracking().
+        if (screenRecordingController.isRecording()) {
+            screenRecordingController.stop();
+        }
         releaseTripWakeLock(); // final safety net -- must not leak a held wakelock if the service dies unexpectedly
         isRunning = false;
         serviceExists = false;
