@@ -3,6 +3,15 @@
 Run this prompt repeatedly (one iteration per invocation) until every box
 in `docs/deadhead_stacked_order_baseline/PRD.md` §6 is checked.
 
+**Part 1 (§6) is done** - all boxes checked except user sign-off. **Do
+NOT start on §8 (Part 2, per-job timing breakdown) from this prompt** -
+PRD §7.2 explicitly says that part "needs its own schema migration...
+not designed in full detail here." It needs a proper design pass (a new
+PRD section or its own PRD) before any code is written, the same
+investigate-before-implement discipline every other PRD in this repo
+follows - don't treat an existing RALPH_PROMPT.md as blanket permission
+to implement whatever gets added to the same file later.
+
 ---
 
 You are implementing `docs/deadhead_stacked_order_baseline/PRD.md` for

@@ -1,7 +1,13 @@
 # PRD: Fix deadhead measurement for a stacked/batch-order pickup
 
-Status: DRAFT - awaiting sign-off before implementation begins.
-Scope: this one measurement gap only. Not a general codebase pass.
+Status: Part 1 (deadhead measurement, §1-§6) IMPLEMENTED and tested -
+awaiting sign-off. Part 2 (§7, per-job timing breakdown) is a DRAFT
+addition, investigated but not yet implemented - added to this same PRD
+at the driver's request since it's the same underlying theme (per-job
+data collapsing/corrupting when jobs are stacked within one trip), not
+because it's the same fix.
+Scope: two related measurement gaps for stacked/batch orders. Not a
+general codebase pass.
 
 ## 0. What this is / isn't
 
@@ -203,4 +209,100 @@ appropriate.
       vs. 9.97km the old raw-cumulative approach would have recorded for
       the same real tracking data) - proving the bug was real and is now
       closed
+- [ ] User sign-off
+
+## 7. Part 2 (added at driver's request): show timings for each job after a completed delivery
+
+### 7.1 Why - investigated 2026-08-31, a real related gap found while adding this
+
+Read `TripManager._update_current_trip_phase_timestamp`, the
+`dropoff_arrival_ts`/`walking_confirmed_ts` capture sites, and
+`_build_trip_summary_dict`'s `phase_breakdown` construction.
+
+1. **Confirmed real: today's phase-timing breakdown already discloses,
+   in its own comment, that it only covers "the first pickup and first
+   dropoff"** for a multi-stop batch (`_build_trip_summary_dict`,
+   `phase_breakdown` block) - a SECOND job's timing was never shown at
+   all. This is the literal gap the driver asked about.
+2. **Confirmed real, and worse than just "incomplete": the underlying
+   capture is INCONSISTENT between pickups and dropoffs, and can already
+   produce a wrong (not just missing) number for a batch order today.**
+   - `dropoff_arrival_ts` and `walking_confirmed_ts` are written via
+     explicit `UPDATE trips SET ... WHERE end_time IS NULL AND
+     {column} IS NULL` (e.g. L2315, L2659) - guarded to capture only the
+     FIRST occurrence per trip, later ones are silently ignored.
+   - `pickup_arrival_ts`/`pickup_departure_ts` are written via the
+     shared `_update_current_trip_phase_timestamp` helper (L1963-1975):
+     `UPDATE trips SET {column_name} = ? WHERE end_time IS NULL` - NO
+     `IS NULL` guard. Every subsequent pickup in the same trip
+     OVERWRITES the previous one, so by the time the trip ends, these
+     two columns reflect the LAST pickup's timing, not the first.
+   - **The consequence**: for a batch order, `phase_breakdown`'s
+     `driving_to_dropoff_seconds = dropoff_arrival_ts -
+     pickup_departure_ts` mixes the FIRST dropoff's arrival with the
+     LAST pickup's departure - two timestamps from what could be
+     different, out-of-order jobs entirely. If the route interleaves
+     pickups and dropoffs (a real batch-order shape, not exotic), this
+     can go negative or otherwise not describe any real phase of any
+     actual job. Not confirmed against a real batch-order trip's data
+     yet (no diagnostic log for this specific scenario), but the
+     mechanism is real and directly readable from the code as written.
+3. **Same root cause as Part 1's deadhead bug**: single-value columns on
+   the `trips` row cannot represent per-job data when a trip contains
+   more than one job. `offer_distance_accuracy` already solved this for
+   distance (one row per pickup, not per trip) - the natural precedent
+   for timing too, rather than inventing a different shape.
+
+### 7.2 Design
+
+Add per-job phase timestamps to `offer_distance_accuracy` (already
+one-row-per-pickup, and this PRD's Part 1 already touches this table's
+surrounding code) rather than the single-value `trips` columns:
+`pickup_arrival_ts`, `pickup_departure_ts`, `dropoff_arrival_ts`,
+`walking_confirmed_ts`, `job_end_ts` columns added to that table,
+populated at the same real capture points that currently write to the
+`trips` row, keyed to whichever pickup is current at each capture moment
+(the same `self.pickup` reference `_deadhead_baseline_km`/
+`_deadhead_distance_km` already use). `_build_trip_summary_dict` then
+builds a LIST of per-job phase breakdowns (one dict per
+`offer_distance_accuracy` row for the trip) instead of a single
+trip-level `phase_breakdown` - each job's own driving/wait/delivery/
+completing durations, shown separately after that job's own delivery
+completes, not lumped into one trip-wide figure.
+
+**Not designed in full detail here** - this needs its own schema
+migration (new columns, a decision on whether existing `trips`-level
+`pickup_arrival_ts`/etc. stay for backward compatibility with old rows
+or get deprecated) and its own executable test (a real synthetic
+batch-order trip, same technique as Part 1's test, asserting each job's
+timing is captured separately and correctly ordered). Scoped as a
+follow-up implementation pass, not bundled into Part 1's already-tested,
+already-committed fix.
+
+### 7.3 Open question
+
+Should Part 1's already-fixed `_deadhead_baseline_km` snapshot become the
+SAME per-job anchor point the new timing columns use (i.e., generalize
+"per-job baseline" once, for both distance and timing), or should timing
+be captured independently? Recommend the former - avoids two parallel
+per-job tracking mechanisms for what's conceptually the same problem -
+but not decided unilaterally here.
+
+## 8. Success criteria for Part 2 (not started)
+
+- [ ] Schema migration: per-job phase timestamp columns added to
+      `offer_distance_accuracy` (or a new dedicated table, if that proves
+      cleaner once designed in full)
+- [ ] Capture points (pickup arrival/departure, dropoff arrival, walking
+      confirmed, job end) write to the current job's own row, not a
+      trip-wide column
+- [ ] `dropoff_arrival_ts`/`walking_confirmed_ts`'s existing first-wins
+      guard and `pickup_arrival_ts`/`pickup_departure_ts`'s existing
+      last-wins (no guard) behavior both replaced by this - confirmed
+      consistent per-job capture, not a mix of two different rules
+- [ ] `_build_trip_summary_dict` returns a per-job list of phase
+      breakdowns, not one trip-level dict
+- [ ] Executable test written and RUN: a synthetic batch-order trip (2+
+      jobs) confirming each job's own phase timing is captured correctly
+      and independently
 - [ ] User sign-off
