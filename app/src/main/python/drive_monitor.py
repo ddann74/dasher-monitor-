@@ -817,8 +817,20 @@ class SmartScoreEngine:
         # API key is configured and a fresh result exists -- see
         # _get_traffic_risk -- else falls back to the personalized
         # historical-speed proxy, else the generic lunch/dinner guess)
+        #
+        # CONFIRMED REAL BUG, fixed here (docs/math_calculation_audit/):
+        # this was inverted since the initial commit -- it awarded the
+        # MAXIMUM score (100) when is_high_risk was True (heavier traffic/
+        # a historically slower period) and a LOWER score (70) when risk
+        # was low. Every other factor in this function scores the bad
+        # condition lower (deadhead_score, wait_score, weather_score all
+        # fall as their real-world condition worsens); this one did the
+        # opposite, actively rewarding offers timed during worse traffic.
+        # _synthesize_verdict already treated "High" risk as a downside
+        # ("heavier traffic than usual") -- the label and the number
+        # disagreed with each other.
         is_high_risk, traffic_risk_source = self._get_traffic_risk(hour_24, current_lat, current_lon)
-        time_score = 100.0 if is_high_risk else 70.0
+        time_score = 70.0 if is_high_risk else 100.0
 
         # Weather (real, via Open-Meteo -- see WeatherHelper.java). Simple
         # heuristic: heavy rain / high wind reduce the score. Neutral 100
