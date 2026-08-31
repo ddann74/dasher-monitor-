@@ -466,11 +466,31 @@ class SmartScoreEngine:
         self._live_weather = None
         self._live_weather_timestamp = None
 
-    def estimate_minutes_from_distance(self, distance_km):
+    def estimate_minutes_from_distance(self, distance_km, restaurant_name=None):
+        """
+        restaurant_name: optional, but should always be passed when known
+        (both real call sites have it available). docs/hourly_rate_actual_
+        vs_estimated/PRD.md ss4.A, CONFIRMED REAL GAP fixed here: this used
+        to be pure drive-time (distance/speed), with zero allowance for
+        time actually spent at the restaurant -- even though
+        _restaurant_wait_info's learned average wait is already computed a
+        few lines later in calculate() for wait_score, from the exact same
+        restaurant_name, and never reused here. A restaurant this app has
+        already learned has a long wait (see calculate()'s own
+        restaurant_warning threshold, avg_wait > 12) still produced an
+        hourly_rate as if pickup took zero minutes, for every offer.
+        Falls back to drive-time-only (the original behavior) when
+        restaurant_name isn't given, so this stays backward compatible.
+        """
         if not distance_km or distance_km <= 0:
             return None
         speed_kmh, _, _ = self._learned_delivery_speed_kmh()
-        return max(5.0, (distance_km / speed_kmh) * 60.0)
+        drive_minutes = (distance_km / speed_kmh) * 60.0
+        wait_minutes = 0.0
+        if restaurant_name:
+            avg_wait, _, _ = self._restaurant_wait_info(restaurant_name)
+            wait_minutes = avg_wait
+        return max(5.0, drive_minutes + wait_minutes)
 
     def _learned_delivery_speed_kmh(self):
         """
@@ -4309,7 +4329,7 @@ class DriveMonitorEngine:
             # misleading $/hr that swung wildly depending on what moment you
             # happened to open the offer (e.g. $5/hr if opened hours early).
             est_minutes = self.smart_score.estimate_minutes_from_distance(
-                parsed["distance_km"]
+                parsed["distance_km"], parsed["restaurant_name"] or "unknown"
             ) or 20.0
             hour_24 = datetime.now().hour
             parsed["smart_score"] = self.smart_score.calculate(
@@ -4383,7 +4403,9 @@ class DriveMonitorEngine:
         }
 
         if distance_km is not None:
-            est_minutes = self.smart_score.estimate_minutes_from_distance(distance_km) or 20.0
+            est_minutes = self.smart_score.estimate_minutes_from_distance(
+                distance_km, restaurant_name
+            ) or 20.0
             hour_24 = datetime.now().hour
             result["smart_score"] = self.smart_score.calculate(
                 payout, distance_km, est_minutes, restaurant_name, hour_24,

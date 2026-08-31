@@ -1,9 +1,9 @@
 # PRD — hourly-rate estimate vs. actual result
 
-Status: DRAFT. Investigation only, grounded in the real code. Nothing
-implemented yet — do not start coding from this PRD until the driver
-says "yes implement it" (same convention as every other PRD in this
-repo).
+Status: §4.A (the wait-time fix to the live estimate) IMPLEMENTED and
+tested. §4.B (capturing real results for an actual-vs-estimated
+comparison) remains NOT started -- its open questions (§5) still need a
+driver decision. See PROGRESS.md.
 
 ## 1. What the code actually does today
 
@@ -153,11 +153,11 @@ needs a schema change):**
   independent of B? It's fully self-contained and doesn't need a
   driver decision the way B's open questions do.
 
-## 6. Success criteria (not started — nothing here is implemented yet)
+## 6. Success criteria
 
-- [ ] §4.A: `est_minutes` includes the restaurant's learned average
+- [x] §4.A: `est_minutes` includes the restaurant's learned average
       wait time, not just drive time.
-- [ ] Real executable test proving A: same distance/speed, two
+- [x] Real executable test proving A: same distance/speed, two
       restaurants with different learned `avg_wait`, confirms the one
       with the longer wait produces a lower `hourly_rate`/`hourly_score`.
 - [ ] §4.B (only after the open questions in §5 are answered by the
