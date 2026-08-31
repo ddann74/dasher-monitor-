@@ -1,8 +1,9 @@
 # PRD — the post-delivery rating prompt has never been seen
 
-Status: DRAFT. Investigation only, grounded in the real code. Nothing
-implemented yet — do not start coding from this PRD until the driver
-says "yes implement it."
+Status: Step 1 (§5, the safe diagnostic-logging fix) IMPLEMENTED.
+Step 2 (the real root-cause fix, candidate A vs. B) remains explicitly
+BLOCKED on a real diagnostic log from an actual trip where the prompt
+didn't appear — see PROGRESS.md. Do not guess at A vs. B from this PRD.
 
 ## 1. What was reported
 
@@ -121,7 +122,7 @@ writing code).
 
 ## 6. Success criteria
 
-- [ ] Step 1: `notifyRateThisDelivery`'s two silent early returns log
+- [x] Step 1: `notifyRateThisDelivery`'s two silent early returns log
       their skip reason (mode value, trip_id).
 - [ ] Real diagnostic log from one actual trip where the prompt didn't
       appear, captured and reviewed against §3's two candidates.

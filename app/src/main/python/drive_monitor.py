@@ -466,11 +466,31 @@ class SmartScoreEngine:
         self._live_weather = None
         self._live_weather_timestamp = None
 
-    def estimate_minutes_from_distance(self, distance_km):
+    def estimate_minutes_from_distance(self, distance_km, restaurant_name=None):
+        """
+        restaurant_name: optional, but should always be passed when known
+        (both real call sites have it available). docs/hourly_rate_actual_
+        vs_estimated/PRD.md ss4.A, CONFIRMED REAL GAP fixed here: this used
+        to be pure drive-time (distance/speed), with zero allowance for
+        time actually spent at the restaurant -- even though
+        _restaurant_wait_info's learned average wait is already computed a
+        few lines later in calculate() for wait_score, from the exact same
+        restaurant_name, and never reused here. A restaurant this app has
+        already learned has a long wait (see calculate()'s own
+        restaurant_warning threshold, avg_wait > 12) still produced an
+        hourly_rate as if pickup took zero minutes, for every offer.
+        Falls back to drive-time-only (the original behavior) when
+        restaurant_name isn't given, so this stays backward compatible.
+        """
         if not distance_km or distance_km <= 0:
             return None
         speed_kmh, _, _ = self._learned_delivery_speed_kmh()
-        return max(5.0, (distance_km / speed_kmh) * 60.0)
+        drive_minutes = (distance_km / speed_kmh) * 60.0
+        wait_minutes = 0.0
+        if restaurant_name:
+            avg_wait, _, _ = self._restaurant_wait_info(restaurant_name)
+            wait_minutes = avg_wait
+        return max(5.0, drive_minutes + wait_minutes)
 
     def _learned_delivery_speed_kmh(self):
         """
@@ -1071,9 +1091,15 @@ class SmartScoreEngine:
                     samples[key]["satisfaction"].append(satisfaction)
 
         # Source 2: accept/decline decisions themselves (timeouts excluded).
+        # 'unassigned_long_wait' included here too (docs/unassign_long_wait_
+        # tracking/PRD.md ss3.3) -- at least as strong a negative signal as
+        # an active decline, since the driver forfeits real earned pay
+        # specifically to escape it. No new branch needed below: anything
+        # in this filtered set that isn't "accepted" already maps to 0.0.
         outcome_rows = self.db.conn.execute("""
             SELECT outcome, components_json FROM offer_outcomes
-            WHERE components_json IS NOT NULL AND outcome IN ('accepted', 'declined') AND is_test_data = 0
+            WHERE components_json IS NOT NULL
+                AND outcome IN ('accepted', 'declined', 'unassigned_long_wait') AND is_test_data = 0
         """).fetchall()
         for row in outcome_rows:
             try:
@@ -1167,12 +1193,15 @@ class MessageIntelligence:
                              "buzz", "apartment", "unit", "leave it"]
     ADDRESS_CORRECTION_KEYWORDS = ["not ", "actually ", "it's ", "its "]
     LATE_KEYWORDS = ["running late", "be there", "few more minutes", "on my way"]
+    # Named constant (was a local tuple inside classify()) so on_message can
+    # also check package membership on its own, for the skip-logging fix in
+    # docs/dropoff_delivery_instruction_wiring/PRD.md ss2/ss4.
+    ALLOWED_PACKAGES = ("com.doordash.driverapp", "com.google.android.apps.messaging")
 
     @classmethod
     def classify(cls, package_name, is_messaging_style):
         """Only process Dasher-app or SMS customer messages (MessagingStyle)."""
-        allowed_packages = ("com.doordash.driverapp", "com.google.android.apps.messaging")
-        return is_messaging_style and package_name in allowed_packages
+        return is_messaging_style and package_name in cls.ALLOWED_PACKAGES
 
     @classmethod
     def extract_instruction(cls, body: str):
@@ -1768,6 +1797,7 @@ class TripManager:
         self._approach_instruction_shown_for_stop_ids = set()
         self._last_gap_sample_log = None
         self._last_phase_capture_log = None
+        self._last_notification_skip_log = None
         self._last_gap_restaurant_name = None
         self._last_gap_seconds = None
 
@@ -1972,6 +2002,45 @@ class TripManager:
             }
         return None
 
+    def record_pickup_unassigned_for_long_wait(self):
+        """
+        docs/unassign_long_wait_tracking/PRD.md ss3.2. Called when the
+        driver taps DoorDash's own "Yes, I want to unassign" button on its
+        "You've been waiting a while, would you like to unassign from this
+        order?" prompt -- a real, distinct action from a normal departure
+        (_evaluate_pickup, which only fires on driving OUT of the pickup
+        geofence -- an unassign usually happens while still parked there,
+        so that branch never fires) or an active Decline (which happens
+        before a pickup is ever registered at all). Previously invisible
+        to this app entirely -- see PRD ss1.2.
+
+        No-ops safely if there's no active pickup to record against.
+        Computes a real wait duration from the same self.pickup["arrived_at"]
+        timestamp _evaluate_pickup's own departure branch already uses, but
+        only if the driver had actually arrived -- an unassign before
+        arrival has no wait to report, and none is invented.
+        """
+        if not self.pickup:
+            return {"recorded": False, "reason": "no_active_pickup"}
+
+        pickup = self.pickup
+        wait_minutes = None
+        if pickup["arrived_at"] is not None:
+            wait_minutes = (time.time() - pickup["arrived_at"]) / 60.0
+
+        # Cleared immediately so it can't linger stale for the rest of the
+        # trip or be double-counted by a later, unrelated _evaluate_pickup
+        # call once GPS ticks resume.
+        self.pickup = None
+
+        return {
+            "recorded": True,
+            "restaurant_name": pickup["restaurant_name"],
+            "claimed_distance_km": pickup["claimed_distance_km"],
+            "score_snapshot_json": pickup["score_snapshot_json"],
+            "wait_minutes": wait_minutes,
+        }
+
     def _update_current_trip_phase_timestamp(self, column_name, ts):
         """
         Persists a real phase-timing moment (pickup arrival/departure,
@@ -2044,10 +2113,17 @@ class TripManager:
     def set_dasher_foreground(self, is_foreground):
         self.dasher_app_foreground = bool(is_foreground)
 
-    def add_stop(self, address, lat, lon):
+    def add_stop(self, address, lat, lon, delivery_instruction=None):
         self.stops.append({
             "address": address, "lat": lat, "lon": lon,
             "matched": False, "arrival_time": None,
+            # docs/dropoff_delivery_instruction_wiring/PRD.md -- the real
+            # delivery note from the dropoff screen itself (e.g. "Leave it
+            # at the door"), already parsed correctly by
+            # DropoffScreenParser.parse() but previously never threaded
+            # this far -- see _check_approach_instruction for where it
+            # actually gets surfaced.
+            "delivery_instruction": delivery_instruction,
         })
 
     def take_pending_arrival(self):
@@ -2077,9 +2153,28 @@ class TripManager:
         used as a fallback -- single deliveries are unaffected either
         way, since there's only ever one possible stop to match.
         """
+        # GAP, fixed here (docs/dropoff_delivery_instruction_wiring/PRD.md
+        # ss2/ss4): a Dasher/SMS notification that failed classification or
+        # extraction had zero diagnostic trace, unlike the personal-message
+        # path (AppNotificationListenerService's "Ignored (not on trusted
+        # list)" log) a few hundred lines away in the same Java file. Only
+        # logged for the two packages MessageIntelligence actually
+        # considers -- every OTHER app's notification also reaches this
+        # method and would otherwise spam a skip log for something that was
+        # never a candidate in the first place (same "avoid noise" pattern
+        # used elsewhere, e.g. handleOfferResult's non-offer-screen branch).
+        is_candidate_package = package_name in MessageIntelligence.ALLOWED_PACKAGES
         if not MessageIntelligence.classify(package_name, is_messaging_style):
+            if is_candidate_package:
+                self._last_notification_skip_log = (
+                    f"Skipped ({package_name}): not a MessagingStyle notification"
+                )
             return None
         instruction = MessageIntelligence.extract_instruction(body)
+        if instruction is None:
+            self._last_notification_skip_log = (
+                f"Skipped ({package_name}): no known instruction keyword matched"
+            )
         stop_id = None
         if lat is not None and lon is not None and self.stops:
             closest_stop = min(
@@ -2442,12 +2537,27 @@ class TripManager:
         if stop_id in self._approach_instruction_shown_for_stop_ids:
             return  # already shown for this specific stop, don't repeat
 
-        instructions = [
+        # The dropoff screen's own delivery instruction (docs/dropoff_
+        # delivery_instruction_wiring/PRD.md) -- present on every delivery
+        # that has one, not just deliveries where a customer happens to
+        # send a follow-up chat message. Tagged with the same
+        # "delivery_note:" category MessageIntelligence.extract_instruction
+        # already uses for this exact kind of note (see its
+        # INSTRUCTION_KEYWORDS), so it displays through the existing
+        # VoiceAnnouncer.stripCategoryPrefix path unchanged -- no new Java-
+        # side formatting needed. Surfaces exactly once, same as any chat-
+        # derived instruction, via the _approach_instruction_shown_for_
+        # stop_ids guard just above.
+        instructions = []
+        if approaching_stop.get("delivery_instruction"):
+            instructions.append(f"delivery_note: {approaching_stop['delivery_instruction']}")
+
+        instructions.extend([
             m["extracted_instruction"] for m in self.messages
             if m["extracted_instruction"]
             and self._last_message_cutoff < m["timestamp"] <= ts
             and (m.get("stop_id") is None or m["stop_id"] == stop_id)
-        ]
+        ])
         if instructions:
             self._approach_instruction_shown_for_stop_ids.add(stop_id)
             self.pending_approach_instruction = {
@@ -3613,6 +3723,65 @@ class DriveMonitorEngine:
         """, (restaurant_name, payout, distance_km, smart_score, time.time(), components_json, int(is_test_data)))
         self.db.conn.commit()
 
+    def record_pickup_unassigned_for_long_wait(self):
+        """
+        docs/unassign_long_wait_tracking/PRD.md ss3.2. Wrapper matching the
+        same "DriveMonitorEngine needs its own real method, not just
+        TripManager's" pattern add_pickup already required (see that
+        method's own CRITICAL BUG FIX comment) -- TripManager.
+        record_pickup_unassigned_for_long_wait() handles the pickup state,
+        but only DriveMonitorEngine holds both self.smart_score (to feed
+        Restaurant Wait History) and self.db (to write offer_outcomes),
+        so the actual recording happens here, called directly from
+        DasherAccessibilityService's click handler.
+
+        payout is honestly left NULL (PRD ss1.5) -- add_pickup is never
+        passed the offer's real payout, and SmartScoreEngine.calculate()'s
+        return dict has no raw payout key either (only derived rates), so
+        there's no real value to store here, not even a stale/guessed one.
+        """
+        result = self.trip_manager.record_pickup_unassigned_for_long_wait()
+        if not result["recorded"]:
+            return json.dumps(result)
+
+        if result["wait_minutes"] is not None:
+            self.smart_score.record_restaurant_wait(result["restaurant_name"], result["wait_minutes"])
+
+        # smart_score/components_json extracted from the full snapshot
+        # add_pickup was given at accept-time (see calculate()'s return
+        # dict) -- same "components" sub-object shape record_offer_outcome/
+        # record_offer_timeout's components_json already uses, extracted
+        # here since, unlike those two, there's no separate Java-side
+        # lastSeenComponentsJson available for this path (this fires long
+        # after the offer-pending window that field is scoped to).
+        smart_score_value = None
+        components_json = None
+        if result["score_snapshot_json"]:
+            try:
+                snapshot = json.loads(result["score_snapshot_json"])
+                smart_score_value = snapshot.get("final_score")
+                components = snapshot.get("components")
+                if components is not None:
+                    components_json = json.dumps(components)
+            except (ValueError, TypeError):
+                pass
+
+        self.db.conn.execute("""
+            INSERT INTO offer_outcomes
+                (restaurant_name, payout, distance_km, smart_score, accepted, outcome, timestamp, components_json, is_test_data)
+            VALUES (?, NULL, ?, ?, 0, 'unassigned_long_wait', ?, ?, 0)
+        """, (
+            result["restaurant_name"], result["claimed_distance_km"], smart_score_value,
+            time.time(), components_json,
+        ))
+        self.db.conn.commit()
+
+        return json.dumps({
+            "recorded": True,
+            "restaurant_name": result["restaurant_name"],
+            "wait_minutes": result["wait_minutes"],
+        })
+
     def get_acceptance_stats(self):
         """
         Aggregate accept/decline/timeout stats -- acceptance rate, and
@@ -4160,7 +4329,7 @@ class DriveMonitorEngine:
             # misleading $/hr that swung wildly depending on what moment you
             # happened to open the offer (e.g. $5/hr if opened hours early).
             est_minutes = self.smart_score.estimate_minutes_from_distance(
-                parsed["distance_km"]
+                parsed["distance_km"], parsed["restaurant_name"] or "unknown"
             ) or 20.0
             hour_24 = datetime.now().hour
             parsed["smart_score"] = self.smart_score.calculate(
@@ -4234,7 +4403,9 @@ class DriveMonitorEngine:
         }
 
         if distance_km is not None:
-            est_minutes = self.smart_score.estimate_minutes_from_distance(distance_km) or 20.0
+            est_minutes = self.smart_score.estimate_minutes_from_distance(
+                distance_km, restaurant_name
+            ) or 20.0
             hour_24 = datetime.now().hour
             result["smart_score"] = self.smart_score.calculate(
                 payout, distance_km, est_minutes, restaurant_name, hour_24,
@@ -4590,9 +4761,9 @@ class DriveMonitorEngine:
         return json.dumps({"found": True, "content": content})
 
     # One-Tap Instant Pinpoint -----------------------------------------
-    def add_stop_to_buffer(self, address, lat, lon):
+    def add_stop_to_buffer(self, address, lat, lon, delivery_instruction=None):
         self.stops_buffer.add(address, lat, lon)
-        self.trip_manager.add_stop(address, lat, lon)
+        self.trip_manager.add_stop(address, lat, lon, delivery_instruction)
 
     def get_stops_buffer_json(self):
         return self.stops_buffer.as_json()
@@ -4602,6 +4773,23 @@ class DriveMonitorEngine:
         return self.trip_manager.on_message(
             package_name, title, text, timestamp_ms, is_messaging_style, lat, lon
         )
+
+    def get_last_notification_skip_log(self):
+        """
+        docs/dropoff_delivery_instruction_wiring/PRD.md ss2/ss4. Separate
+        getter rather than bundling this into on_notification's own return
+        value -- on_notification's return contract (the extracted
+        instruction string, or None) is read directly by
+        AppNotificationListenerService as the real, live TTS/overlay
+        trigger, and changing its shape risks that live path; this is
+        purely a diagnostic side-channel, called by Java only when
+        on_notification's result was empty, mirroring how
+        _last_phase_capture_log/_last_gap_sample_log are consumed
+        separately from on_gps_update's own primary result.
+        """
+        result = self.trip_manager._last_notification_skip_log
+        self.trip_manager._last_notification_skip_log = None
+        return result
 
     def is_instruction_urgent(self, instruction):
         """

@@ -615,11 +615,25 @@ public class TripForegroundService extends Service {
     private void notifyRateThisDelivery() {
         try {
             JSONObject summary = new JSONObject(engine.callAttr("get_last_trip_summary").toString());
-            if (!"DASHER".equals(summary.optString("mode", ""))) {
+            String mode = summary.optString("mode", "");
+            if (!"DASHER".equals(mode)) {
+                // docs/feedback_prompt_never_shown/PRD.md ss5 Step 1 --
+                // previously silent: if the driver never saw this prompt,
+                // there was no way to tell from the log whether it was
+                // because the trip's mode never became DASHER (see PRD ss3
+                // candidate A) or something else entirely. Real mode value
+                // logged so a future diagnostic-log review can actually
+                // confirm or rule this candidate out.
+                logDiagnostic("BUTTON", "notifyRateThisDelivery skipped -- trip mode was \""
+                        + mode + "\", not DASHER");
                 return; // only real Dasher trips get a feedback prompt, matching the existing gating
             }
             int tripId = summary.optInt("trip_id", -1);
             if (tripId < 0) {
+                // Same gap, other silent branch -- get_last_trip_summary
+                // returned no usable trip_id even though mode was DASHER.
+                logDiagnostic("BUTTON", "notifyRateThisDelivery skipped -- mode was DASHER but "
+                        + "no valid trip_id was returned (get_last_trip_summary: " + summary + ")");
                 return;
             }
 

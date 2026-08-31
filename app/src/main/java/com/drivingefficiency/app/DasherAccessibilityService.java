@@ -519,6 +519,23 @@ public class DasherAccessibilityService extends AccessibilityService {
                             recordLastOfferOutcome(true);
                         } else if (clicked.equalsIgnoreCase("Decline")) {
                             recordLastOfferOutcome(false);
+                        } else if (clicked.equalsIgnoreCase("Yes, I want to unassign")) {
+                            // docs/unassign_long_wait_tracking/PRD.md ss3.1 -- real button
+                            // text confirmed from a real screenshot of DoorDash's own
+                            // "You've been waiting a while, would you like to unassign
+                            // from this order?" prompt. Deliberately NOT gated on
+                            // lastSeenRestaurantName != null (that field is only for the
+                            // brief offer-pending window and is already cleared by the
+                            // time this screen can appear, well after acceptance) --
+                            // record_pickup_unassigned_for_long_wait handles "nothing to
+                            // record" safely on its own if self.pickup is None.
+                            try {
+                                String resultJson = engine.callAttr("record_pickup_unassigned_for_long_wait").toString();
+                                logDiagnostic("OUTCOME", "Unassigned due to long wait: " + resultJson);
+                            } catch (RuntimeException e) { // covers PyException too
+                                logDiagnostic("ERROR", "record_pickup_unassigned_for_long_wait exception: "
+                                        + android.util.Log.getStackTraceString(e));
+                            }
                         }
                     }
                 }
@@ -640,12 +657,23 @@ public class DasherAccessibilityService extends AccessibilityService {
             }
             lastDropoffAddressKey = fullAddress;
             logDiagnostic("DROPOFF", "Detected: " + fullAddress);
+            // docs/dropoff_delivery_instruction_wiring/PRD.md -- this was
+            // already parsed correctly by parse_dropoff_screen (confirmed
+            // against real screenshots) and then silently discarded here:
+            // only full_address was ever read from the same result. Real
+            // driver report: "I've also not seen any customer instructions
+            // appear as I near their address."
+            final String deliveryInstruction = parsed.isNull("delivery_instruction")
+                    ? null : parsed.optString("delivery_instruction", null);
+            if (deliveryInstruction != null) {
+                logDiagnostic("DROPOFF", "Delivery instruction: " + deliveryInstruction);
+            }
 
             if (!GoogleApiHelper.hasApiKey(this)) {
                 // Still register the stop with a placeholder so arrival
                 // detection has SOMETHING to work with -- geocoding will
                 // just never upgrade it to real coordinates without a key.
-                engine.callAttr("add_stop_to_buffer", fullAddress, 0.0, 0.0);
+                engine.callAttr("add_stop_to_buffer", fullAddress, 0.0, 0.0, deliveryInstruction);
                 return;
             }
             GoogleApiHelper.geocodeAddress(this, fullAddress, new GoogleApiHelper.GeocodeCallback() {
@@ -656,7 +684,7 @@ public class DasherAccessibilityService extends AccessibilityService {
                     // an uncaught exception here would crash the entire
                     // app process, not just this call.
                     try {
-                        engine.callAttr("add_stop_to_buffer", fullAddress, lat, lon);
+                        engine.callAttr("add_stop_to_buffer", fullAddress, lat, lon, deliveryInstruction);
                         logDiagnostic("GEOCODE", "Resolved dropoff " + fullAddress + " -> " + lat + "," + lon);
                     } catch (RuntimeException e) {
                         logDiagnostic("ERROR", "Dropoff geocode callback exception: "

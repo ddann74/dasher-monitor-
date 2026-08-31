@@ -1,6 +1,7 @@
 # PRD: Record it when you unassign an order due to a long wait
 
-Status: DRAFT -- awaiting sign-off before implementation begins.
+Status: IMPLEMENTED and tested (Python half) -- awaiting user sign-off
+and on-device confirmation of the Java click detection. See PROGRESS.md.
 Scope: this one feature only. Not a general codebase pass.
 
 ## 0. What this is / isn't
@@ -173,20 +174,20 @@ implementation details, not judgment calls requiring further input.
 
 ## 6. Success criteria (implementation-phase checklist)
 
-- [ ] `record_pickup_unassigned_for_long_wait` added to
+- [x] `record_pickup_unassigned_for_long_wait` added to
       `drive_monitor.py`, handling both the arrived/not-arrived cases
       and the no-active-pickup no-op
-- [ ] `record_restaurant_wait` called with a real computed duration when
+- [x] `record_restaurant_wait` called with a real computed duration when
       `arrived_at` is set
-- [ ] New `offer_outcomes` row inserted with the fields specified in
+- [x] New `offer_outcomes` row inserted with the fields specified in
       §3.2, `payout` honestly `NULL`
-- [ ] `self.pickup` cleared after recording
-- [ ] `recalculate_personal_calibration`'s outcome filter extended to
+- [x] `self.pickup` cleared after recording
+- [x] `recalculate_personal_calibration`'s outcome filter extended to
       include the new outcome value
-- [ ] `DasherAccessibilityService`'s click handler wired to the new
+- [x] `DasherAccessibilityService`'s click handler wired to the new
       method on the confirmed real button text, mirroring the existing
       Accept/Decline pattern exactly
-- [ ] Executable test written and RUN in this sandbox for the Python
+- [x] Executable test written and RUN in this sandbox for the Python
       half (§4)
 - [ ] On-device confirmation of the real click detection -- **blocked**:
       no Android emulator/device available in this environment
