@@ -123,6 +123,28 @@ class ScreenRecordingController {
     private MediaRecorder mediaRecorder;
     private File currentFile;
 
+    // Notified from releaseInternal() -- the ONE place all three ways
+    // recording can stop (an explicit stop() call, this class's own
+    // onStop() callback below, or a mid-setup exception in start())
+    // actually converge. Found while reviewing this implementation for a
+    // premortem: TripForegroundService originally set its own
+    // isScreenRecordingActive static flag to false at each of its two
+    // explicit stop() call sites individually, which missed the THIRD
+    // path -- Android itself revoking the grant externally (e.g. the
+    // driver tapping the system "Stop" notification) -- leaving that flag
+    // wrongly stuck true after a recording had, in fact, already stopped.
+    // A single callback fired from inside cleanup itself can't be missed
+    // by construction, unlike three independently-maintained call sites.
+    interface StopListener {
+        void onRecordingStopped();
+    }
+
+    private final StopListener stopListener;
+
+    ScreenRecordingController(StopListener stopListener) {
+        this.stopListener = stopListener;
+    }
+
     private final MediaProjection.Callback projectionCallback = new MediaProjection.Callback() {
         @Override
         public void onStop() {
@@ -234,6 +256,16 @@ class ScreenRecordingController {
             }
             mediaProjection.stop();
             mediaProjection = null;
+        }
+        // Always fired, even if nothing was actually torn down above (a
+        // setup failure inside start() before recording truly began) --
+        // harmless in that case (the caller's own "active" flag was never
+        // set true to begin with), and guarantees the ONE real case that
+        // matters -- an external stop via the projectionCallback above --
+        // can never be missed the way three separately-maintained call
+        // sites at the caller were (see class doc).
+        if (stopListener != null) {
+            stopListener.onRecordingStopped();
         }
     }
 

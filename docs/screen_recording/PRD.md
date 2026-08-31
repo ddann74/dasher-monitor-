@@ -219,6 +219,40 @@ this is the least independently-verifiable PRD in this repo so far.
   same "reasonable default, flag concerns, proceed" treatment most other
   PRDs in this repo get.
 
+### Second pass (2026-08-31), against the actual implementation, not just the design
+
+- **P4 - CONFIRMED REAL BUG in the original implementation, now fixed:
+  "Delete All Recordings" had no guard against a recording actively being
+  written.** `PermissionsActivity`'s delete button had no way to know
+  whether `TripForegroundService`'s screen recording was currently in
+  progress - that state lived only in a service-local field, never
+  shared. Deleting while a file is open for writing typically "succeeds"
+  on Android (unlinks the directory entry) while the write continues
+  into now-unreferenced storage - the in-progress recording would
+  silently vanish with no error anywhere. Fixed: new
+  `TripForegroundService.isScreenRecordingActive` static flag, checked
+  before the delete confirmation dialog even appears.
+- **P5 - CONFIRMED REAL GAP in the original implementation, now fixed:
+  the Setup screen couldn't distinguish "toggle on, actually able to
+  record" from "toggle on, but consent silently invalidated by a process
+  restart."** The Switch reflects the PERSISTED preference (survives a
+  restart); the actual consent grant is memory-only (does not). A driver
+  checking Setup after, say, a watchdog-recovered process kill would see
+  the Switch ON and reasonably assume the next trip would record - the
+  only evidence otherwise was an alert notification that fires later,
+  only once a trip actually tries and fails. Fixed:
+  `refreshScreenRecordingStatus()` now checks
+  `hasPendingConsent()` directly and surfaces the mismatch right on this
+  screen, not just after the fact.
+- **P6 - noted, not confirmed either way: whether the delay between
+  granting consent (in Setup) and actually using it (whenever the next
+  trip starts, which could be hours later) risks the grant going stale
+  on some Android versions**, independent of the already-flagged
+  process-restart case. No documented hard timeout is known to exist,
+  but this is genuinely unconfirmed without a real device - flagged
+  alongside the existing reuse-across-trips uncertainty in
+  `ScreenRecordingController`'s own class doc, not treated as resolved.
+
 ## 5. Open questions - genuinely blocking, not just disclosed
 
 1. **Given §1.3, should this feature exist as designed at all, or with a

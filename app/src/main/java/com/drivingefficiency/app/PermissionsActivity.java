@@ -251,6 +251,19 @@ public class PermissionsActivity extends AppCompatActivity {
                 Toast.makeText(this, "No recordings to delete.", Toast.LENGTH_SHORT).show();
                 return;
             }
+            // CONFIRMED REAL BUG, closed by this check: without it, deleting
+            // while a recording is actively open for writing (this screen
+            // can be opened mid-trip) would unlink its directory entry out
+            // from under MediaRecorder's still-open file handle -- Android
+            // typically doesn't throw when that happens, it just silently
+            // loses the recording once MediaRecorder later finishes writing
+            // to now-unreferenced storage. See
+            // TripForegroundService.isScreenRecordingActive's own doc.
+            if (TripForegroundService.isScreenRecordingActive) {
+                Toast.makeText(this, "A recording is in progress -- stop tracking first, "
+                        + "then delete.", Toast.LENGTH_LONG).show();
+                return;
+            }
             new AlertDialog.Builder(this)
                     .setTitle("Delete all recordings?")
                     .setMessage("This will permanently delete " + count + " screen recording"
@@ -268,17 +281,37 @@ public class PermissionsActivity extends AppCompatActivity {
 
     /** Human-readable count + total size of stored recordings -- the
       * PRD's own minimum bar for "a way to review recordings," a stretch
-      * goal (full playback) left for later. */
+      * goal (full playback) left for later.
+      *
+      * Also surfaces a real, previously-silent gap found reviewing this
+      * screen for a premortem: the Switch reflects the PERSISTED toggle
+      * preference, which survives a process restart -- but the actual
+      * MediaProjection consent grant is held only in memory and does NOT
+      * survive one (see ScreenRecordingController's class doc). Before
+      * this, a driver could see the Switch showing ON here and reasonably
+      * assume recording would work on the next trip, when in fact it
+      * silently wouldn't until they re-toggled it -- the ONLY visible
+      * evidence otherwise was an alert notification that only fires
+      * later, at the moment a trip actually tries and fails to start
+      * recording. This makes that state visible right where the Switch
+      * itself is, not just after the fact. */
     private void refreshScreenRecordingStatus() {
+        StringBuilder text = new StringBuilder();
+        if (screenRecordingSwitch.isChecked() && !ScreenRecordingController.hasPendingConsent()) {
+            text.append("Recording is on, but consent needs to be re-granted (turn off and back "
+                    + "on) since the app was last restarted -- the next trip will not record "
+                    + "until then.\n\n");
+        }
         int count = ScreenRecordingController.recordingsCount(this);
         if (count == 0) {
-            screenRecordingStatusText.setText(getString(R.string.screen_recording_status_default));
-            return;
+            text.append(getString(R.string.screen_recording_status_default));
+        } else {
+            long totalBytes = ScreenRecordingController.recordingsTotalSizeBytes(this);
+            double totalMb = totalBytes / (1024.0 * 1024.0);
+            text.append(String.format(java.util.Locale.US,
+                    "%d recording%s stored, %.1f MB total.", count, count == 1 ? "" : "s", totalMb));
         }
-        long totalBytes = ScreenRecordingController.recordingsTotalSizeBytes(this);
-        double totalMb = totalBytes / (1024.0 * 1024.0);
-        screenRecordingStatusText.setText(String.format(java.util.Locale.US,
-                "%d recording%s stored, %.1f MB total.", count, count == 1 ? "" : "s", totalMb));
+        screenRecordingStatusText.setText(text.toString());
     }
 
     @Override

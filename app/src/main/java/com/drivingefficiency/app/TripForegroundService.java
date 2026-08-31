@@ -83,6 +83,20 @@ public class TripForegroundService extends Service {
     public static volatile boolean serviceExists = false;
 
     /**
+     * True only while a screen recording is actively being written to disk
+     * (docs/screen_recording/PRD.md). Exposed statically, same pattern as
+     * isRunning/serviceExists above, specifically so PermissionsActivity's
+     * "Delete All Recordings" button can check it -- CONFIRMED REAL BUG,
+     * closed by this field: without it, deleting all recordings while one
+     * is actively open for writing would unlink its directory entry out
+     * from under MediaRecorder's still-open file handle. On Android this
+     * typically "succeeds" (no exception) while the write continues into
+     * now-unreferenced storage -- the in-progress recording silently
+     * vanishes on stop, with no error surfaced anywhere to explain why.
+     */
+    public static volatile boolean isScreenRecordingActive = false;
+
+    /**
      * Last known real GPS position, exposed so other components (like
      * DasherAccessibilityService, for live traffic queries) can access
      * the current location without needing their own separate location
@@ -106,7 +120,13 @@ public class TripForegroundService extends Service {
     // controller instance itself always exists; whether it actually
     // records anything is gated on the Setup toggle + a held consent
     // grant, checked in startTracking().
-    private final ScreenRecordingController screenRecordingController = new ScreenRecordingController();
+    // Listener fires from inside ScreenRecordingController's own cleanup,
+    // covering all three ways recording can actually stop (explicit
+    // stop(), a mid-setup failure, or Android externally revoking the
+    // grant) in one place -- see ScreenRecordingController.StopListener's
+    // own doc for the real bug this closed.
+    private final ScreenRecordingController screenRecordingController =
+            new ScreenRecordingController(() -> isScreenRecordingActive = false);
 
     @Override
     public void onCreate() {
@@ -292,6 +312,7 @@ public class TripForegroundService extends Service {
         // before createVirtualDisplay can succeed.
         if (ScreenRecordingController.isEnabled(this)) {
             boolean started = screenRecordingController.start(this);
+            isScreenRecordingActive = started;
             if (started) {
                 logDiagnostic("SCREEN_RECORDING", "Started recording for this trip");
             } else if (!ScreenRecordingController.hasPendingConsent()) {
@@ -848,7 +869,7 @@ public class TripForegroundService extends Service {
         watchdogRearmHandler.removeCallbacks(watchdogRearmRunnable);
         if (screenRecordingController.isRecording()) {
             java.io.File finishedFile = screenRecordingController.currentFile();
-            screenRecordingController.stop();
+            screenRecordingController.stop(); // clears isScreenRecordingActive via the StopListener
             logDiagnostic("SCREEN_RECORDING", "Stopped recording for this trip"
                     + (finishedFile != null ? " (" + finishedFile.length() + " bytes)" : ""));
         }
@@ -1391,7 +1412,7 @@ public class TripForegroundService extends Service {
         // the service is torn down through a path that didn't already
         // call stopTracking().
         if (screenRecordingController.isRecording()) {
-            screenRecordingController.stop();
+            screenRecordingController.stop(); // clears isScreenRecordingActive via the StopListener
         }
         releaseTripWakeLock(); // final safety net -- must not leak a held wakelock if the service dies unexpectedly
         isRunning = false;

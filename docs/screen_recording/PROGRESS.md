@@ -127,3 +127,45 @@ consent dialog actually appear, does recording actually produce a valid
 MP4, does the reuse-across-trips assumption above actually hold) is
 entirely outstanding - by far the most consequential set of unknowns of
 any PRD implemented in this repo this session.
+
+## Second-pass premortem against the real implementation (2026-08-31)
+
+Requested explicitly by the driver, after the PRD's own design-phase
+premortem (§4a, written before any code existed). Re-traced the actual
+implementation rather than re-stating what was already there - found two
+real, confirmed issues, both fixed immediately as part of reporting them
+(see PRD.md §4a's new "Second pass" subsection for the full writeup):
+
+- **P4 (real bug)**: `PermissionsActivity`'s "Delete All Recordings" had
+  no guard against a currently-in-progress recording - could silently
+  destroy it (unlinking an open file's directory entry). Fixed via a new
+  `TripForegroundService.isScreenRecordingActive` static flag, checked
+  before the delete dialog appears.
+- **P5 (real gap)**: the Setup screen couldn't tell the driver "toggle
+  is on, but the consent grant is actually gone" (a process restart
+  invalidates it silently) until a trip already tried and failed. Fixed
+  by having `refreshScreenRecordingStatus()` check `hasPendingConsent()`
+  directly and surface the mismatch on the same screen as the toggle.
+
+Fixing P4 correctly required a small refactor: my first attempt set
+`isScreenRecordingActive = false` at each of `TripForegroundService`'s
+two explicit `stop()` call sites individually - which missed the THIRD
+way recording can stop (Android itself revoking the grant externally,
+e.g. the driver tapping the system "Stop recording" notification, routed
+through `ScreenRecordingController`'s own `MediaProjection.Callback`).
+Caught this while double-checking the fix, before committing it -
+refactored to a `ScreenRecordingController.StopListener` callback fired
+from inside `releaseInternal()` itself, the one place all three stop
+paths actually converge, rather than three independently-maintained call
+sites that could drift out of sync (exactly the class of bug P4 itself
+was).
+
+P6 (noted, not fixed): whether a delay between granting consent and
+actually starting a trip risks the grant going stale is still genuinely
+unconfirmed - added to `ScreenRecordingController`'s existing
+unconfirmed-behavior disclosure rather than guessed at.
+
+Verified the fix itself the same way as the rest of this PRD: brace-
+balance checks on all three touched files (all balanced), confirmed
+`ScreenRecordingController`'s only instantiation site was updated to
+match its new constructor signature.
