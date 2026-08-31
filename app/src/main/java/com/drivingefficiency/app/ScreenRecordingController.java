@@ -108,14 +108,24 @@ class ScreenRecordingController {
         return total;
     }
 
-    static void deleteAllRecordings(Context context) {
+    /** Returns how many files could NOT be deleted (0 = fully successful) --
+      * File.delete()'s own return value was previously ignored entirely,
+      * so a partial failure (a locked/in-use file, a permission hiccup)
+      * would still show a plain "Recordings deleted" success message with
+      * no indication anything was left behind. Found and fixed auditing
+      * this feature for "does anything fail silently?" */
+    static int deleteAllRecordings(Context context) {
         File[] files = recordingsDir(context).listFiles();
         if (files == null) {
-            return;
+            return 0;
         }
+        int failures = 0;
         for (File f : files) {
-            f.delete();
+            if (!f.delete()) {
+                failures++;
+            }
         }
+        return failures;
     }
 
     private MediaProjection mediaProjection;
@@ -157,25 +167,49 @@ class ScreenRecordingController {
         }
     };
 
+    // CONFIRMED REAL GAP, closed by this field: start() had two early
+    // `return false` paths (manager/mediaProjection null) that bypassed
+    // the catch block below entirely, so NOTHING was ever logged for
+    // them -- not even to logcat -- while the caller's own diagnostic
+    // message claimed to point at "the preceding ERROR-level Android
+    // log," which for those two paths didn't exist at all. Every failure
+    // path now sets this before returning false, and it's ALWAYS visible
+    // in this app's own diagnostic log (not just logcat, which a driver
+    // has no way to read without a computer and ADB) via lastFailureReason().
+    private String lastFailureReason;
+
+    String lastFailureReason() {
+        return lastFailureReason;
+    }
+
     /**
      * Starts recording for the current trip. Returns false (and does NOT
      * start anything) if the toggle is off, no consent is currently held
      * (a process restart clears it -- see class doc), or setup throws for
      * any other reason -- callers must treat false as "not recording,"
-     * never assume success just because this was called.
+     * never assume success just because this was called. Call
+     * lastFailureReason() after a false return for why.
      */
     boolean start(Service service) {
-        if (!isEnabled(service) || !hasPendingConsent()) {
+        if (!isEnabled(service)) {
+            lastFailureReason = "toggle is off";
+            return false;
+        }
+        if (!hasPendingConsent()) {
+            lastFailureReason = "no consent held (process restart since it was last granted?)";
             return false;
         }
         try {
             MediaProjectionManager manager = (MediaProjectionManager)
                     service.getSystemService(Context.MEDIA_PROJECTION_SERVICE);
             if (manager == null) {
+                lastFailureReason = "MEDIA_PROJECTION_SERVICE unavailable on this device";
                 return false;
             }
             mediaProjection = manager.getMediaProjection(pendingResultCode, pendingResultData);
             if (mediaProjection == null) {
+                lastFailureReason = "getMediaProjection() returned null (consent token may already "
+                        + "be consumed/invalid -- see class doc's unconfirmed reuse-across-trips note)";
                 return false;
             }
             // Required on Android 10+ before createVirtualDisplay, or it
@@ -214,15 +248,30 @@ class ScreenRecordingController {
             // failure modes (codec unavailable, disk full, a device that
             // doesn't support this combination of size/format) -- none of
             // them should crash the always-on foreground service.
+            lastFailureReason = e.getClass().getSimpleName() + ": " + e.getMessage();
             android.util.Log.e("ScreenRecordingController", "start() failed", e);
             releaseInternal();
             return false;
         }
     }
 
+    /** Set true when stop() catches MediaRecorder throwing on an
+      * effectively-empty recording (see stop()'s own comment) -- the
+      * resulting file is likely invalid/empty. Exposed so the caller can
+      * mention it in the visible diagnostic log rather than this being a
+      * fully silent, logcat-only event as it was before this audit
+      * ("does anything fail silently?" - answer: this did). Reset at the
+      * start of every stop() call. */
+    private boolean lastStopWasLikelyEmpty;
+
+    boolean lastStopWasLikelyEmpty() {
+        return lastStopWasLikelyEmpty;
+    }
+
     /** Safe to call even if start() never succeeded -- releaseInternal()
       * itself null-checks everything. */
     void stop() {
+        lastStopWasLikelyEmpty = false;
         try {
             if (mediaRecorder != null) {
                 mediaRecorder.stop();
@@ -232,7 +281,13 @@ class ScreenRecordingController {
             // far enough to record any real data (e.g. stopped within the
             // same instant it started) -- the output file may be
             // invalid/empty in that case, not something to crash the
-            // foreground service over.
+            // foreground service over, but previously not logged ANYWHERE
+            // (not even logcat) either -- fully silent. Now recorded via
+            // lastStopWasLikelyEmpty() and still logged to logcat for a
+            // developer debugging with ADB.
+            lastStopWasLikelyEmpty = true;
+            android.util.Log.w("ScreenRecordingController",
+                    "stop() -- MediaRecorder.stop() threw, output file may be empty/invalid", e);
         }
         releaseInternal();
     }

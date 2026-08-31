@@ -169,3 +169,38 @@ Verified the fix itself the same way as the rest of this PRD: brace-
 balance checks on all three touched files (all balanced), confirmed
 `ScreenRecordingController`'s only instantiation site was updated to
 match its new constructor signature.
+
+## Third pass (2026-08-31): "does anything fail silently?"
+
+Driver asked this directly. Full audit of every catch block and
+early-return in `ScreenRecordingController`/its callers - found real
+issues, all fixed:
+
+- **Actively misleading, not just silent**: `start()`'s two early
+  `return false` paths (`manager == null`, `getMediaProjection() == null`)
+  bypassed the catch block entirely, so nothing was ever logged for them
+  - not even to logcat. The caller's own diagnostic message claimed to
+  point at "the preceding ERROR-level Android log," which for those two
+  paths never existed. Fixed via a new `lastFailureReason()` (set on
+  EVERY failure path, not just the ones that throw) written directly into
+  the app's own visible diagnostic log, not just logcat - which a driver
+  has no way to read without a computer and ADB in the first place, the
+  same underlying gap `stop()`'s next issue shares.
+- **Fully silent**: `MediaRecorder.stop()`'s expected-failure catch
+  (already-understood edge case: stopped before any real data recorded)
+  had no log line at all, anywhere. Fixed via `lastStopWasLikelyEmpty()`,
+  surfaced in `stopTracking()`'s existing log line so a 0-byte/near-empty
+  recording has an explanation instead of an unexplained file size.
+- **Misleading success message**: `deleteAllRecordings()` ignored
+  `File.delete()`'s own return value - a partial failure (a locked file,
+  a permission hiccup) still showed a plain "Recordings deleted" success
+  toast. Fixed: returns a failure count, surfaced in the toast.
+
+**Reviewed and deliberately left alone**: `mediaRecorder.release()` and
+`mediaProjection.unregisterCallback()`'s swallowed exceptions in
+`releaseInternal()`. These are the standard, well-documented Android
+no-op-on-already-released-object pattern - not a "did the recording
+actually work" question the way the three fixes above are, and logging
+every one would mostly add noise. Judgment call, not an oversight -
+flagged here so it's clear this was considered, not missed.
+

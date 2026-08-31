@@ -269,9 +269,19 @@ public class PermissionsActivity extends AppCompatActivity {
                     .setMessage("This will permanently delete " + count + " screen recording"
                             + (count == 1 ? "" : "s") + " stored on this device. This cannot be undone.")
                     .setPositiveButton("Delete", (dialog, which) -> {
-                        ScreenRecordingController.deleteAllRecordings(this);
+                        // deleteAllRecordings()'s return value used to be
+                        // ignored entirely -- a partial failure (a locked
+                        // file, a permission hiccup) would still show this
+                        // exact "deleted" success message with nothing left
+                        // to indicate otherwise. Found auditing this
+                        // feature for "does anything fail silently?"
+                        int failures = ScreenRecordingController.deleteAllRecordings(this);
                         refreshScreenRecordingStatus();
-                        Toast.makeText(this, "Recordings deleted.", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(this, failures == 0
+                                ? "Recordings deleted."
+                                : failures + " recording" + (failures == 1 ? "" : "s")
+                                        + " could not be deleted -- try again.",
+                                Toast.LENGTH_LONG).show();
                     })
                     .setNegativeButton("Cancel", null)
                     .show();

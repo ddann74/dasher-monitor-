@@ -329,8 +329,16 @@ public class TripForegroundService extends Service {
                 raisePermissionRevokedAlert("Screen Recording",
                         "Re-grant screen recording consent in Setup - this trip is not being recorded");
             } else {
+                // Was "see the preceding ERROR-level Android log" -- WRONG
+                // for two of ScreenRecordingController's own failure paths,
+                // which never logged anywhere at all (found auditing this
+                // for "does anything fail silently?"). lastFailureReason()
+                // is now set on every failure path, not just the ones that
+                // throw, and written directly into THIS app's own visible
+                // diagnostic log instead of only logcat, which a driver has
+                // no way to read without a computer and ADB.
                 logDiagnostic("SCREEN_RECORDING", "Enabled and consent held, but starting the "
-                        + "recorder failed - see the preceding ERROR-level Android log for the cause");
+                        + "recorder failed: " + screenRecordingController.lastFailureReason());
             }
         }
     }
@@ -870,8 +878,15 @@ public class TripForegroundService extends Service {
         if (screenRecordingController.isRecording()) {
             java.io.File finishedFile = screenRecordingController.currentFile();
             screenRecordingController.stop(); // clears isScreenRecordingActive via the StopListener
+            // lastStopWasLikelyEmpty() -- previously this case (stopped
+            // before any real data was recorded) was fully silent, not
+            // even in logcat. Surfaced here so a 0-byte/near-empty
+            // recording has an explanation in the log, not just a
+            // confusing file size later with no context.
             logDiagnostic("SCREEN_RECORDING", "Stopped recording for this trip"
-                    + (finishedFile != null ? " (" + finishedFile.length() + " bytes)" : ""));
+                    + (finishedFile != null ? " (" + finishedFile.length() + " bytes)" : "")
+                    + (screenRecordingController.lastStopWasLikelyEmpty()
+                            ? " -- stopped before any data was recorded, file may be empty/invalid" : ""));
         }
         if (fusedLocationClient != null && locationCallback != null) {
             fusedLocationClient.removeLocationUpdates(locationCallback);
