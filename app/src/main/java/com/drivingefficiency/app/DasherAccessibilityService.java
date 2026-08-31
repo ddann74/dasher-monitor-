@@ -519,6 +519,23 @@ public class DasherAccessibilityService extends AccessibilityService {
                             recordLastOfferOutcome(true);
                         } else if (clicked.equalsIgnoreCase("Decline")) {
                             recordLastOfferOutcome(false);
+                        } else if (clicked.equalsIgnoreCase("Yes, I want to unassign")) {
+                            // docs/unassign_long_wait_tracking/PRD.md ss3.1 -- real button
+                            // text confirmed from a real screenshot of DoorDash's own
+                            // "You've been waiting a while, would you like to unassign
+                            // from this order?" prompt. Deliberately NOT gated on
+                            // lastSeenRestaurantName != null (that field is only for the
+                            // brief offer-pending window and is already cleared by the
+                            // time this screen can appear, well after acceptance) --
+                            // record_pickup_unassigned_for_long_wait handles "nothing to
+                            // record" safely on its own if self.pickup is None.
+                            try {
+                                String resultJson = engine.callAttr("record_pickup_unassigned_for_long_wait").toString();
+                                logDiagnostic("OUTCOME", "Unassigned due to long wait: " + resultJson);
+                            } catch (RuntimeException e) { // covers PyException too
+                                logDiagnostic("ERROR", "record_pickup_unassigned_for_long_wait exception: "
+                                        + android.util.Log.getStackTraceString(e));
+                            }
                         }
                     }
                 }

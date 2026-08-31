@@ -1071,9 +1071,15 @@ class SmartScoreEngine:
                     samples[key]["satisfaction"].append(satisfaction)
 
         # Source 2: accept/decline decisions themselves (timeouts excluded).
+        # 'unassigned_long_wait' included here too (docs/unassign_long_wait_
+        # tracking/PRD.md ss3.3) -- at least as strong a negative signal as
+        # an active decline, since the driver forfeits real earned pay
+        # specifically to escape it. No new branch needed below: anything
+        # in this filtered set that isn't "accepted" already maps to 0.0.
         outcome_rows = self.db.conn.execute("""
             SELECT outcome, components_json FROM offer_outcomes
-            WHERE components_json IS NOT NULL AND outcome IN ('accepted', 'declined') AND is_test_data = 0
+            WHERE components_json IS NOT NULL
+                AND outcome IN ('accepted', 'declined', 'unassigned_long_wait') AND is_test_data = 0
         """).fetchall()
         for row in outcome_rows:
             try:
@@ -1971,6 +1977,45 @@ class TripManager:
                 "wait_minutes": wait_minutes,
             }
         return None
+
+    def record_pickup_unassigned_for_long_wait(self):
+        """
+        docs/unassign_long_wait_tracking/PRD.md ss3.2. Called when the
+        driver taps DoorDash's own "Yes, I want to unassign" button on its
+        "You've been waiting a while, would you like to unassign from this
+        order?" prompt -- a real, distinct action from a normal departure
+        (_evaluate_pickup, which only fires on driving OUT of the pickup
+        geofence -- an unassign usually happens while still parked there,
+        so that branch never fires) or an active Decline (which happens
+        before a pickup is ever registered at all). Previously invisible
+        to this app entirely -- see PRD ss1.2.
+
+        No-ops safely if there's no active pickup to record against.
+        Computes a real wait duration from the same self.pickup["arrived_at"]
+        timestamp _evaluate_pickup's own departure branch already uses, but
+        only if the driver had actually arrived -- an unassign before
+        arrival has no wait to report, and none is invented.
+        """
+        if not self.pickup:
+            return {"recorded": False, "reason": "no_active_pickup"}
+
+        pickup = self.pickup
+        wait_minutes = None
+        if pickup["arrived_at"] is not None:
+            wait_minutes = (time.time() - pickup["arrived_at"]) / 60.0
+
+        # Cleared immediately so it can't linger stale for the rest of the
+        # trip or be double-counted by a later, unrelated _evaluate_pickup
+        # call once GPS ticks resume.
+        self.pickup = None
+
+        return {
+            "recorded": True,
+            "restaurant_name": pickup["restaurant_name"],
+            "claimed_distance_km": pickup["claimed_distance_km"],
+            "score_snapshot_json": pickup["score_snapshot_json"],
+            "wait_minutes": wait_minutes,
+        }
 
     def _update_current_trip_phase_timestamp(self, column_name, ts):
         """
@@ -3612,6 +3657,65 @@ class DriveMonitorEngine:
             VALUES (?, ?, ?, ?, 0, 'timed_out', ?, ?, ?)
         """, (restaurant_name, payout, distance_km, smart_score, time.time(), components_json, int(is_test_data)))
         self.db.conn.commit()
+
+    def record_pickup_unassigned_for_long_wait(self):
+        """
+        docs/unassign_long_wait_tracking/PRD.md ss3.2. Wrapper matching the
+        same "DriveMonitorEngine needs its own real method, not just
+        TripManager's" pattern add_pickup already required (see that
+        method's own CRITICAL BUG FIX comment) -- TripManager.
+        record_pickup_unassigned_for_long_wait() handles the pickup state,
+        but only DriveMonitorEngine holds both self.smart_score (to feed
+        Restaurant Wait History) and self.db (to write offer_outcomes),
+        so the actual recording happens here, called directly from
+        DasherAccessibilityService's click handler.
+
+        payout is honestly left NULL (PRD ss1.5) -- add_pickup is never
+        passed the offer's real payout, and SmartScoreEngine.calculate()'s
+        return dict has no raw payout key either (only derived rates), so
+        there's no real value to store here, not even a stale/guessed one.
+        """
+        result = self.trip_manager.record_pickup_unassigned_for_long_wait()
+        if not result["recorded"]:
+            return json.dumps(result)
+
+        if result["wait_minutes"] is not None:
+            self.smart_score.record_restaurant_wait(result["restaurant_name"], result["wait_minutes"])
+
+        # smart_score/components_json extracted from the full snapshot
+        # add_pickup was given at accept-time (see calculate()'s return
+        # dict) -- same "components" sub-object shape record_offer_outcome/
+        # record_offer_timeout's components_json already uses, extracted
+        # here since, unlike those two, there's no separate Java-side
+        # lastSeenComponentsJson available for this path (this fires long
+        # after the offer-pending window that field is scoped to).
+        smart_score_value = None
+        components_json = None
+        if result["score_snapshot_json"]:
+            try:
+                snapshot = json.loads(result["score_snapshot_json"])
+                smart_score_value = snapshot.get("final_score")
+                components = snapshot.get("components")
+                if components is not None:
+                    components_json = json.dumps(components)
+            except (ValueError, TypeError):
+                pass
+
+        self.db.conn.execute("""
+            INSERT INTO offer_outcomes
+                (restaurant_name, payout, distance_km, smart_score, accepted, outcome, timestamp, components_json, is_test_data)
+            VALUES (?, NULL, ?, ?, 0, 'unassigned_long_wait', ?, ?, 0)
+        """, (
+            result["restaurant_name"], result["claimed_distance_km"], smart_score_value,
+            time.time(), components_json,
+        ))
+        self.db.conn.commit()
+
+        return json.dumps({
+            "recorded": True,
+            "restaurant_name": result["restaurant_name"],
+            "wait_minutes": result["wait_minutes"],
+        })
 
     def get_acceptance_stats(self):
         """
