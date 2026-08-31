@@ -817,8 +817,20 @@ class SmartScoreEngine:
         # API key is configured and a fresh result exists -- see
         # _get_traffic_risk -- else falls back to the personalized
         # historical-speed proxy, else the generic lunch/dinner guess)
+        #
+        # CONFIRMED REAL BUG, fixed here (docs/math_calculation_audit/):
+        # this was inverted since the initial commit -- it awarded the
+        # MAXIMUM score (100) when is_high_risk was True (heavier traffic/
+        # a historically slower period) and a LOWER score (70) when risk
+        # was low. Every other factor in this function scores the bad
+        # condition lower (deadhead_score, wait_score, weather_score all
+        # fall as their real-world condition worsens); this one did the
+        # opposite, actively rewarding offers timed during worse traffic.
+        # _synthesize_verdict already treated "High" risk as a downside
+        # ("heavier traffic than usual") -- the label and the number
+        # disagreed with each other.
         is_high_risk, traffic_risk_source = self._get_traffic_risk(hour_24, current_lat, current_lon)
-        time_score = 100.0 if is_high_risk else 70.0
+        time_score = 70.0 if is_high_risk else 100.0
 
         # Weather (real, via Open-Meteo -- see WeatherHelper.java). Simple
         # heuristic: heavy rain / high wind reduce the score. Neutral 100
@@ -1780,6 +1792,16 @@ class TripManager:
         # empirically checked against what really happened -- rather than
         # guessing whether that figure includes deadhead or not.
         self._cumulative_distance_km = 0.0
+        # CONFIRMED REAL BUG, fixed here (docs/deadhead_stacked_order_baseline/
+        # PRD.md): deadhead used to be read straight off _cumulative_distance_km
+        # at arrival, with no baseline -- correct for a fresh trip (baseline is
+        # always 0 there), but for a pickup added mid-trip (a stacked/batch
+        # order -- this app supports them, see MessageIntelligence's per-stop
+        # matching), that raw total includes every km already driven earlier in
+        # the SAME trip for a different pickup. _distance_at_departure_km just
+        # below already does this correctly for the delivery leg; this mirrors
+        # that same baseline-then-subtract pattern for the deadhead leg too.
+        self._deadhead_baseline_km = 0.0        # snapshot at add_pickup
         self._deadhead_distance_km = None       # snapshot at pickup arrival
         self._distance_at_departure_km = None   # snapshot at pickup departure
         self._departure_timestamp = None        # real-clock time at departure
@@ -1871,6 +1893,13 @@ class TripManager:
             "deadline_text": deadline_text,
             "address": address,
         }
+        # Baseline for THIS pickup's deadhead leg -- see __init__'s
+        # _deadhead_baseline_km comment for the real bug this closes. For a
+        # fresh trip this is 0.0 (matching prior behavior exactly); for a
+        # stacked/batch order added mid-trip, this is whatever distance was
+        # already driven for an earlier pickup in the same trip, so it can be
+        # subtracted back out at arrival instead of counted twice.
+        self._deadhead_baseline_km = self._cumulative_distance_km
         self._deadhead_distance_km = None
         self._distance_at_departure_km = None
         self._departure_timestamp = None
@@ -1923,7 +1952,11 @@ class TripManager:
 
         if within_geofence and self.pickup["arrived_at"] is None:
             self.pickup["arrived_at"] = ts
-            self._deadhead_distance_km = self._cumulative_distance_km
+            # Isolated leg (this pickup's own deadhead), not the trip's raw
+            # cumulative total -- see add_pickup's _deadhead_baseline_km
+            # comment. Same shape _distance_at_departure_km/actual_delivery_km
+            # already use for the delivery leg.
+            self._deadhead_distance_km = self._cumulative_distance_km - self._deadhead_baseline_km
             self._update_current_trip_phase_timestamp("pickup_arrival_ts", ts)
             return None
 
@@ -1948,10 +1981,21 @@ class TripManager:
         real column names (never user input), so this is safe despite
         the f-string.
         """
-        self.db.conn.execute(
+        cursor = self.db.conn.execute(
             f"UPDATE trips SET {column_name} = ? WHERE end_time IS NULL", (ts,)
         )
         self.db.conn.commit()
+        # CONFIRMED REAL GAP, fixed here (silent-failure audit): this write
+        # had ZERO diagnostic trace -- unlike every other phase-timestamp
+        # write in this file (dropoff_arrival_ts/walking_confirmed_ts just
+        # below both already set _last_phase_capture_log, same for the
+        # text-column writer right after this method), this one -- used for
+        # pickup_arrival_ts AND pickup_departure_ts, the two phase
+        # timestamps docs/deadhead_stacked_order_baseline/PRD.md ss7 already
+        # flagged as the riskiest (no IS NULL guard, last-wins) -- gave no
+        # way to confirm from the log whether it actually hit a row.
+        if cursor.rowcount > 0:
+            self._last_phase_capture_log = f"Captured {column_name} = {ts}"
 
     def _update_current_trip_text_column(self, column_name, value):
         """
@@ -2082,6 +2126,7 @@ class TripManager:
         self._cached_accel_threshold, self._cached_brake_threshold, _, _ = (
             self._learned_accel_brake_thresholds()
         )
+        self._deadhead_baseline_km = 0.0
         self._deadhead_distance_km = None
         self._distance_at_departure_km = None
         self._departure_timestamp = None
