@@ -33,7 +33,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Vibrate for accept/decline suggestion (v3.2 roadmap) -->
+    <!-- Vibrate cues for the Smart Score label (Excellent/Good/Fair/Poor),
+         implemented in HapticFeedback.vibrateForLabel. Stale comment fixed
+         2026-08-23: this previously said "(v3.2 roadmap)" as if unbuilt,
+         same staleness class as the fuel-cost README bullet. -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- Floating overlay bubble for arrival instructions (Zero Interaction While Driving) -->
@@ -58,6 +61,16 @@
          PermissionsActivity), so on Android 13+ this may need to be
          granted manually via system Settings until that's built. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Required so the auto-launch-Dasher-for-a-new-offer notification
+         (AppNotificationListenerService.launchDasherApp) can reliably
+         start Dasher's Activity from this background service via
+         setFullScreenIntent(), one of Android's real Background
+         Activity Launch exemptions, unlike a bare startActivity() call.
+         On Android 14+ the user can revoke this in Settings, in which
+         case it falls back to a normal tappable notification instead of
+         auto-launching; see launchDasherApp's honesty note. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
     <application
         android:name=".DasherMonitorApplication"

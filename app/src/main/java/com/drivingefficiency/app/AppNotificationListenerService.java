@@ -1,7 +1,11 @@
 package com.drivingefficiency.app;
 
 import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -421,19 +425,36 @@ public class AppNotificationListenerService extends NotificationListenerService 
         });
     }
 
+    private static final String AUTO_LAUNCH_CHANNEL_ID = "dasher_auto_launch_channel";
+    private static final int AUTO_LAUNCH_NOTIFICATION_ID = 9200;
+
     /**
-     * Brings Dasher to the foreground automatically -- called for any
-     * offer except "Poor" (see handleDasherNotification). Uses
-     * FLAG_ACTIVITY_NEW_TASK since this launches from a service context,
-     * not an Activity. Logged explicitly either way (success or Dasher
-     * simply not being installed/launchable) so this is verifiable
-     * after the fact, not a silent action -- including an honest
-     * approximation of whether this was likely a resume or a cold
-     * restart (see DasherAccessibilityService.lastDasherForegroundMs's
-     * own honesty note: Android doesn't allow directly checking whether
-     * a DIFFERENT app's process is actually still alive in the
-     * background, so this is the closest available signal, not a
-     * certainty).
+     * Requests that Dasher be brought to the foreground automatically --
+     * called for any offer except "Poor" (see handleDasherNotification).
+     *
+     * REAL BUG FIX, confirmed via a real diagnostic log: this used to call
+     * startActivity() directly from this NotificationListenerService.
+     * Since Android 10, starting an Activity from a background service
+     * context is subject to Background Activity Launch (BAL) restrictions
+     * -- the OS can silently drop the call with no exception thrown, so
+     * the old "Brought Dasher to foreground" log line only ever proved
+     * this method didn't crash, not that Dasher actually appeared on
+     * screen. A real log showed two AUTO_LAUNCH calls fire cleanly, yet
+     * DasherAccessibilityService never logged a single MODE/EVENT_DEBUG/
+     * NODE_SCAN line for the rest of that session -- Dasher's own screen
+     * was never actually read, meaning the on-screen Smart Score badge
+     * never got a chance to compute or show either.
+     *
+     * Fix: post a high-priority notification with setFullScreenIntent(),
+     * the same documented mechanism incoming-call and alarm apps use to
+     * reliably launch an Activity from the background (including over the
+     * lock screen) -- one of Android's actual BAL exemptions, unlike a
+     * bare startActivity() call. Requires USE_FULL_SCREEN_INTENT (see
+     * manifest). HONESTY NOTE: on Android 14+ this permission can be
+     * revoked by the user (Settings), in which case Android falls back to
+     * a normal heads-up notification the user must tap themselves rather
+     * than launching automatically -- still strictly better than the
+     * previous silent-drop failure mode, but not a 100% guarantee either.
      */
     private void launchDasherApp(String restaurantName, double finalScore) {
         try {
@@ -443,6 +464,60 @@ public class AppNotificationListenerService extends NotificationListenerService 
                         + DASHER_PACKAGE);
                 return;
             }
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+
+            // Explicit request: bring Dasher to the foreground automatically
+            // again, the way it did before the BAL restriction was
+            // discovered -- not just a notification the driver has to tap.
+            //
+            // showOfferOverlayFallback() is called FIRST, before the direct
+            // startActivity() attempt below, specifically so its
+            // SYSTEM_ALERT_WINDOW overlay window is genuinely on screen
+            // by the time startActivity() runs: an app currently showing a
+            // visible overlay window is one of Android's real Background
+            // Activity Launch exemptions, unlike the plain background
+            // service context the original bare startActivity() call ran
+            // from (see commit 2719d00's honesty note on why that one was
+            // silently dropped). This wasn't available before, since no
+            // overlay window existed at the moment of that original call.
+            //
+            // HONESTY NOTE: a blocked BAL launch fails SILENTLY -- no
+            // exception, same as before -- so this can't actually confirm
+            // whether the direct switch worked, only that it was attempted
+            // under a condition where it plausibly can now succeed. The
+            // full-screen-intent notification below still runs regardless,
+            // as a second, independent mechanism (reliable when locked),
+            // and the overlay's own tap-to-open remains a manual fallback
+            // if both automatic paths are blocked on a given device/OS
+            // version.
+            showOfferOverlayFallback(restaurantName, finalScore, launchIntent);
+            try {
+                startActivity(launchIntent);
+                logDiagnostic("AUTO_LAUNCH", "Attempted direct foreground launch for offer (" + restaurantName
+                        + ") while an overlay window was active -- not confirmable whether it actually "
+                        + "switched to Dasher, see class docs");
+            } catch (RuntimeException e) {
+                logDiagnostic("AUTO_LAUNCH", "Direct foreground launch attempt failed/blocked for offer ("
+                        + restaurantName + "): " + e.getClass().getSimpleName()
+                        + " -- falling back to full-screen-intent notification + overlay tap");
+            }
+
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager == null) {
+                logDiagnostic("AUTO_LAUNCH", "Could not launch Dasher -- NotificationManager unavailable");
+                return;
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                NotificationChannel channel = new NotificationChannel(AUTO_LAUNCH_CHANNEL_ID,
+                        "Auto-Launch Dasher for Offers", NotificationManager.IMPORTANCE_HIGH);
+                channel.setDescription("Brings Dasher to the foreground the moment a new offer is detected");
+                manager.createNotificationChannel(channel);
+            }
+
+            PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(
+                    this, restaurantName.hashCode(), launchIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
             long lastSeenMs = DasherAccessibilityService.lastDasherForegroundMs;
             String recencyNote;
             if (lastSeenMs == 0) {
@@ -455,14 +530,69 @@ public class AppNotificationListenerService extends NotificationListenerService 
                 recencyNote = "Dasher last seen in foreground " + agoLabel
                         + " (approximation only, not a certainty -- see class docs)";
             }
-            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(launchIntent);
             String scoreNote = finalScore >= 0 ? ", score " + Math.round(finalScore) : " (no score available)";
-            logDiagnostic("AUTO_LAUNCH", "Brought Dasher to foreground for offer (" + restaurantName
-                    + scoreNote + ") -- " + recencyNote);
+
+            Notification notification = new Notification.Builder(this, AUTO_LAUNCH_CHANNEL_ID)
+                    .setContentTitle("New offer: " + restaurantName)
+                    .setContentText("Opening Dasher" + scoreNote)
+                    .setSmallIcon(android.R.drawable.ic_menu_directions)
+                    .setPriority(Notification.PRIORITY_HIGH)
+                    .setCategory(Notification.CATEGORY_CALL)
+                    .setFullScreenIntent(fullScreenPendingIntent, true)
+                    .setContentIntent(fullScreenPendingIntent)
+                    .setAutoCancel(true)
+                    .build();
+            manager.notify(AUTO_LAUNCH_NOTIFICATION_ID, notification);
+            logDiagnostic("AUTO_LAUNCH", "Requested Dasher foreground via full-screen-intent notification for offer ("
+                    + restaurantName + scoreNote + ") -- " + recencyNote);
         } catch (RuntimeException e) {
             logDiagnostic("ERROR", "launchDasherApp exception: " + android.util.Log.getStackTraceString(e));
         }
+    }
+
+    private static final long OFFER_OVERLAY_AUTO_DISMISS_MS = 20 * 1000;
+
+    /**
+     * PREMORTEM FIX: setFullScreenIntent() above only truly auto-launches
+     * Dasher's Activity when the device is LOCKED -- confirmed Android
+     * platform behavior since Android 10. If the screen is already on and
+     * unlocked (the normal state while actively navigating with Maps/Waze
+     * open, phone mounted -- arguably the MOST common real driving
+     * scenario, not an edge case), the system downgrades it to a regular
+     * heads-up banner that still needs a manual tap. That would silently
+     * defeat the whole point of auto-launch ("the offer itself can
+     * disappear before you manually switch back to look") in exactly the
+     * situation it exists for.
+     *
+     * This overlay is a genuinely hands-free fallback that doesn't depend
+     * on lock state at all: SYSTEM_ALERT_WINDOW draws directly on top of
+     * whatever's currently on screen (already granted -- same permission
+     * OverlayHelper's status dot and Smart Score badge rely on), so the
+     * restaurant name and score are visible immediately regardless of
+     * whether the full-screen intent above actually fired or degraded.
+     * Tapping it launches Dasher directly -- a real user tap on our own
+     * window is a recognized BAL exemption, unlike the bare startActivity()
+     * call this whole fix replaced.
+     *
+     * HONESTY NOTE: like every other overlay in this app, this silently
+     * never appears at all if SYSTEM_ALERT_WINDOW was never granted --
+     * same caveat as OverlayHelper's own class doc.
+     */
+    private void showOfferOverlayFallback(String restaurantName, double finalScore, Intent launchIntent) {
+        String scoreLine = finalScore >= 0
+                ? String.format("Smart Score: %.0f/100", finalScore)
+                : "Open Dasher for details";
+        String message = "📦 New Offer: " + restaurantName + "\n" + scoreLine + "\n(tap to open Dasher)";
+        OverlayHelper.showMessage(this, message, OFFER_OVERLAY_AUTO_DISMISS_MS,
+                android.graphics.Color.parseColor("#CC1565C0"),
+                () -> {
+                    try {
+                        startActivity(launchIntent);
+                    } catch (RuntimeException e) {
+                        logDiagnostic("ERROR", "Offer overlay tap-to-launch exception: "
+                                + android.util.Log.getStackTraceString(e));
+                    }
+                });
     }
 
     /**

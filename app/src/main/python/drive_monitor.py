@@ -108,6 +108,33 @@ HARSH_ACCEL_MS2 = 2.5
 HARSH_BRAKE_MS2 = -2.5
 DEFAULT_SPEED_LIMIT_KMH = 60
 
+# UNCONFIRMED placeholder, same honesty status as every other threshold
+# guess in this file -- how many standard deviations from YOUR OWN mean
+# per-tick acceleration counts as "harsh" for you specifically, once a
+# personal mean/std can actually be computed (see
+# TripManager._record_accel_sample_in_memory / _learned_accel_brake_thresholds).
+ACCEL_BRAKE_STD_MULTIPLIER = 2.5
+# Deliberately much higher than the 5-trip thresholds used for deadhead/
+# wait-time/delivery-speed/peak-hour learning elsewhere in this file --
+# those are per-TRIP aggregates; this is per-GPS-TICK samples (many per
+# trip), so meaningfully estimating a personal accel/brake distribution
+# needs a lot more raw data points before it's trustworthy.
+ACCEL_BRAKE_MIN_SAMPLES_TO_LEARN = 300
+# Floor so a driver with an unusually smooth/uniform early sample (small
+# std by chance, not by true driving style) doesn't get a hypersensitive
+# threshold that flags ordinary driving as harsh.
+ACCEL_BRAKE_MIN_THRESHOLD_MS2 = 1.5
+
+# UNCONFIRMED placeholder -- the original flat-rate fuel cost estimate
+# ($0.12/km), kept as the fallback for a driver who hasn't entered their
+# own vehicle's real fuel efficiency/price (see
+# DriveMonitorEngine.get_fuel_cost_settings/set_fuel_cost_settings). This
+# is NOT learned from anything -- there's no real telemetry signal for
+# actual fuel spend the way there is for deadhead/wait-time/accel-brake,
+# so unlike those, this can only ever be as accurate as what the driver
+# tells it, never automatically improved from driving data alone.
+DEFAULT_FUEL_COST_PER_KM = 0.12
+
 STOPS_BUFFER_MAX = 10
 STOPS_BUFFER_TTL_SECONDS = 24 * 60 * 60
 
@@ -283,10 +310,39 @@ class Database:
             sample_count INTEGER
         );
 
+        -- Running Welford's-algorithm mean/variance of every real per-tick
+        -- acceleration sample (m/s^2, signed -- both accel and brake are
+        -- just the two tails of one distribution), not just ones that
+        -- already crossed the fixed HARSH_ACCEL_MS2/HARSH_BRAKE_MS2
+        -- thresholds -- learning from only-already-harsh events would be
+        -- circular. mean_squared_diff is Welford's M2 accumulator, not a
+        -- variance itself (divide by sample_count to get variance -- see
+        -- TripManager._learned_accel_brake_thresholds).
+        CREATE TABLE IF NOT EXISTS accel_dynamics_history (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            sample_count INTEGER,
+            mean_accel_ms2 REAL,
+            mean_squared_diff REAL
+        );
+
         CREATE TABLE IF NOT EXISTS park_to_walk_gap_history (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             avg_gap_seconds REAL,
             sample_count INTEGER
+        );
+
+        -- Driver-entered, not learned (see DEFAULT_FUEL_COST_PER_KM's
+        -- comment) -- NULL/absent means "not configured yet," in which
+        -- case the flat DEFAULT_FUEL_COST_PER_KM estimate is used
+        -- instead. Runtime-editable at any time (same as the Google Maps
+        -- API key and RoadWarrior package override) via
+        -- DriveMonitorEngine.set_fuel_cost_settings -- never hardcoded
+        -- once set, and can be changed again later if fuel prices move
+        -- or the vehicle changes.
+        CREATE TABLE IF NOT EXISTS fuel_cost_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            fuel_efficiency_l_per_100km REAL,
+            fuel_price_per_liter REAL
         );
 
         CREATE TABLE IF NOT EXISTS diagnostic_log (
@@ -748,8 +804,14 @@ class SmartScoreEngine:
         deadhead_score = max(0.0, 100.0 - (deadhead_km * 10.0))
 
         # Restaurant wait / pickup friction (avg 3 min == 100, 15+ min == 0)
+        # Confirmed real bug, fixed here: unlike base_score/hourly_score
+        # just above (both min(100.0, ...)-clamped) or deadhead_score/
+        # weather_score (bounded 0-100 by construction), this had no upper
+        # clamp -- an average wait under 3 minutes (a fast, real, common
+        # pickup) pushed wait_score, and therefore final_score, above the
+        # documented 0-100 scale (e.g. avg_wait=0 -> 124).
         avg_wait, wait_samples, wait_is_restaurant_specific = self._restaurant_wait_info(restaurant_name)
-        wait_score = max(0.0, 100.0 - ((avg_wait - 3.0) * 8.0))
+        wait_score = max(0.0, min(100.0, 100.0 - ((avg_wait - 3.0) * 8.0)))
 
         # Time of day / traffic (prefers real live traffic if a Google Maps
         # API key is configured and a fresh result exists -- see
@@ -1640,6 +1702,23 @@ class TripManager:
         self.trip_id = None
         self._last_partial_save_ts = 0.0
 
+        # In-memory Welford's-algorithm accel-sample accumulators for THIS
+        # trip only -- deliberately NOT written to the DB per GPS tick
+        # (unlike self.events above, which is also in-memory-only until
+        # trip end): GPS updates arrive as often as 1/sec while driving
+        # (see TripForegroundService.GPS_INTERVAL_MOVING_MS), and nothing
+        # else in this class does a DB write on every single tick. Merged
+        # into the persisted accel_dynamics_history table once, at trip
+        # end (see _merge_accel_samples_into_history), same one-write-per-
+        # trip cost as the rest of trip persistence.
+        self._trip_accel_count = 0
+        self._trip_accel_mean = 0.0
+        self._trip_accel_m2 = 0.0
+        # Loaded once per trip (see _start_trip), not re-queried every
+        # tick -- same reasoning as above.
+        self._cached_accel_threshold = HARSH_ACCEL_MS2
+        self._cached_brake_threshold = HARSH_BRAKE_MS2
+
         # Dedicated to walking detection specifically -- separate from
         # _parked_since above (which exists for major-delay logging and
         # gets cleared the instant speed ticks up even slightly, so it
@@ -1879,7 +1958,15 @@ class TripManager:
         # completely silent -- consumed by DriveMonitorEngine.on_gps_update
         # to log it, since TripManager has no direct access to
         # log_diagnostic itself.
-        self._last_phase_capture_log = f"Captured {column_name} = {ts}"
+        #
+        # Confirmed real bug, fixed here: this referenced `ts`, a
+        # copy-paste leftover from _update_current_trip_phase_timestamp
+        # just above (which has a real `ts` parameter) -- this method has
+        # no such variable, so every real call raised
+        # NameError: name 'ts' is not defined, crashing
+        # update_pickup_address mid-geocode-callback on a real device
+        # (confirmed via a real diagnostic log, 2026-08-22 16:45:11).
+        self._last_phase_capture_log = f"Captured {column_name} = {value}"
 
     def get_mode(self):
         """
@@ -1975,6 +2062,14 @@ class TripManager:
         self._last_message_cutoff = ts
         self._trip_mode = self.get_mode()
         self._cumulative_distance_km = 0.0
+        self._trip_accel_count = 0
+        self._trip_accel_mean = 0.0
+        self._trip_accel_m2 = 0.0
+        # One DB read per trip, not per tick -- see the attribute comment
+        # in __init__.
+        self._cached_accel_threshold, self._cached_brake_threshold, _, _ = (
+            self._learned_accel_brake_thresholds()
+        )
         self._deadhead_distance_km = None
         self._distance_at_departure_km = None
         self._departure_timestamp = None
@@ -2023,18 +2118,98 @@ class TripManager:
             return
         dv_ms = (speed_kmh - last_speed) * (1000.0 / 3600.0)
         accel = dv_ms / dt
-        if accel > HARSH_ACCEL_MS2:
+        # Personalized once enough real samples exist -- see
+        # _learned_accel_brake_thresholds. Uses the threshold cached at
+        # _start_trip, not re-queried per tick (see __init__'s comment on
+        # _cached_accel_threshold).
+        if accel > self._cached_accel_threshold:
             self._log_event("harsh_accel", lat, lon, ts, accel)
-        elif accel < HARSH_BRAKE_MS2:
+        elif accel < self._cached_brake_threshold:
             self._log_event("harsh_brake", lat, lon, ts, accel)
         if speed_kmh > DEFAULT_SPEED_LIMIT_KMH:
             self._log_event("speeding", lat, lon, ts, speed_kmh)
+        self._record_accel_sample_in_memory(accel)
 
     def _log_event(self, event_type, lat, lon, ts, magnitude):
         self.events.append({
             "event_type": event_type, "lat": lat, "lon": lon,
             "timestamp": ts, "magnitude": magnitude,
         })
+
+    def _record_accel_sample_in_memory(self, accel):
+        """
+        Welford's online algorithm, updated in memory only (see __init__'s
+        comment on why this never writes to the DB per tick) -- folds
+        every real per-tick accel sample into THIS trip's running mean/M2,
+        regardless of whether it crossed the harsh threshold. Learning a
+        personal baseline from only-already-harsh samples would be
+        circular: the current threshold would gate what data the next
+        threshold gets learned from, never converging on your actual
+        normal driving distribution.
+        """
+        self._trip_accel_count += 1
+        delta = accel - self._trip_accel_mean
+        self._trip_accel_mean += delta / self._trip_accel_count
+        delta2 = accel - self._trip_accel_mean
+        self._trip_accel_m2 += delta * delta2
+
+    def _learned_accel_brake_thresholds(self):
+        """
+        Returns (harsh_accel_ms2, harsh_brake_ms2, sample_count,
+        is_learned). Falls back to the fixed HARSH_ACCEL_MS2/
+        HARSH_BRAKE_MS2 defaults until ACCEL_BRAKE_MIN_SAMPLES_TO_LEARN
+        real per-tick accel samples have been recorded across all trips
+        (see _merge_accel_samples_into_history) -- same "start generic,
+        replace with a real personal baseline once there's enough data"
+        pattern as deadhead/wait-time/delivery-speed/peak-hour, just at
+        per-tick rather than per-trip granularity, so it needs a much
+        larger sample count (ACCEL_BRAKE_MIN_SAMPLES_TO_LEARN) before
+        it's trustworthy.
+        """
+        row = self.db.conn.execute(
+            "SELECT sample_count, mean_accel_ms2, mean_squared_diff FROM accel_dynamics_history WHERE id = 1"
+        ).fetchone()
+        sample_count = row["sample_count"] if row and row["sample_count"] else 0
+        if sample_count < ACCEL_BRAKE_MIN_SAMPLES_TO_LEARN:
+            return HARSH_ACCEL_MS2, HARSH_BRAKE_MS2, sample_count, False
+
+        variance = row["mean_squared_diff"] / sample_count
+        std = variance ** 0.5
+        mean = row["mean_accel_ms2"]
+        accel_threshold = max(ACCEL_BRAKE_MIN_THRESHOLD_MS2, mean + ACCEL_BRAKE_STD_MULTIPLIER * std)
+        brake_threshold = min(-ACCEL_BRAKE_MIN_THRESHOLD_MS2, mean - ACCEL_BRAKE_STD_MULTIPLIER * std)
+        return accel_threshold, brake_threshold, sample_count, True
+
+    def _merge_accel_samples_into_history(self):
+        """
+        Folds this trip's in-memory accel Welford summary into the
+        persisted cross-trip one -- ONE DB read + ONE DB write, at trip
+        end, not per tick (see __init__'s comment). Uses Chan et al.'s
+        parallel-variance combine formula to merge two independent
+        Welford summaries (this trip's, and everything before it) into
+        one, rather than needing every individual raw sample.
+        """
+        if self._trip_accel_count == 0:
+            return
+        row = self.db.conn.execute(
+            "SELECT sample_count, mean_accel_ms2, mean_squared_diff FROM accel_dynamics_history WHERE id = 1"
+        ).fetchone()
+        if row and row["sample_count"]:
+            count_a, mean_a, m2_a = row["sample_count"], row["mean_accel_ms2"], row["mean_squared_diff"]
+            count_b, mean_b, m2_b = self._trip_accel_count, self._trip_accel_mean, self._trip_accel_m2
+            count = count_a + count_b
+            delta = mean_b - mean_a
+            mean = mean_a + delta * count_b / count
+            m2 = m2_a + m2_b + (delta ** 2) * count_a * count_b / count
+        else:
+            count, mean, m2 = self._trip_accel_count, self._trip_accel_mean, self._trip_accel_m2
+        self.db.conn.execute("""
+            INSERT INTO accel_dynamics_history (id, sample_count, mean_accel_ms2, mean_squared_diff)
+            VALUES (1, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET sample_count = excluded.sample_count,
+                mean_accel_ms2 = excluded.mean_accel_ms2, mean_squared_diff = excluded.mean_squared_diff
+        """, (count, mean, m2))
+        self.db.conn.commit()
 
     def _detect_major_delay(self, speed_kmh, ts, lat, lon):
         """
@@ -2465,6 +2640,7 @@ class TripManager:
     def _end_trip(self, ts):
         summary = self._compute_summary(ts)
         delivery_speed_event = self._persist_trip(summary)
+        self._merge_accel_samples_into_history()
         self.state = self.STATE_IDLE
         self._above_start_speed_since = None
         self._below_stop_speed_since = None
@@ -2515,7 +2691,7 @@ class TripManager:
         safety_score = self._safety_score(distance_km)
         geofence_ratio = self._geofence_hit_ratio()
         composite = round(0.4 * time_eff_score + 0.3 * safety_score + 0.3 * geofence_ratio, 1)
-        fuel_cost = round(distance_km * 0.12, 2)  # simple $/km estimate
+        fuel_cost = round(distance_km * self._get_fuel_cost_per_km(), 2)
 
         return {
             "start_time": self.gps_points[0][3] if self.gps_points else end_ts,
@@ -2530,6 +2706,25 @@ class TripManager:
             "composite_score": composite,
             "fuel_cost_estimate": fuel_cost,
         }
+
+    def _get_fuel_cost_per_km(self):
+        """
+        Returns the current effective $/km fuel cost rate. If the driver
+        has entered their own vehicle's real fuel efficiency AND fuel
+        price (see DriveMonitorEngine.set_fuel_cost_settings), computes a
+        real vehicle-specific rate from those; otherwise falls back to
+        the original flat DEFAULT_FUEL_COST_PER_KM guess. Unlike
+        deadhead/wait-time/accel-brake, this can never be learned purely
+        from driving data -- there's no real telemetry signal for actual
+        fuel spend, only what the driver tells it, so "learned" here
+        means "driver-configured," not "observed."
+        """
+        row = self.db.conn.execute(
+            "SELECT fuel_efficiency_l_per_100km, fuel_price_per_liter FROM fuel_cost_settings WHERE id = 1"
+        ).fetchone()
+        if not row or not row["fuel_efficiency_l_per_100km"] or not row["fuel_price_per_liter"]:
+            return DEFAULT_FUEL_COST_PER_KM
+        return (row["fuel_efficiency_l_per_100km"] / 100.0) * row["fuel_price_per_liter"]
 
     def _estimate_distance_km(self):
         return self._cumulative_distance_km
@@ -3140,14 +3335,15 @@ class DriveMonitorEngine:
         All default to None (skippable) since forcing every category on
         every trip would be more friction than the data is worth.
 
-        NOTE ON SCOPE: this collects the data, which is the real
-        prerequisite for ever calibrating the Smart Score's weights
-        against genuine outcomes instead of the fixed values currently
-        used (see get_feedback_summary) -- but it does NOT yet feed back
-        into scoring automatically. That's a larger, separate step:
-        deciding HOW past feedback should adjust future weights needs
-        enough real data first to do meaningfully, not from day one with
-        a handful of ratings.
+        NOTE ON SCOPE: this collects the data, which recalculate_personal_
+        calibration (see below, called right after this by the caller)
+        DOES feed back into scoring automatically via
+        SmartScoreEngine._get_calibrated_weights -- bounded, and gated on
+        a minimum sample count so a handful of early ratings can't swing
+        future weights too far. (Previously this docstring said that
+        feedback loop wasn't built yet -- it was, but unreachable from a
+        real feedback submission due to a missing wrapper method, see
+        recalculate_personal_calibration's own comment.)
         """
         self.db.conn.execute("""
             INSERT INTO trip_feedback
@@ -3166,13 +3362,100 @@ class DriveMonitorEngine:
               merchant_wait_rating, customer_rating, overall_rating, time.time()))
         self.db.conn.commit()
 
+    def recalculate_personal_calibration(self):
+        """
+        CRITICAL BUG FIX, same class as add_pickup's (see its own comment
+        above): this wrapper was completely missing from DriveMonitorEngine
+        -- only SmartScoreEngine had recalculate_personal_calibration.
+        Every real call from Java (MainActivity's showFeedbackDialog, right
+        after save_trip_feedback succeeds) threw AttributeError, caught by
+        the surrounding try/catch, which then wrongly toasted "Could not
+        save feedback" even though the rating HAD already been saved --
+        and skipped the parking-difficulty-feedback and
+        clear_last_parking_gap_for_feedback calls after it in the same try
+        block, since Java aborts the rest of a try on an uncaught throw.
+        Net effect: the whole personal-calibration learning loop this
+        method exists for has likely never actually run from a real
+        feedback submission, despite testing correctly against
+        SmartScoreEngine directly. Found by tracing the real call path
+        instead of assuming it worked because the underlying logic did.
+        """
+        return self.smart_score.recalculate_personal_calibration()
+
+    def get_last_parking_gap_for_feedback(self):
+        """
+        Same missing-wrapper bug as recalculate_personal_calibration above
+        -- only TripManager had this. Its caller (showFeedbackDialog)
+        already guards this specific call in its own try/catch and falls
+        back to a plain "Parking" label, so this failure was silent rather
+        than misleading -- but it meant the measured-park-to-walk-duration
+        context label never actually showed, and finalPendingParkingRestaurant
+        stayed null every time, so record_parking_difficulty_feedback was
+        never reachable either.
+        """
+        return self.trip_manager.get_last_parking_gap_for_feedback()
+
+    def clear_last_parking_gap_for_feedback(self):
+        """Same missing-wrapper bug as the two methods above."""
+        return self.trip_manager.clear_last_parking_gap_for_feedback()
+
+    def get_fuel_cost_settings(self):
+        """
+        Current fuel cost configuration -- called to pre-fill the settings
+        screen, and to show the currently-effective $/km rate whether or
+        not the driver has entered real values yet (see
+        set_fuel_cost_settings). Directly on DriveMonitorEngine, not just
+        TripManager -- same lesson as add_pickup/recalculate_personal_
+        calibration/the two parking-gap methods above, all previously
+        broken by exactly this mistake.
+        """
+        row = self.db.conn.execute(
+            "SELECT fuel_efficiency_l_per_100km, fuel_price_per_liter FROM fuel_cost_settings WHERE id = 1"
+        ).fetchone()
+        configured = bool(row and row["fuel_efficiency_l_per_100km"] and row["fuel_price_per_liter"])
+        return json.dumps({
+            "configured": configured,
+            "fuel_efficiency_l_per_100km": row["fuel_efficiency_l_per_100km"] if row else None,
+            "fuel_price_per_liter": row["fuel_price_per_liter"] if row else None,
+            "effective_cost_per_km": round(self.trip_manager._get_fuel_cost_per_km(), 4),
+        })
+
+    def set_fuel_cost_settings(self, fuel_efficiency_l_per_100km, fuel_price_per_liter):
+        """
+        Saves the driver's real vehicle fuel efficiency (L/100km) and
+        current fuel price ($/L), replacing the flat
+        DEFAULT_FUEL_COST_PER_KM guess with distance_km *
+        (efficiency/100) * price for every future trip's fuel_cost_estimate
+        -- see TripManager._get_fuel_cost_per_km.
+
+        Explicitly overwritable at any time -- fuel prices change, and a
+        driver could change vehicles -- there's no reason this should ever
+        be a one-time, unchangeable setting. Pass 0 or None for either
+        value to clear it back to "not configured" (falls back to the
+        flat default again) rather than silently keeping a stale value.
+        """
+        efficiency = fuel_efficiency_l_per_100km if fuel_efficiency_l_per_100km and fuel_efficiency_l_per_100km > 0 else None
+        price = fuel_price_per_liter if fuel_price_per_liter and fuel_price_per_liter > 0 else None
+        self.db.conn.execute("""
+            INSERT INTO fuel_cost_settings (id, fuel_efficiency_l_per_100km, fuel_price_per_liter)
+            VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET fuel_efficiency_l_per_100km = excluded.fuel_efficiency_l_per_100km,
+                fuel_price_per_liter = excluded.fuel_price_per_liter
+        """, (efficiency, price))
+        self.db.conn.commit()
+
     def get_feedback_summary(self):
         """
         Aggregate view of your own ratings vs. what the Smart Score
         predicted for the same trips -- the first step toward answering
-        "does the score actually track what I think is a good delivery,"
-        though (see save_trip_feedback) using this to actually adjust
-        the weights is still a separate, not-yet-built step.
+        "does the score actually track what I think is a good delivery."
+        UPDATED: recalculate_personal_calibration (see above, now fixed)
+        DOES adjust the weights SmartScoreEngine.calculate() actually uses,
+        via _get_calibrated_weights -- this docstring previously called
+        that "a separate, not-yet-built step," which was accidentally true
+        in practice (the wrapper bug above meant it silently never ran),
+        but wrong about intent: the mechanism was already built, just
+        unreachable from a real feedback submission until now.
         """
         rows = self.db.conn.execute("""
             SELECT tf.rating, t.composite_score

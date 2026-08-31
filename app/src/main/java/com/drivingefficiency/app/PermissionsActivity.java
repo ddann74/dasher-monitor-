@@ -49,6 +49,12 @@ public class PermissionsActivity extends AppCompatActivity {
         Button cannedRepliesButton = findViewById(R.id.cannedRepliesButton);
         EditText apiKeyInput = findViewById(R.id.apiKeyInput);
         Button saveApiKeyButton = findViewById(R.id.saveApiKeyButton);
+        EditText roadWarriorPackageInput = findViewById(R.id.roadWarriorPackageInput);
+        Button saveRoadWarriorPackageButton = findViewById(R.id.saveRoadWarriorPackageButton);
+        TextView fuelCostSubtext = findViewById(R.id.fuelCostSubtext);
+        EditText fuelEfficiencyInput = findViewById(R.id.fuelEfficiencyInput);
+        EditText fuelPriceInput = findViewById(R.id.fuelPriceInput);
+        Button saveFuelCostButton = findViewById(R.id.saveFuelCostButton);
 
         // Pre-filled with whatever key is currently active (runtime-entered
         // takes priority, falling back to local.properties/BuildConfig) --
@@ -62,6 +68,59 @@ public class PermissionsActivity extends AppCompatActivity {
             GoogleApiHelper.setApiKey(this, key);
             Toast.makeText(this, key.isEmpty() ? "API key cleared." : "API key saved.",
                     Toast.LENGTH_SHORT).show();
+        });
+
+        // Premortem finding (docs/road_warrior_icon/PRD.md ss4a, P5): a
+        // future RoadWarrior update, regional variant, or old sideloaded
+        // APK could use a different package name than the one reconfirmed
+        // in NavigationHelper -- indistinguishable, from the driver's seat,
+        // from RoadWarrior simply not handling geo: intents. Same
+        // runtime-override pattern as the API key above, so an affected
+        // driver has a way out without a code change.
+        roadWarriorPackageInput.setText(NavigationHelper.getRoadWarriorPackage(this));
+        saveRoadWarriorPackageButton.setOnClickListener(v -> {
+            String packageName = roadWarriorPackageInput.getText().toString().trim();
+            NavigationHelper.setRoadWarriorPackage(this, packageName);
+            Toast.makeText(this, packageName.isEmpty()
+                    ? "RoadWarrior package reset to default." : "RoadWarrior package saved.",
+                    Toast.LENGTH_SHORT).show();
+        });
+
+        // Fuel cost estimate: driver-entered, not learned -- there's no
+        // real telemetry signal for actual fuel spend the way there is
+        // for deadhead/wait-time/accel-brake, so "personalized" here means
+        // "you told it your real numbers," not "observed from driving."
+        // Explicitly re-editable at any time -- fuel prices move, vehicles
+        // change -- never a one-time locked-in setting.
+        try {
+            JSONObject fuelSettings = new JSONObject(engine.callAttr("get_fuel_cost_settings").toString());
+            if (fuelSettings.optBoolean("configured", false)) {
+                fuelEfficiencyInput.setText(String.valueOf(fuelSettings.optDouble("fuel_efficiency_l_per_100km")));
+                fuelPriceInput.setText(String.valueOf(fuelSettings.optDouble("fuel_price_per_liter")));
+            }
+            applyFuelCostSubtext(fuelCostSubtext, fuelSettings);
+        } catch (JSONException | RuntimeException e) { // covers PyException too
+            // Leaves the layout's default string in place, inputs empty --
+            // not worth blocking the whole settings screen over this.
+        }
+        saveFuelCostButton.setOnClickListener(v -> {
+            try {
+                double efficiency = fuelEfficiencyInput.getText().toString().trim().isEmpty()
+                        ? 0.0 : Double.parseDouble(fuelEfficiencyInput.getText().toString().trim());
+                double price = fuelPriceInput.getText().toString().trim().isEmpty()
+                        ? 0.0 : Double.parseDouble(fuelPriceInput.getText().toString().trim());
+                engine.callAttr("set_fuel_cost_settings", efficiency, price);
+                refreshFuelCostSubtext(fuelCostSubtext);
+                Toast.makeText(this, (efficiency > 0 && price > 0)
+                        ? "Fuel cost settings saved." : "Fuel cost settings cleared -- using the flat default again.",
+                        Toast.LENGTH_SHORT).show();
+            } catch (NumberFormatException e) {
+                Toast.makeText(this, "Enter a valid number for both fields (or leave both blank to clear).",
+                        Toast.LENGTH_LONG).show();
+            } catch (RuntimeException e) { // covers PyException too
+                Toast.makeText(this, "Could not save fuel cost settings: " + e.getMessage(),
+                        Toast.LENGTH_LONG).show();
+            }
         });
 
         // Notification access is required to capture Dasher offers/messages
@@ -330,6 +389,35 @@ public class PermissionsActivity extends AppCompatActivity {
         android.os.PowerManager powerManager =
                 (android.os.PowerManager) getSystemService(POWER_SERVICE);
         return powerManager != null && powerManager.isIgnoringBatteryOptimizations(getPackageName());
+    }
+
+    /**
+     * Shows the currently-effective $/km rate regardless of whether it's
+     * the flat default or a real configured one -- so it's always visible
+     * whether saving actually changed anything, not just after tapping Save.
+     */
+    private void applyFuelCostSubtext(TextView fuelCostSubtext, JSONObject fuelSettings) {
+        boolean configured = fuelSettings.optBoolean("configured", false);
+        double effectiveRate = fuelSettings.optDouble("effective_cost_per_km", 0.12);
+        fuelCostSubtext.setText(configured
+                ? String.format("Currently using your configured rate: $%.4f/km "
+                        + "(%.1f L/100km at $%.2f/L). Change and save again any time.",
+                        effectiveRate, fuelSettings.optDouble("fuel_efficiency_l_per_100km"),
+                        fuelSettings.optDouble("fuel_price_per_liter"))
+                : String.format("Currently using a flat, generic $%.2f/km guess. Enter your real "
+                        + "vehicle's fuel efficiency and current fuel price below for an accurate "
+                        + "per-trip estimate -- you can change these again any time.", effectiveRate));
+    }
+
+    /** Fetches the latest settings (after a save, the rate may have just changed) and applies them. */
+    private void refreshFuelCostSubtext(TextView fuelCostSubtext) {
+        try {
+            applyFuelCostSubtext(fuelCostSubtext,
+                    new JSONObject(engine.callAttr("get_fuel_cost_settings").toString()));
+        } catch (JSONException | RuntimeException e) { // covers PyException too
+            // Leaves whatever text was already showing -- not worth
+            // blocking the settings screen over this.
+        }
     }
 
     @Override

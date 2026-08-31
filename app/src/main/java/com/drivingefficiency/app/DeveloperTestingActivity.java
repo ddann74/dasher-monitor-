@@ -35,6 +35,7 @@ public class DeveloperTestingActivity extends AppCompatActivity {
         Button simulateTrustedButton = findViewById(R.id.simulateTrustedButton);
         Button simulateArrivalButton = findViewById(R.id.simulateArrivalButton);
         Button addTestStopButton = findViewById(R.id.addTestStopButton);
+        Button addPlaceholderTestStopButton = findViewById(R.id.addPlaceholderTestStopButton);
         Button simulateDashPausedButton = findViewById(R.id.simulateDashPausedButton);
         Button simulateOfferOutcomesButton = findViewById(R.id.simulateOfferOutcomesButton);
 
@@ -47,6 +48,7 @@ public class DeveloperTestingActivity extends AppCompatActivity {
         simulateTrustedButton.setOnClickListener(v -> simulateTrustedAndUnknownText());
         simulateArrivalButton.setOnClickListener(v -> simulateDriveAndArrival());
         addTestStopButton.setOnClickListener(v -> addTestStopNearby());
+        addPlaceholderTestStopButton.setOnClickListener(v -> addPlaceholderTestStop());
         simulateDashPausedButton.setOnClickListener(v -> simulateDashPausedResumed());
         simulateOfferOutcomesButton.setOnClickListener(v -> simulateOfferOutcomes());
     }
@@ -265,6 +267,26 @@ public class DeveloperTestingActivity extends AppCompatActivity {
                         Toast.LENGTH_LONG).show();
             } catch (RuntimeException e) {
                 Toast.makeText(this, "Could not add test stop: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        }
+
+        /**
+         * Registers a fake stop with the exact (0.0, 0.0) placeholder
+         * coordinates DasherAccessibilityService uses for "not geocoded
+         * yet" -- so the guard added to NavigationHelper.openAddress() for
+         * that case (docs/road_warrior_icon/PRD.md) can be exercised on
+         * demand, without waiting for a real geocode failure or a missing
+         * API key. Tapping the RoadWarrior icon for this stop should show
+         * the "Address not resolved yet" toast and open nothing.
+         */
+        private void addPlaceholderTestStop() {
+            try {
+                engine.callAttr("add_stop_to_buffer", "Test Stop (Unresolved Address)", 0.0, 0.0);
+                Toast.makeText(this, "Placeholder test stop added -- tap the RoadWarrior icon "
+                        + "for it to verify the unresolved-address guard.", Toast.LENGTH_LONG).show();
+            } catch (RuntimeException e) {
+                Toast.makeText(this, "Could not add placeholder test stop: " + e.getMessage(),
+                        Toast.LENGTH_LONG).show();
             }
         }
 

@@ -609,37 +609,154 @@ Fix:
 
 Remaining real gaps, as of the current build:
 
-- **Post-accept address reading**: implemented -- `DasherAccessibilityService`
-  parses the post-accept "Deliver to X" screen and extracts the real
-  customer address (built from real screenshots, the same way the offer
-  parser was). **Unconfirmed on a real device**: never exercised against
-  an actual live delivery, so whether Dasher's real post-accept screen
-  still matches what this expects hasn't been verified.
-- **Geocoding**: implemented -- `GoogleApiHelper.geocodeAddress()` /
-  `geocodeAddressWithFormatted()` convert both the pickup restaurant name
-  and the post-accept dropoff address into real lat/lon via the Google
-  Maps Geocoding API. **Unconfirmed on a real device**, together with the
-  above: this is what would actually make arrival detection work on a
-  real delivery instead of simulated/manually-entered coordinates, but
-  that hasn't been exercised end-to-end yet.
-- **Battery optimization exemption**: implemented -- `PermissionsActivity`
-  has an `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` button.
-  **Unconfirmed on a real device**: never confirmed that tapping it
-  actually produces the system exemption dialog, or that the exemption
-  holds up against a real OEM's aggressive battery manager (Samsung,
-  Xiaomi, etc.).
-- **RoadWarrior's `geo:` intent is unconfirmed**: no documented deep-link
-  API exists for RoadWarrior (see `NavigationHelper.java`'s comments), so
-  whether it actually opens RoadWarrior specifically (vs. falling back to
-  another maps app) hasn't been verified on a real device.
-- **Peak-hour traffic windows and harsh-accel/brake thresholds** are still
-  generic hardcoded assumptions, not personalized to this driver's own
-  historical patterns the way deadhead/wait-time/delivery-speed now are.
-- **Speed-limit-based speeding detection, fuel cost estimates, and Smart
-  Score weights/thresholds** can't currently be learned or fixed without
-  data this app doesn't have access to (map speed-limit data, vehicle
-  fuel efficiency, and a way to track whether offers were actually
-  accepted/declined, respectively).
+- ~~**Post-accept address reading**: `DasherAccessibilityService` still
+  doesn't extract the real customer address from the post-accept
+  screen...~~ **Resolved.** `DasherAccessibilityService.handleDropoffScreen`
+  now parses the real "Deliver to X" screen (built from real screenshots,
+  see `DropoffScreenParser`) and geocodes the full address; pickup address
+  reading works the same way via `geocodeAddressWithFormatted`. Real
+  coordinates now reach the RoadWarrior icon and arrival detection on an
+  actual delivery, not just simulated/manually-entered ones.
+- ~~**Geocoding**: nothing converts an address string into real lat/lon
+  anywhere in the app...~~ **Resolved** as part of the above --
+  `GoogleApiHelper.geocodeAddress` / `geocodeAddressWithFormatted` do
+  this for both dropoff and pickup, gated on a configured Google Maps API
+  key (`GoogleApiHelper.hasApiKey`). Without a key, or before an async
+  geocode resolves, stops still carry the `(0.0, 0.0)` placeholder --
+  `NavigationHelper.openAddress()` now detects that case explicitly and
+  refuses to navigate instead of silently opening a pin in the ocean
+  (`docs/road_warrior_icon/PRD.md`).
+- ~~**Battery optimization exemption**: nothing requests exemption...~~
+  **Resolved, and was already resolved when this bullet was written** --
+  see the "Battery optimization exemption" entry higher up in this same
+  README (`PermissionsActivity`'s `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`
+  flow), which directly contradicted this one. Left as a reminder that
+  this TODO list itself needs to be kept honest, not just the code.
+- **RoadWarrior's `geo:` intent is still unconfirmed on a real device**:
+  `com.roadwarrior.android` was reconfirmed as the correct Play Store
+  package name (2026-08-22), and `NavigationHelper.openAddress()` now
+  shows a distinct toast for a RoadWarrior-specific open vs. a
+  fallback-to-another-maps-app open, so which one actually happened is at
+  least visible. Whether RoadWarrior's app itself accepts and pre-fills a
+  single-stop `geo:` intent at all -- no documented deep-link API exists
+  for RoadWarrior, see `NavigationHelper.java`'s comments -- still hasn't
+  been verified on a real device with RoadWarrior installed.
+- ~~**Peak-hour traffic windows and harsh-accel/brake thresholds are
+  still generic hardcoded assumptions**~~ **Resolved, both halves.**
+  Peak-hour traffic is personalized via `SmartScoreEngine._is_peak_hour`
+  (learns your actual average speed by hour-of-day from completed trips,
+  5+ trips needed). Harsh-accel/brake thresholds are personalized too
+  (2026-08-22) via `TripManager._learned_accel_brake_thresholds` -- a
+  running Welford's-algorithm mean/std of every real per-tick
+  acceleration sample (not just already-harsh ones, which would be
+  circular), replacing the fixed `HARSH_ACCEL_MS2`/`HARSH_BRAKE_MS2`
+  defaults once 300+ real samples exist (much higher than the 5-trip
+  gates elsewhere, since these are per-GPS-tick, not per-trip). Computed
+  once per trip and merged into the cross-trip running stats once at
+  trip end, not per GPS tick -- this app doesn't write to the DB on
+  every 1-second location update anywhere else, and this doesn't either.
+- ~~**Smart Score weights/thresholds can't currently be learned... no way
+  to track whether offers were actually accepted/declined**~~
+  **Resolved.** A real `offer_outcomes` table and
+  `recalculate_personal_calibration` correlate each Smart Score factor
+  against real accept/decline decisions and delivery ratings, nudging
+  future weights (bounded, gated on 25+ samples). This WAS silently
+  broken until 2026-08-22 -- `recalculate_personal_calibration` was
+  missing its `DriveMonitorEngine` wrapper (same bug class as
+  `add_pickup`, see git history), so every real feedback submission
+  threw and never actually calibrated anything despite the mechanism
+  being fully built. Now fixed.
+- ~~**Smart Score never appeared for offers auto-launched from a
+  notification**: `AppNotificationListenerService.launchDasherApp` used a
+  bare `startActivity()` from this background service to bring Dasher to
+  the foreground...~~ **Resolved (2026-08-23).** Confirmed via a real
+  diagnostic log: two offers auto-launched Dasher cleanly (no exception),
+  yet `DasherAccessibilityService` never logged a single MODE/EVENT_DEBUG/
+  NODE_SCAN line afterward for the rest of the session -- Dasher's own
+  screen was never actually read, so the real on-screen Smart Score badge
+  (computed from `parse_offer_screen`) never got a chance to show. Root
+  cause: since Android 10, `startActivity()` from a background service
+  context is subject to Background Activity Launch restrictions, which can
+  silently drop the call with no exception. Fixed by posting a
+  high-priority notification with `setFullScreenIntent()` instead -- the
+  same documented mechanism incoming-call/alarm apps use, and one of
+  Android's real BAL exemptions (`USE_FULL_SCREEN_INTENT`, added to the
+  manifest). PREMORTEM FOLLOW-UP: `setFullScreenIntent()` itself only
+  truly auto-launches when the device is *locked* -- if the screen is on
+  and unlocked (the normal state while actively navigating, arguably the
+  most common real driving scenario), Android downgrades it to a heads-up
+  banner needing a manual tap, silently defeating the hands-free point of
+  auto-launch. `showOfferOverlayFallback` now also draws a
+  `SYSTEM_ALERT_WINDOW` overlay banner (restaurant + score, tap-to-open)
+  on every offer, independent of lock state or whether the full-screen
+  intent actually fired. Separately, note that offers detected via the **notification
+  path itself** (as opposed to the on-screen path) still can't show a
+  Smart Score when DoorDash's real notification text carries no
+  payout/distance at all (the confirmed "New Delivery! / Go to X" format)
+  -- that's an inherent data-availability gap, not a bug, and only this
+  auto-launch mechanism was fixed.
+- ~~**Tapping the RoadWarrior navigation icon (or the "return to sweet
+  spot" icon) crashed the whole app**~~ **Resolved (2026-08-23).**
+  Confirmed via a real diagnostic log: 6 identical crashes, all
+  `AndroidRuntimeException: ... requires the FLAG_ACTIVITY_NEW_TASK
+  flag`, from `NavigationHelper.openAddress()` -- called from
+  `TripForegroundService` (a Service, not an Activity) every time the
+  overlay icon was tapped. Fixed by adding `FLAG_ACTIVITY_NEW_TASK` to
+  all 4 `startActivity()` calls in `NavigationHelper.java` (both branches
+  of `openAddress()`, both branches of `openAddressWithWaze()` -- the
+  latter two hadn't crashed yet in that log only because their code paths
+  weren't hit, but carried the identical bug).
+- **Whether RoadWarrior's `geo:` intent actually works is still
+  unconfirmed -- but now it's finally *observable*.** Every outcome in
+  `NavigationHelper` (RoadWarrior opened / RoadWarrior not available,
+  fell back / no maps app at all) was previously only ever a Toast --
+  visible in the moment, with zero durable record, and combined with the
+  FLAG_ACTIVITY_NEW_TASK crash above, no real diagnostic log has EVER
+  shown which one happened for a real tap. Added `NAV_TAP` diagnostic log
+  entries mirroring each Toast, so the next uploaded log will finally show
+  whether `startActivity()` succeeded and which app it went to -- though
+  that still only confirms the intent was accepted without exception, not
+  that RoadWarrior's own UI actually displays the pin correctly once
+  open; there's still no documented deep-link API for RoadWarrior to
+  verify that against (see this file's class doc).
+- ~~**`scanAndRecordAcceptDeclineNodeBounds` never found the real
+  Accept/Decline nodes**~~ **Resolved (2026-08-23).** Confirmed via a real
+  diagnostic log: `NODE_SCAN: Accept node found=false, Decline node
+  found=false` fired 5-for-5, even though `FULL_TEXT_DUMP` confirmed
+  "Accept"/"Decline" text was genuinely on screen, and a real tap's
+  `TYPE_VIEW_CLICKED` event fired with `class=android.view.ViewGroup,
+  text=[Decline]` -- the clickable element is a container, but
+  `findAccessibilityNodeInfosByText` matches the (non-clickable) text
+  node inside it, which the old `node.isClickable()` check discarded
+  every time. Fixed by walking up the matched node's ancestor chain
+  (`nearestClickableAncestor`) to find the real clickable target. Was
+  effectively dead code before this fix -- the actual outcome recording
+  worked anyway via the separate `TYPE_VIEW_CLICKED` text-matching path,
+  so no user-facing impact, just an unused backup mechanism.
+- **Auto-launching Dasher for a new offer only ever *requested* the
+  foreground, never confirmed switching to it.** As of 2026-08-23,
+  `launchDasherApp` also attempts a direct `startActivity()` immediately
+  after showing the offer overlay -- an app with an active
+  `SYSTEM_ALERT_WINDOW` overlay is one of Android's real Background
+  Activity Launch exemptions, unlike the plain background-service context
+  the original (removed) bare `startActivity()` call ran from. HONEST GAP:
+  a blocked BAL launch fails silently, so this can't actually confirm
+  whether the direct switch worked -- only that it's now attempted under a
+  condition where it plausibly can succeed. The full-screen-intent
+  notification and overlay tap-to-open remain as independent fallbacks.
+- **Speed-limit-based speeding detection is still generic**
+  (`DEFAULT_SPEED_LIMIT_KMH = 60` everywhere) -- genuinely can't be
+  improved without map speed-limit data this app doesn't currently
+  collect.
+- ~~**Fuel cost estimates are a permanent flat guess**~~ **Stale --
+  already resolved.** `distance_km * $0.12` is only the fallback now
+  (`DEFAULT_FUEL_COST_PER_KM`). `DriveMonitorEngine.get_fuel_cost_settings`/
+  `set_fuel_cost_settings` let the driver enter their real fuel efficiency
+  (L/100km) and local fuel price, wired to a real UI field on the
+  Permissions & Setup screen (`PermissionsActivity.java`) -- this bullet
+  just never got updated when that shipped. Left as another reminder (see
+  the battery-optimization bullet above) that this list itself needs to
+  be kept honest, not just the code.
 - This is a v1.0 (current features) skeleton only -- the v2.x-v4.0 roadmap
   items in the original product report are not implemented here.
 

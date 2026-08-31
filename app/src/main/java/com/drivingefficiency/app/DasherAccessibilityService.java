@@ -209,12 +209,30 @@ public class DasherAccessibilityService extends AccessibilityService {
      * the remembered offer afterward so a stray repeat click can't
      * double-record the same outcome.
      */
+    // Bounds how far scanAndRecordAcceptDeclineNodeBounds's ancestor walk
+    // can climb -- generous enough for any realistic layout nesting depth,
+    // just a safety bound against a pathological/cyclic tree.
+    private static final int MAX_CLICKABLE_ANCESTOR_DEPTH = 10;
+
     /**
      * Scans the current accessibility tree for the real Accept/Decline
      * nodes by their visible text, and records their exact screen bounds
      * for later matching. Best-effort -- if Dasher's real button text
      * ever differs from an exact "Accept"/"Decline" match, this won't
      * find them; that's a real, honest limitation, not a guaranteed fix.
+     *
+     * REAL BUG FIX, confirmed via a real diagnostic log: this found
+     * "Accept node found=false, Decline node found=false" every single
+     * time (5 for 5 in that log), even though FULL_TEXT_DUMP confirmed
+     * "Accept"/"Decline" text was genuinely on screen, AND the real
+     * TYPE_VIEW_CLICKED event for an actual tap fired with
+     * class=android.view.ViewGroup, text=[Decline] -- the clickable
+     * element is a ViewGroup container, but findAccessibilityNodeInfosByText
+     * matches the TEXT node inside it, which isn't itself clickable. The
+     * old `node.isClickable()` check discarded that match every time. Now
+     * walks up the matched node's own ancestor chain to find the actual
+     * clickable target, the standard fix for "text lives on a
+     * non-clickable child of the real clickable row/card" layouts.
      */
     private void scanAndRecordAcceptDeclineNodeBounds() {
         acceptNodeBounds = null;
@@ -225,16 +243,18 @@ public class DasherAccessibilityService extends AccessibilityService {
         }
         try {
             for (AccessibilityNodeInfo node : root.findAccessibilityNodeInfosByText("Accept")) {
-                if (node.isClickable() && acceptNodeBounds == null) {
+                AccessibilityNodeInfo clickable = nearestClickableAncestor(node);
+                if (clickable != null && acceptNodeBounds == null) {
                     android.graphics.Rect bounds = new android.graphics.Rect();
-                    node.getBoundsInScreen(bounds);
+                    clickable.getBoundsInScreen(bounds);
                     acceptNodeBounds = bounds;
                 }
             }
             for (AccessibilityNodeInfo node : root.findAccessibilityNodeInfosByText("Decline")) {
-                if (node.isClickable() && declineNodeBounds == null) {
+                AccessibilityNodeInfo clickable = nearestClickableAncestor(node);
+                if (clickable != null && declineNodeBounds == null) {
                     android.graphics.Rect bounds = new android.graphics.Rect();
-                    node.getBoundsInScreen(bounds);
+                    clickable.getBoundsInScreen(bounds);
                     declineNodeBounds = bounds;
                 }
             }
@@ -244,6 +264,18 @@ public class DasherAccessibilityService extends AccessibilityService {
             logDiagnostic("ERROR", "scanAndRecordAcceptDeclineNodeBounds exception: "
                     + android.util.Log.getStackTraceString(e));
         }
+    }
+
+    /** Returns node itself if already clickable, otherwise the nearest clickable ancestor, or null if none within range. */
+    private AccessibilityNodeInfo nearestClickableAncestor(AccessibilityNodeInfo node) {
+        AccessibilityNodeInfo current = node;
+        for (int depth = 0; current != null && depth < MAX_CLICKABLE_ANCESTOR_DEPTH; depth++) {
+            if (current.isClickable()) {
+                return current;
+            }
+            current = current.getParent();
+        }
+        return null;
     }
 
     /**
@@ -656,6 +688,12 @@ public class DasherAccessibilityService extends AccessibilityService {
                     // this real delivery if geocoding never resolves --
                     // same limitation as pickup geocoding failing.
                     logDiagnostic("GEOCODE", "Dropoff failed: " + message);
+                    // Premortem finding, fixed here (docs/road_warrior_icon/
+                    // PRD.md ss4a, P3): previously log-only -- the
+                    // RoadWarrior icon's "try again in a moment" toast had
+                    // no way to know this address will NEVER resolve
+                    // without a network/API fix, not just "not yet."
+                    NavigationHelper.recordGeocodeFailure(DasherAccessibilityService.this, fullAddress, message);
                 }
             });
         } catch (JSONException | RuntimeException e) { // covers PyException too -- calls
@@ -1041,6 +1079,11 @@ public class DasherAccessibilityService extends AccessibilityService {
                 // won't fire for this specific delivery if geocoding
                 // never resolves.
                 logDiagnostic("GEOCODE", "Failed: " + message + " (" + getNetworkInfo() + ")");
+                // Premortem finding, fixed here (docs/road_warrior_icon/
+                // PRD.md ss4a, P3): same fix as the dropoff onError above --
+                // the icon's toast can now tell "this geocode already
+                // failed" apart from "still resolving."
+                NavigationHelper.recordGeocodeFailure(DasherAccessibilityService.this, restaurantName, message);
             }
         });
     }

@@ -72,6 +72,15 @@
         android:text="@string/add_test_stop" />
 
     <Button
+        android:id="@+id/addPlaceholderTestStopButton"
+        android:backgroundTint="?attr/colorPrimary"
+        android:textColor="#FFFFFF"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/add_placeholder_test_stop" />
+
+    <Button
         android:id="@+id/simulateDashPausedButton"
         android:backgroundTint="?attr/colorPrimary"
         android:textColor="#FFFFFF"
