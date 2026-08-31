@@ -83,6 +83,20 @@ public class TripForegroundService extends Service {
     public static volatile boolean serviceExists = false;
 
     /**
+     * True only while a screen recording is actively being written to disk
+     * (docs/screen_recording/PRD.md). Exposed statically, same pattern as
+     * isRunning/serviceExists above, specifically so PermissionsActivity's
+     * "Delete All Recordings" button can check it -- CONFIRMED REAL BUG,
+     * closed by this field: without it, deleting all recordings while one
+     * is actively open for writing would unlink its directory entry out
+     * from under MediaRecorder's still-open file handle. On Android this
+     * typically "succeeds" (no exception) while the write continues into
+     * now-unreferenced storage -- the in-progress recording silently
+     * vanishes on stop, with no error surfaced anywhere to explain why.
+     */
+    public static volatile boolean isScreenRecordingActive = false;
+
+    /**
      * Last known real GPS position, exposed so other components (like
      * DasherAccessibilityService, for live traffic queries) can access
      * the current location without needing their own separate location
@@ -102,6 +116,17 @@ public class TripForegroundService extends Service {
     private PyObject engine;
     private String lastKnownMode = null;
     private volatile boolean monitoringActive = false;
+    // Opt-in screen recording (docs/screen_recording/PRD.md) - the
+    // controller instance itself always exists; whether it actually
+    // records anything is gated on the Setup toggle + a held consent
+    // grant, checked in startTracking().
+    // Listener fires from inside ScreenRecordingController's own cleanup,
+    // covering all three ways recording can actually stop (explicit
+    // stop(), a mid-setup failure, or Android externally revoking the
+    // grant) in one place -- see ScreenRecordingController.StopListener's
+    // own doc for the real bug this closed.
+    private final ScreenRecordingController screenRecordingController =
+            new ScreenRecordingController(() -> isScreenRecordingActive = false);
 
     @Override
     public void onCreate() {
@@ -115,6 +140,15 @@ public class TripForegroundService extends Service {
         // see DasherAccessibilityService's identical-logic twin for why
         // this is duplicated rather than shared.
         logDiagnostic("SERVICE", "onCreate() -- service process started. " + buildInstallTimingNote());
+        // Requirement change (2026-08-30, docs/watchdog_reliability/PRD.md):
+        // a real uploaded field log covering two full monitoring blackouts
+        // couldn't answer "which phone was this" at all -- OemBackgroundHelper
+        // already has isKnownAggressiveOem() logic gating the autostart
+        // -settings guidance button, but nothing ever logged the value it
+        // depends on. Logged once per session, not per-heartbeat -- this
+        // never changes while the process is alive.
+        logDiagnostic("DEVICE", "manufacturer=" + Build.MANUFACTURER + " model=" + Build.MODEL
+                + " sdk=" + Build.VERSION.SDK_INT + " knownAggressiveOem=" + OemBackgroundHelper.isKnownAggressiveOem());
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
 
         locationCallback = new LocationCallback() {
@@ -259,7 +293,66 @@ public class TripForegroundService extends Service {
         // fixed schedule regardless of GPS tier, specifically to help
         // pin down the real pattern.
         accessibilityHeartbeatHandler.postDelayed(accessibilityHeartbeatRunnable, ACCESSIBILITY_HEARTBEAT_INTERVAL_MS);
+        // Requirement change (2026-08-31, docs/watchdog_gps_independent_rearm/PRD.md):
+        // the watchdog's redundant re-arm used to live inside maybeLogHeartbeat,
+        // which only runs when a GPS location callback actually arrives -- sharing
+        // a failure dependency with the exact self-perpetuating-alarm-chain risk it
+        // was built to backstop (if GPS updates and the alarm chain both stall
+        // together, plausible under the same aggressive-OEM class of kill already
+        // evidenced in docs/watchdog_reliability/PRD.md, neither layer helps).
+        // Mirrors accessibilityHeartbeatHandler above, which already solved this
+        // identical GPS-tied-gap shape for a different reason.
+        watchdogRearmHandler.postDelayed(watchdogRearmRunnable, WATCHDOG_REARM_INTERVAL_MS);
+
+        // Opt-in screen recording (docs/screen_recording/PRD.md) - off
+        // unless the driver both enabled the Setup toggle AND granted the
+        // MediaProjection consent dialog. Called last, after the service
+        // is already running in the foreground with the manifest's
+        // location|mediaProjection type declared, which Android requires
+        // before createVirtualDisplay can succeed.
+        if (ScreenRecordingController.isEnabled(this)) {
+            boolean started = screenRecordingController.start(this);
+            isScreenRecordingActive = started;
+            if (started) {
+                logDiagnostic("SCREEN_RECORDING", "Started recording for this trip");
+            } else if (!ScreenRecordingController.hasPendingConsent()) {
+                // The most likely real cause: the process restarted since
+                // consent was last granted (a watchdog-recovered kill, a
+                // crash, a manual reopen) - Android does not allow that
+                // grant to be silently reused, and there is no way to
+                // re-request it without a driver tap. Surfaced loudly
+                // (the same alert channel used for a revoked permission),
+                // not left as a silent gap in coverage the driver only
+                // discovers after the fact.
+                logDiagnostic("SCREEN_RECORDING", "Enabled, but no consent held (process likely "
+                        + "restarted since it was last granted) - this trip will not be recorded");
+                raisePermissionRevokedAlert("Screen Recording",
+                        "Re-grant screen recording consent in Setup - this trip is not being recorded");
+            } else {
+                // Was "see the preceding ERROR-level Android log" -- WRONG
+                // for two of ScreenRecordingController's own failure paths,
+                // which never logged anywhere at all (found auditing this
+                // for "does anything fail silently?"). lastFailureReason()
+                // is now set on every failure path, not just the ones that
+                // throw, and written directly into THIS app's own visible
+                // diagnostic log instead of only logcat, which a driver has
+                // no way to read without a computer and ADB.
+                logDiagnostic("SCREEN_RECORDING", "Enabled and consent held, but starting the "
+                        + "recorder failed: " + screenRecordingController.lastFailureReason());
+            }
+        }
     }
+
+    private final android.os.Handler watchdogRearmHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable watchdogRearmRunnable = new Runnable() {
+        @Override
+        public void run() {
+            MonitoringWatchdogReceiver.scheduleWatchdog(TripForegroundService.this);
+            if (monitoringActive) {
+                watchdogRearmHandler.postDelayed(this, WATCHDOG_REARM_INTERVAL_MS);
+            }
+        }
+    };
 
     private static final long ACCESSIBILITY_HEARTBEAT_INTERVAL_MS = 15 * 1000;
     private final android.os.Handler accessibilityHeartbeatHandler = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -502,6 +595,23 @@ public class TripForegroundService extends Service {
         tripWakeLock = null;
     }
 
+    private static final long FEEDBACK_OVERLAY_AUTO_DISMISS_MS = 20 * 1000;
+
+    /**
+     * Requirement change (2026-08-30, docs/feedback_page_direct/PRD.md):
+     * per explicit request, shows the feedback page directly instead of
+     * only ever posting a notification the driver has to tap. Mirrors
+     * AppNotificationListenerService.launchDasherApp()'s proven
+     * Background Activity Launch (BAL) workaround -- a background Service
+     * genuinely can't show the feedback AlertDialog itself, but it CAN
+     * reliably bring MainActivity to the foreground (which already shows
+     * that dialog automatically via auto_show_feedback_trip_id, see
+     * MainActivity.onCreate), the same way launchDasherApp already does
+     * for a new offer. Reasonable to auto-launch here, unlike an offer
+     * arriving mid-drive: this only fires once a delivery is actually
+     * marked complete, which requires the driver to already be
+     * interacting with their phone.
+     */
     private void notifyRateThisDelivery() {
         try {
             JSONObject summary = new JSONObject(engine.callAttr("get_last_trip_summary").toString());
@@ -512,6 +622,42 @@ public class TripForegroundService extends Service {
             if (tripId < 0) {
                 return;
             }
+
+            Intent intent = new Intent(this, MainActivity.class);
+            intent.putExtra("auto_show_feedback_trip_id", tripId);
+            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+
+            // Same BAL exemption launchDasherApp relies on: an app
+            // currently showing a visible overlay window is one of
+            // Android's real Background Activity Launch exemptions, unlike
+            // the plain background-service context startActivity() would
+            // otherwise run from. Shown FIRST so the overlay window is
+            // genuinely on screen by the time startActivity() runs below.
+            OverlayHelper.showMessage(this, "Delivery complete -- tap to rate it.",
+                    FEEDBACK_OVERLAY_AUTO_DISMISS_MS, android.graphics.Color.parseColor("#CC2E7D32"),
+                    () -> {
+                        try {
+                            startActivity(intent);
+                        } catch (RuntimeException e) {
+                            logDiagnostic("ERROR", "Rate-delivery overlay tap-to-launch exception: "
+                                    + android.util.Log.getStackTraceString(e));
+                        }
+                    });
+            try {
+                startActivity(intent);
+                // HONESTY NOTE, same as launchDasherApp: a blocked BAL
+                // launch fails SILENTLY -- no exception -- so this can't
+                // actually confirm the direct switch worked, only that it
+                // was attempted under a condition where it plausibly can.
+                logDiagnostic("BUTTON", "Attempted direct feedback-page launch for trip " + tripId
+                        + " while an overlay window was active -- not confirmable whether it actually "
+                        + "switched apps, see AppNotificationListenerService.launchDasherApp's class docs");
+            } catch (RuntimeException e) {
+                logDiagnostic("BUTTON", "Direct feedback-page launch attempt failed/blocked for trip "
+                        + tripId + ": " + e.getClass().getSimpleName()
+                        + " -- falling back to full-screen-intent notification + overlay tap");
+            }
+
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager == null) {
                 return;
@@ -519,25 +665,32 @@ public class TripForegroundService extends Service {
             String channelId = "rate_delivery_prompt";
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 NotificationChannel channel = new NotificationChannel(
-                        channelId, "Rate This Delivery", NotificationManager.IMPORTANCE_DEFAULT);
-                channel.setDescription("Prompts for feedback right after a delivery completes");
+                        channelId, "Rate This Delivery", NotificationManager.IMPORTANCE_HIGH);
+                channel.setDescription("Shows the feedback page right after a delivery completes");
                 manager.createNotificationChannel(channel);
             }
-            Intent intent = new Intent(this, MainActivity.class);
-            intent.putExtra("auto_show_feedback_trip_id", tripId);
-            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            // Posted unconditionally, not only if the direct attempt above
+            // threw -- a blocked BAL launch fails silently (no exception),
+            // so there's no reliable way to know whether it's needed. Same
+            // full-screen-intent mechanism as launchDasherApp, same
+            // already-granted USE_FULL_SCREEN_INTENT permission -- reliable
+            // even from the lock screen, with ordinary tap-to-open as the
+            // fallback if that permission is ever revoked (Android 14+).
             PendingIntent pendingIntent = PendingIntent.getActivity(this, tripId, intent,
                     PendingIntent.FLAG_UPDATE_CURRENT
                             | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0));
             Notification notification = new Notification.Builder(this, channelId)
                     .setContentTitle("Rate this delivery")
-                    .setContentText("Tap to give quick feedback -- helps refine your Smart Score.")
+                    .setContentText("Opening the feedback page...")
                     .setSmallIcon(android.R.drawable.ic_menu_edit)
+                    .setPriority(Notification.PRIORITY_HIGH)
+                    .setCategory(Notification.CATEGORY_REMINDER)
+                    .setFullScreenIntent(pendingIntent, true)
                     .setContentIntent(pendingIntent)
                     .setAutoCancel(true)
                     .build();
             manager.notify(9200 + tripId, notification);
-            logDiagnostic("BUTTON", "Rate-this-delivery notification shown for trip " + tripId);
+            logDiagnostic("BUTTON", "Requested feedback-page foreground via full-screen-intent notification for trip " + tripId);
         } catch (JSONException | RuntimeException e) {
             logDiagnostic("ERROR", "notifyRateThisDelivery exception: " + android.util.Log.getStackTraceString(e));
         }
@@ -619,6 +772,30 @@ public class TripForegroundService extends Service {
     private long lastHeartbeatMs = 0;
     private static final long HEARTBEAT_INTERVAL_MS = 15 * 1000; // 15 sec
 
+    // Requirement change (2026-08-30, docs/watchdog_reliability/PRD.md):
+    // real uploaded field log evidence -- two full monitoring blackouts,
+    // ~15min and ~7min, with ZERO WATCHDOG: log entries during either one
+    // -- showed MonitoringWatchdogReceiver's alarm chain is a single point
+    // of failure: it only ever reschedules itself from inside its own
+    // firing, so one alarm the OS fails to deliver (a documented risk on
+    // aggressive OEMs, which can clear an app's pending alarms alongside a
+    // force-stop, not just kill the process) silently disables it for the
+    // rest of the session with nothing else to re-arm it. Re-arming it
+    // here too gives it a second, independent chance to recover -- but
+    // only for as long as this service itself is still alive; it can't
+    // help if the whole process is already dead (that's what
+    // MonitoringWatchdogReceiver's own OS-invoked, cross-process design
+    // exists for). AS OF 2026-08-31 (docs/watchdog_gps_independent_rearm/
+    // PRD.md), this fires from watchdogRearmRunnable above -- a fixed
+    // Handler.postDelayed schedule -- rather than from maybeLogHeartbeat,
+    // which only ran when a GPS callback actually arrived and so shared a
+    // failure dependency with the exact alarm-drop scenario this re-arm
+    // exists to catch. Throttled well below the heartbeat's own 15s
+    // cadence -- AlarmManager.setExactAndAllowWhileIdle with
+    // FLAG_UPDATE_CURRENT safely replaces any still-pending alarm, so this
+    // doesn't need to be frequent to be effective.
+    private static final long WATCHDOG_REARM_INTERVAL_MS = 5 * 60 * 1000; // 5 min
+
     /**
      * Logs a periodic "still alive" entry while actively tracking -- not
      * every GPS tick. The real value: if these suddenly stop appearing
@@ -649,6 +826,10 @@ public class TripForegroundService extends Service {
                 .edit()
                 .putLong(MonitoringWatchdogReceiver.KEY_LAST_HEARTBEAT_MS, nowMs)
                 .apply();
+        // Redundant watchdog re-arm used to live here, gated on a GPS
+        // callback actually arriving -- moved to watchdogRearmRunnable
+        // (see startTracking()), which fires on its own fixed schedule
+        // instead. See WATCHDOG_REARM_INTERVAL_MS's own comment for why.
     }
 
     @Override
@@ -693,6 +874,20 @@ public class TripForegroundService extends Service {
         isRunning = false;
         releaseTripWakeLock(); // safety net -- in case the trip never properly transitioned to IDLE first
         accessibilityHeartbeatHandler.removeCallbacks(accessibilityHeartbeatRunnable);
+        watchdogRearmHandler.removeCallbacks(watchdogRearmRunnable);
+        if (screenRecordingController.isRecording()) {
+            java.io.File finishedFile = screenRecordingController.currentFile();
+            screenRecordingController.stop(); // clears isScreenRecordingActive via the StopListener
+            // lastStopWasLikelyEmpty() -- previously this case (stopped
+            // before any real data was recorded) was fully silent, not
+            // even in logcat. Surfaced here so a 0-byte/near-empty
+            // recording has an explanation in the log, not just a
+            // confusing file size later with no context.
+            logDiagnostic("SCREEN_RECORDING", "Stopped recording for this trip"
+                    + (finishedFile != null ? " (" + finishedFile.length() + " bytes)" : "")
+                    + (screenRecordingController.lastStopWasLikelyEmpty()
+                            ? " -- stopped before any data was recorded, file may be empty/invalid" : ""));
+        }
         if (fusedLocationClient != null && locationCallback != null) {
             fusedLocationClient.removeLocationUpdates(locationCallback);
         }
@@ -792,9 +987,14 @@ public class TripForegroundService extends Service {
                 // only ever appeared if manually navigated to via Last
                 // Trip Summary. Fires on the same natural trip-end
                 // transition. A background service can't show a dialog
-                // directly, so this fires a notification instead;
-                // tapping it opens TripHistoryActivity, which shows the
-                // actual (already-working) feedback dialog.
+                // directly, so this brings MainActivity to the foreground
+                // instead (docs/feedback_page_direct/PRD.md), which shows
+                // the actual (already-working) feedback dialog via its
+                // existing auto_show_feedback_trip_id handling. Stale
+                // comment fixed here too: this used to (incorrectly) say
+                // "opens TripHistoryActivity" -- notifyRateThisDelivery()
+                // has always actually targeted MainActivity (see its own
+                // comment for the real build-error history behind that).
                 if ("TRIP_ACTIVE".equals(lastKnownTripState) && "IDLE".equals(tripState)) {
                     notifyRateThisDelivery();
                 }
@@ -812,16 +1012,14 @@ public class TripForegroundService extends Service {
             String approachingAddress = approachingStop != null
                     ? approachingStop.optString("address", "") : null;
             if (approachingAddress != null && !approachingAddress.equals(lastApproachingAddress)) {
-                double stopLat = approachingStop.optDouble("lat", 0);
-                double stopLon = approachingStop.optDouble("lon", 0);
                 OverlayHelper.showNavigationIcon(this, () -> {
                     // Previously no way to tell whether a tap was ever
                     // actually received at all, versus being received but
                     // NavigationHelper failing silently afterward -- this
                     // confirms which one, if the icon is ever reported not
                     // to work again.
-                    logDiagnostic("NAV_ICON", "Tapped -- opening " + approachingAddress);
-                    NavigationHelper.openAddress(this, approachingAddress, stopLat, stopLon);
+                    logDiagnostic("NAV_ICON", "Tapped -- copying " + approachingAddress);
+                    NavigationHelper.copyAddressToClipboard(this, approachingAddress);
                 });
                 logDiagnostic("NAV_ICON", "Showing -- approaching: " + approachingAddress);
             } else if (approachingAddress == null && lastApproachingAddress != null) {
@@ -843,8 +1041,6 @@ public class TripForegroundService extends Service {
             String approachingPickupRestaurant = approachingPickup != null
                     ? approachingPickup.optString("restaurant_name", "") : null;
             if (approachingPickupRestaurant != null && !approachingPickupRestaurant.equals(lastApproachingPickupRestaurant)) {
-                double pickupLat = approachingPickup.optDouble("lat", 0);
-                double pickupLon = approachingPickup.optDouble("lon", 0);
                 // Real street address (see GoogleApiHelper.geocodeAddressWithFormatted /
                 // DasherAccessibilityService.geocodePickupAndCheckTraffic) if it's
                 // resolved by now, else null -- the restaurant name/coordinates
@@ -863,13 +1059,12 @@ public class TripForegroundService extends Service {
                 String finalPickupAddress = pickupAddress;
                 OverlayHelper.showNavigationIcon(this, () -> {
                     // Falls back to the restaurant name if the address hasn't
-                    // resolved yet -- NavigationHelper/Maps can still route on
-                    // that plus real coordinates, just with a less precise
-                    // pin than a real street address would give.
+                    // resolved yet -- there's still something to copy and
+                    // paste, just less precise than a real street address.
                     String target = (finalPickupAddress != null && !finalPickupAddress.isEmpty())
                             ? finalPickupAddress : approachingPickupRestaurant;
-                    logDiagnostic("NAV_ICON", "Pickup icon tapped -- opening " + target);
-                    NavigationHelper.openAddress(this, target, pickupLat, pickupLon);
+                    logDiagnostic("NAV_ICON", "Pickup icon tapped -- copying " + target);
+                    NavigationHelper.copyAddressToClipboard(this, target);
                 });
                 logDiagnostic("NAV_ICON", "Showing pickup icon -- approaching: " + approachingPickupRestaurant
                         + (pickupAddress != null && !pickupAddress.isEmpty() ? " (" + pickupAddress + ")" : " (address pending)"));
@@ -1226,6 +1421,14 @@ public class TripForegroundService extends Service {
             logDiagnostic("ERROR", "force_end_trip in onDestroy exception: " + android.util.Log.getStackTraceString(e));
         }
         accessibilityHeartbeatHandler.removeCallbacks(accessibilityHeartbeatRunnable);
+        watchdogRearmHandler.removeCallbacks(watchdogRearmRunnable);
+        // Final safety net, same reasoning as force_end_trip just above --
+        // must not leave MediaRecorder/MediaProjection resources held if
+        // the service is torn down through a path that didn't already
+        // call stopTracking().
+        if (screenRecordingController.isRecording()) {
+            screenRecordingController.stop(); // clears isScreenRecordingActive via the StopListener
+        }
         releaseTripWakeLock(); // final safety net -- must not leak a held wakelock if the service dies unexpectedly
         isRunning = false;
         serviceExists = false;

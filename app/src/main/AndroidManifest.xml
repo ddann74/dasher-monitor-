@@ -16,6 +16,16 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
+    <!-- Opt-in screen recording during a trip (docs/screen_recording/PRD.md).
+         Required for Android 14+'s stricter per-type foreground service
+         declarations - TripForegroundService's own manifest entry below
+         declares the matching foregroundServiceType. The actual capture
+         grant (MediaProjection) is a separate, per-session Activity-result
+         consent dialog Android itself shows - this manifest permission
+         only allows the SERVICE to run with that grant, it does not grant
+         screen capture by itself. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+
     <!-- Bluetooth assist (car connect/disconnect) -->
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
@@ -115,10 +125,17 @@
             android:theme="@style/Theme.DasherMonitor.DeveloperTesting"
             android:parentActivityName=".MainActivity" />
 
-        <!-- Foreground service: GPS logging, trip state machine -->
+        <!-- Foreground service: GPS logging, trip state machine, and
+             (opt-in, see docs/screen_recording/PRD.md) screen recording -
+             Android allows multiple foregroundServiceType values on one
+             service, pipe-separated. mediaProjection is only ever
+             exercised when the driver has both opted in AND granted the
+             per-session MediaProjection consent dialog - declaring the
+             type here is what Android 14+ requires to allow that grant to
+             be used at all, it doesn't request or imply the grant itself. -->
         <service
             android:name=".TripForegroundService"
-            android:foregroundServiceType="location"
+            android:foregroundServiceType="location|mediaProjection"
             android:exported="false" />
 
         <!-- Captures Dasher offer + message notifications -->

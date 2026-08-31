@@ -1719,6 +1719,17 @@ class TripManager:
         self._cached_accel_threshold = HARSH_ACCEL_MS2
         self._cached_brake_threshold = HARSH_BRAKE_MS2
 
+        # Requirement change (docs/safety_score_speeding_debounce/PRD.md):
+        # confirmed real bug, fixed here -- speeding used to be logged on
+        # EVERY tick above DEFAULT_SPEED_LIMIT_KMH, not once per violation,
+        # which a real uploaded report showed produces thousands of
+        # "events" for one ordinary highway drive and crushes
+        # _safety_score to its 0.0 floor. This tracks the currently-open
+        # speeding period's event dict (None when not currently speeding),
+        # so a sustained period logs exactly one event instead of one per
+        # tick -- see _detect_harsh_events.
+        self._open_speeding_event = None
+
         # Dedicated to walking detection specifically -- separate from
         # _parked_since above (which exists for major-delay logging and
         # gets cleared the instant speed ticks up even slightly, so it
@@ -2065,6 +2076,7 @@ class TripManager:
         self._trip_accel_count = 0
         self._trip_accel_mean = 0.0
         self._trip_accel_m2 = 0.0
+        self._open_speeding_event = None
         # One DB read per trip, not per tick -- see the attribute comment
         # in __init__.
         self._cached_accel_threshold, self._cached_brake_threshold, _, _ = (
@@ -2126,8 +2138,30 @@ class TripManager:
             self._log_event("harsh_accel", lat, lon, ts, accel)
         elif accel < self._cached_brake_threshold:
             self._log_event("harsh_brake", lat, lon, ts, accel)
+        # Confirmed real bug, fixed here (docs/safety_score_speeding_debounce/PRD.md):
+        # this used to call self._log_event("speeding", ...) on every tick
+        # above the limit, logging one "event" per second of sustained
+        # highway driving -- a real uploaded report showed 2,359 speeding
+        # rows for a single 39-minute highway trip, which _safety_score's
+        # events_per_km formula then floors to 0.0. Edge-triggered instead:
+        # a continuous period over the limit logs exactly ONE event
+        # (self._open_speeding_event tracks it while open), with magnitude
+        # updated to the PEAK speed reached during the period rather than
+        # just the speed at the moment it started. Dropping back to/under
+        # the limit closes the period; crossing again later starts a
+        # genuinely new, separate event -- still catches repeated real
+        # violations, just no longer one per GPS tick.
         if speed_kmh > DEFAULT_SPEED_LIMIT_KMH:
-            self._log_event("speeding", lat, lon, ts, speed_kmh)
+            if self._open_speeding_event is None:
+                self._open_speeding_event = {
+                    "event_type": "speeding", "lat": lat, "lon": lon,
+                    "timestamp": ts, "magnitude": speed_kmh,
+                }
+                self.events.append(self._open_speeding_event)
+            elif speed_kmh > self._open_speeding_event["magnitude"]:
+                self._open_speeding_event["magnitude"] = speed_kmh
+        else:
+            self._open_speeding_event = None
         self._record_accel_sample_in_memory(accel)
 
     def _log_event(self, event_type, lat, lon, ts, magnitude):

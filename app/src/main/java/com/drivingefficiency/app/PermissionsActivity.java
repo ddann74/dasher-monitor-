@@ -3,11 +3,15 @@ package com.drivingefficiency.app;
 import android.Manifest;
 import android.app.AlertDialog;
 import android.content.pm.PackageManager;
+import android.media.projection.MediaProjectionManager;
 import android.os.Bundle;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import android.content.Intent;
@@ -26,6 +30,34 @@ public class PermissionsActivity extends AppCompatActivity {
 
     private PyObject engine;
     private TextView permissionStatusText;
+    private Switch screenRecordingSwitch;
+    private TextView screenRecordingStatusText;
+
+    // ComponentActivity (an ancestor of AppCompatActivity, which this
+    // class already extends) provides registerForActivityResult directly
+    // -- no new Gradle dependency needed, it's already transitively
+    // pulled in via androidx.appcompat. Must be registered here, in
+    // onCreate before the activity reaches STARTED, not lazily on click --
+    // a real Android platform requirement for this API, not a style choice.
+    private final ActivityResultLauncher<Intent> screenCaptureConsentLauncher =
+            registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+                if (result.getResultCode() == RESULT_OK && result.getData() != null) {
+                    ScreenRecordingController.setPendingConsent(result.getResultCode(), result.getData());
+                    ScreenRecordingController.setEnabled(this, true);
+                    logDiagnostic("SCREEN_RECORDING", "Consent granted -- recording will start with the next trip");
+                    Toast.makeText(this, "Screen recording enabled -- it will start automatically "
+                            + "with your next trip.", Toast.LENGTH_LONG).show();
+                } else {
+                    // Declined -- revert the toggle rather than leaving it
+                    // on with nothing actually able to record, which would
+                    // silently do nothing every trip until manually
+                    // noticed.
+                    screenRecordingSwitch.setChecked(false);
+                    ScreenRecordingController.setEnabled(this, false);
+                    logDiagnostic("SCREEN_RECORDING", "Consent denied or dialog dismissed -- staying off");
+                }
+                refreshScreenRecordingStatus();
+            });
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -47,10 +79,11 @@ public class PermissionsActivity extends AppCompatActivity {
         Button activityRecognitionButton = findViewById(R.id.activityRecognitionButton);
         Button trustedContactsButton = findViewById(R.id.trustedContactsButton);
         Button cannedRepliesButton = findViewById(R.id.cannedRepliesButton);
+        screenRecordingSwitch = findViewById(R.id.screenRecordingSwitch);
+        screenRecordingStatusText = findViewById(R.id.screenRecordingStatusText);
+        Button deleteAllRecordingsButton = findViewById(R.id.deleteAllRecordingsButton);
         EditText apiKeyInput = findViewById(R.id.apiKeyInput);
         Button saveApiKeyButton = findViewById(R.id.saveApiKeyButton);
-        EditText roadWarriorPackageInput = findViewById(R.id.roadWarriorPackageInput);
-        Button saveRoadWarriorPackageButton = findViewById(R.id.saveRoadWarriorPackageButton);
         TextView fuelCostSubtext = findViewById(R.id.fuelCostSubtext);
         EditText fuelEfficiencyInput = findViewById(R.id.fuelEfficiencyInput);
         EditText fuelPriceInput = findViewById(R.id.fuelPriceInput);
@@ -67,22 +100,6 @@ public class PermissionsActivity extends AppCompatActivity {
             String key = apiKeyInput.getText().toString().trim();
             GoogleApiHelper.setApiKey(this, key);
             Toast.makeText(this, key.isEmpty() ? "API key cleared." : "API key saved.",
-                    Toast.LENGTH_SHORT).show();
-        });
-
-        // Premortem finding (docs/road_warrior_icon/PRD.md ss4a, P5): a
-        // future RoadWarrior update, regional variant, or old sideloaded
-        // APK could use a different package name than the one reconfirmed
-        // in NavigationHelper -- indistinguishable, from the driver's seat,
-        // from RoadWarrior simply not handling geo: intents. Same
-        // runtime-override pattern as the API key above, so an affected
-        // driver has a way out without a code change.
-        roadWarriorPackageInput.setText(NavigationHelper.getRoadWarriorPackage(this));
-        saveRoadWarriorPackageButton.setOnClickListener(v -> {
-            String packageName = roadWarriorPackageInput.getText().toString().trim();
-            NavigationHelper.setRoadWarriorPackage(this, packageName);
-            Toast.makeText(this, packageName.isEmpty()
-                    ? "RoadWarrior package reset to default." : "RoadWarrior package saved.",
                     Toast.LENGTH_SHORT).show();
         });
 
@@ -196,6 +213,115 @@ public class PermissionsActivity extends AppCompatActivity {
                 startActivity(new Intent(this, TrustedContactsActivity.class)));
         cannedRepliesButton.setOnClickListener(v ->
                 startActivity(new Intent(this, CannedRepliesActivity.class)));
+
+        // Screen recording (docs/screen_recording/PRD.md) -- off by
+        // default, per that PRD's own §2 requirement. setChecked here
+        // reflects the persisted preference WITHOUT firing the listener
+        // below (setOnCheckedChangeListener is attached after this line),
+        // so reopening this screen doesn't re-trigger a consent prompt.
+        screenRecordingSwitch.setChecked(ScreenRecordingController.isEnabled(this));
+        screenRecordingSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (isChecked) {
+                // Turning the toggle on always re-asks for consent, even
+                // if one might already be held from earlier this same
+                // process -- simplest, most honest behavior given
+                // ScreenRecordingController's own unconfirmed-on-a-real-
+                // device note about whether a held grant can be reused;
+                // asking again here costs the driver one extra tap at
+                // most, not a real burden, and is guaranteed to work.
+                MediaProjectionManager manager = (MediaProjectionManager)
+                        getSystemService(MEDIA_PROJECTION_SERVICE);
+                if (manager == null) {
+                    Toast.makeText(this, "Screen recording isn't available on this device.",
+                            Toast.LENGTH_LONG).show();
+                    screenRecordingSwitch.setChecked(false);
+                    return;
+                }
+                screenCaptureConsentLauncher.launch(manager.createScreenCaptureIntent());
+            } else {
+                ScreenRecordingController.setEnabled(this, false);
+                ScreenRecordingController.clearPendingConsent();
+                logDiagnostic("SCREEN_RECORDING", "Turned off from Setup");
+                refreshScreenRecordingStatus();
+            }
+        });
+        deleteAllRecordingsButton.setOnClickListener(v -> {
+            int count = ScreenRecordingController.recordingsCount(this);
+            if (count == 0) {
+                Toast.makeText(this, "No recordings to delete.", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            // CONFIRMED REAL BUG, closed by this check: without it, deleting
+            // while a recording is actively open for writing (this screen
+            // can be opened mid-trip) would unlink its directory entry out
+            // from under MediaRecorder's still-open file handle -- Android
+            // typically doesn't throw when that happens, it just silently
+            // loses the recording once MediaRecorder later finishes writing
+            // to now-unreferenced storage. See
+            // TripForegroundService.isScreenRecordingActive's own doc.
+            if (TripForegroundService.isScreenRecordingActive) {
+                Toast.makeText(this, "A recording is in progress -- stop tracking first, "
+                        + "then delete.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            new AlertDialog.Builder(this)
+                    .setTitle("Delete all recordings?")
+                    .setMessage("This will permanently delete " + count + " screen recording"
+                            + (count == 1 ? "" : "s") + " stored on this device. This cannot be undone.")
+                    .setPositiveButton("Delete", (dialog, which) -> {
+                        // deleteAllRecordings()'s return value used to be
+                        // ignored entirely -- a partial failure (a locked
+                        // file, a permission hiccup) would still show this
+                        // exact "deleted" success message with nothing left
+                        // to indicate otherwise. Found auditing this
+                        // feature for "does anything fail silently?"
+                        int failures = ScreenRecordingController.deleteAllRecordings(this);
+                        refreshScreenRecordingStatus();
+                        Toast.makeText(this, failures == 0
+                                ? "Recordings deleted."
+                                : failures + " recording" + (failures == 1 ? "" : "s")
+                                        + " could not be deleted -- try again.",
+                                Toast.LENGTH_LONG).show();
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        });
+        refreshScreenRecordingStatus();
+    }
+
+    /** Human-readable count + total size of stored recordings -- the
+      * PRD's own minimum bar for "a way to review recordings," a stretch
+      * goal (full playback) left for later.
+      *
+      * Also surfaces a real, previously-silent gap found reviewing this
+      * screen for a premortem: the Switch reflects the PERSISTED toggle
+      * preference, which survives a process restart -- but the actual
+      * MediaProjection consent grant is held only in memory and does NOT
+      * survive one (see ScreenRecordingController's class doc). Before
+      * this, a driver could see the Switch showing ON here and reasonably
+      * assume recording would work on the next trip, when in fact it
+      * silently wouldn't until they re-toggled it -- the ONLY visible
+      * evidence otherwise was an alert notification that only fires
+      * later, at the moment a trip actually tries and fails to start
+      * recording. This makes that state visible right where the Switch
+      * itself is, not just after the fact. */
+    private void refreshScreenRecordingStatus() {
+        StringBuilder text = new StringBuilder();
+        if (screenRecordingSwitch.isChecked() && !ScreenRecordingController.hasPendingConsent()) {
+            text.append("Recording is on, but consent needs to be re-granted (turn off and back "
+                    + "on) since the app was last restarted -- the next trip will not record "
+                    + "until then.\n\n");
+        }
+        int count = ScreenRecordingController.recordingsCount(this);
+        if (count == 0) {
+            text.append(getString(R.string.screen_recording_status_default));
+        } else {
+            long totalBytes = ScreenRecordingController.recordingsTotalSizeBytes(this);
+            double totalMb = totalBytes / (1024.0 * 1024.0);
+            text.append(String.format(java.util.Locale.US,
+                    "%d recording%s stored, %.1f MB total.", count, count == 1 ? "" : "s", totalMb));
+        }
+        screenRecordingStatusText.setText(text.toString());
     }
 
     @Override
@@ -207,6 +333,7 @@ public class PermissionsActivity extends AppCompatActivity {
         // checking each one yourself.
         updatePermissionStatusText();
         subscribeToDrivingDetectionIfPermitted();
+        refreshScreenRecordingStatus(); // picks up any recording(s) added by a trip since this screen was last open
     }
 
     /**

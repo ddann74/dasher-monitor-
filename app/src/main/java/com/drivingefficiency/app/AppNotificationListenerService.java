@@ -275,49 +275,69 @@ public class AppNotificationListenerService extends NotificationListenerService 
             }
             lastNotificationOfferKey = offerKey;
 
+            // Requirement change (2026-08-30, docs/foreground_before_scoring/PRD.md).
+            // REAL BUG FIX: this used to only launch Dasher `if
+            // (!"Poor".equals(label))`, gated on the notification-parsed
+            // score below. That score is intentionally lenient
+            // (parse_offer_notification's own honesty note: built without
+            // a real sample to calibrate against), so a real
+            // Excellent/Good offer misclassified as "Poor" here would
+            // silently skip the one thing this whole notification path
+            // exists to provide: an early heads-up before Dasher's own
+            // accurate, screen-based score
+            // (DasherAccessibilityService.parse_offer_screen) has a
+            // chance to run. Launches unconditionally now, for every
+            // recognized offer, with score -1 -- the real score isn't
+            // known at this point, only guessed at, so every downstream
+            // display (the fallback overlay, the auto-launch notification
+            // body -- see launchDasherApp/showOfferOverlayFallback) shows
+            // its existing honest "no score available" text instead of a
+            // possibly-wrong number.
+            launchDasherApp(restaurantName, -1);
+
             JSONObject score = result.optJSONObject("smart_score");
             if (score != null) {
                 double finalScore = score.optDouble("final_score", 0);
                 String label = score.optString("label", "");
-                double perKm = score.optDouble("base_rate_per_km", 0);
-                double perHr = score.optDouble("hourly_rate", 0);
-                VoiceAnnouncer.speak(String.format("New offer detected: %d, %s. %.2f dollars per kilometer, "
-                        + "%.2f dollars per hour", Math.round(finalScore), label, perKm, perHr));
-                HapticFeedback.vibrateForLabel(this, label);
+                // Confirmed real bug, fixed here: this score/label used
+                // to be announced by voice, vibrated via
+                // HapticFeedback.vibrateForLabel, AND (one level down,
+                // inside launchDasherApp) shown as fact in both the
+                // fallback overlay and the auto-launch notification body
+                // -- all four driven by the same lenient, unconfirmed
+                // parse. Downgraded to match the hasPayout-only branch
+                // below: announce what's actually known (the payout,
+                // directly regex-extracted, not derived) and that Dasher
+                // is opening for the real score, instead of presenting a
+                // possibly-wrong number as if it were final. The live
+                // Smart Score badge (DasherAccessibilityService,
+                // screen-based) remains the only place a numeric score is
+                // ever presented with confidence.
+                VoiceAnnouncer.speak(String.format(
+                        "New offer detected: $%.2f. Opening Dasher for the full score.", payout));
+                // Diagnostic logging keeps the raw lenient score/label --
+                // useful for correcting parse_offer_notification's
+                // accuracy later (per its own honesty note), not shown to
+                // the driver.
                 logDiagnostic("OFFER", "Detected via notification: " + restaurantName
-                        + ", $" + payout + ", score " + Math.round(finalScore));
-
-                // Auto-launch Dasher for the offer, addressing the real
-                // reported gap: Monitor detects and announces an offer
-                // instantly regardless of what app you're in, but if
-                // Dasher's own process was reclaimed while backgrounded,
-                // the offer itself can disappear before you manually
-                // switch back to look. Excludes only "Poor" -- every
-                // other label (Excellent, Good, Fair) auto-launches, per
-                // explicit direction.
-                if (!"Poor".equals(label)) {
-                    launchDasherApp(restaurantName, finalScore);
-                }
+                        + ", $" + payout + ", lenient score " + Math.round(finalScore)
+                        + " (" + label + ", not announced -- see PRD)");
             } else if (hasPayout) {
                 // Payout found but no distance -- can't compute a real
-                // score, but still worth a heads-up. No score to filter
-                // by label, so always launch -- can't tell if it's a
-                // "Poor" offer without one.
+                // score, but still worth a heads-up.
                 VoiceAnnouncer.speak(String.format("New offer detected: $%.2f. Open Dasher for details.", payout));
                 logDiagnostic("OFFER", "Detected via notification (no distance): " + restaurantName + ", $" + payout);
-                launchDasherApp(restaurantName, -1);
             } else {
                 // CONFIRMED real format: "New Delivery!" / "New Order: Go
                 // to X" -- no payout or distance in the notification at
                 // all, just an announcement to go check the app. This was
                 // previously completely unrecognized (see
-                // parse_offer_notification's confirmed-real fix). Always
-                // launches Dasher -- this IS the exact scenario reported:
-                // an offer arrives while on another app, with nothing
-                // else to show except by opening Dasher directly.
+                // parse_offer_notification's confirmed-real fix). This IS
+                // the exact scenario reported: an offer arrives while on
+                // another app, with nothing else to show except by
+                // opening Dasher directly.
                 VoiceAnnouncer.speak("New offer detected. Open Dasher for details.");
                 logDiagnostic("OFFER", "Detected via notification (no payout/distance): " + restaurantName);
-                launchDasherApp(restaurantName, -1);
                 // Fixes a real, confirmed root cause behind three separate
                 // reported gaps at once (empty Address Book, no traffic
                 // ratio ever logged, the sweet-spot icon never appearing):
