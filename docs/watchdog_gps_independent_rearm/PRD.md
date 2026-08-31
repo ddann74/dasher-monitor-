@@ -118,6 +118,57 @@ Delete `lastWatchdogRearmMs` and the re-arm block inside
 `maybeLogHeartbeat` (L743-748) - fully superseded by 3.1, which fires on
 its own schedule regardless of GPS activity.
 
+## 3a. Premortem (2026-08-31): assume this fix doesn't actually help
+
+Re-traced the real implementation (not just the design) looking for what
+this fix does NOT close, the same way the two prior premortems on
+`docs/screen_recording/PRD.md` did.
+
+- **P1 - a 5-minute "cold start" window at the beginning of every trip
+  is still exactly as exposed as before this fix.** Confirmed in code:
+  `startTracking()` calls `MonitoringWatchdogReceiver.scheduleWatchdog(this)`
+  directly (L287), THEN separately schedules `watchdogRearmRunnable` with
+  `postDelayed(..., WATCHDOG_REARM_INTERVAL_MS)` - so the new,
+  GPS-independent backstop's FIRST firing doesn't happen until 5 minutes
+  into the trip. If the very first watchdog alarm (the one
+  `startTracking()` itself just scheduled) is the one an aggressive OEM
+  drops - the exact failure mode `docs/watchdog_reliability/PRD.md`
+  evidenced as real - and no watchdog alarm fires again before the
+  5-minute mark, this fix provides no protection during that window,
+  because it hasn't started running yet. This isn't a flaw unique to
+  this PRD's design - `WATCHDOG_REARM_INTERVAL_MS` (5 min) was inherited
+  unchanged, per this PRD's own §2 non-goals - but it does mean "the
+  redundant re-arm is now GPS-independent" is not the same claim as "the
+  redundant re-arm covers the whole trip," and the PRD's own §2 checklist
+  doesn't currently distinguish the two. Not fixed here - shrinking this
+  window would mean lowering `WATCHDOG_REARM_INTERVAL_MS`, an explicit
+  non-goal of this PRD, or firing the new timer once immediately at
+  `startTracking()` in addition to its normal schedule, which is a real,
+  cheap option worth a follow-up decision rather than doing unilaterally
+  here.
+- **P2 - "GPS-independent" does not mean "immune to every kind of
+  stall," and the fix's own comments could be read as implying more than
+  that.** `watchdogRearmRunnable` runs on the main `Looper`, same as
+  every other Handler-based timer in this file (including the
+  accessibility heartbeat it mirrors). If the main thread itself is ever
+  blocked for an extended period - a slow synchronous call into the
+  Python engine via Chaquopy, heavy UI work, anything else queued ahead
+  of it - this timer is delayed exactly like the GPS-tied one it
+  replaced, just for a different underlying reason. This is an inherited
+  limitation of the `Handler.postDelayed` pattern itself, not something
+  this PRD introduced or could reasonably be expected to solve (a
+  dedicated background thread would add real complexity for a scenario
+  with no evidence behind it yet), but worth stating explicitly rather
+  than letting "GPS-independent" read as "unconditionally reliable."
+- **Reviewed and ruled out, not a real risk**: a `removeCallbacks`/
+  in-flight-execution race between `stopTracking()` and
+  `watchdogRearmRunnable.run()`. Both run on the same main `Looper`
+  thread, so they cannot execute concurrently - either the runnable
+  finishes before `stopTracking()` runs, or `stopTracking()`'s
+  `removeCallbacks` cleanly cancels a still-queued firing. No fix needed;
+  noted so this specific concern isn't re-raised and re-investigated
+  later without cause.
+
 ## 4. Testing / verification approach
 
 Same disclosed limitation as `docs/watchdog_reliability/PRD.md` §4: no

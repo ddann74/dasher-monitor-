@@ -44,3 +44,32 @@ Remaining PRD §6 box: user sign-off (real-device confirmation that the
 watchdog now re-arms on schedule even during an extended GPS gap, e.g.
 the deep-park tier's 30+ second polling interval, is out of scope for
 this environment - same limitation as every other Java-side PRD here).
+
+## Premortem (2026-08-31)
+
+Requested by the driver. Re-traced the actual implementation, same
+approach as the two premortem passes already done on
+`docs/screen_recording/PRD.md`. Found one real, previously-undocumented
+gap and one worth stating explicitly even though it's not new:
+
+- **P1**: confirmed in code that `startTracking()` calls
+  `MonitoringWatchdogReceiver.scheduleWatchdog(this)` directly, then
+  separately schedules `watchdogRearmRunnable` for 5 minutes later - so
+  the new GPS-independent backstop doesn't actually start covering
+  anything until 5 minutes into each trip. A dropped first alarm with no
+  second alarm before that mark is still exactly as unprotected as
+  before this PRD. Documented as a real, disclosed gap (PRD.md §3a-P1),
+  not fixed - shrinking it means either lowering
+  `WATCHDOG_REARM_INTERVAL_MS` (explicit non-goal) or firing the new
+  timer once immediately in addition to its normal schedule, flagged as
+  a real option for a follow-up decision rather than done unilaterally.
+- **P2**: "GPS-independent" only removes the GPS-specific dependency -
+  the timer still runs on the main `Looper` and would be delayed by any
+  other main-thread stall, same as the heartbeat pattern it mirrors.
+  Inherited limitation, not introduced by this PRD, stated explicitly so
+  it isn't mistaken for "unconditionally reliable."
+
+Also explicitly reviewed and ruled out a `removeCallbacks`-vs-in-flight-
+execution race between `stopTracking()` and the runnable - both run on
+the same main thread, so they can't execute concurrently. No fix needed;
+recorded so this doesn't get re-investigated later without cause.
