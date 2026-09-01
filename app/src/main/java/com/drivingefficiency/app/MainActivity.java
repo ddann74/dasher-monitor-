@@ -623,6 +623,57 @@ public class MainActivity extends AppCompatActivity {
             layout.setOrientation(android.widget.LinearLayout.VERTICAL);
             int pad = (int) (16 * getResources().getDisplayMetrics().density);
             layout.setPadding(pad, pad, pad, pad);
+
+            // docs/feedback_dialog_phase_timings/PRD.md ss4A -- this dialog
+            // is the one actually shown automatically right after a real
+            // delivery (see auto_show_feedback_trip_id in onCreate), but it
+            // never showed any context about the trip itself, even though
+            // the exact same phase-by-phase breakdown already displays
+            // correctly in buildTripSummaryBody for the separate MANUAL
+            // "Last Trip Summary" flow. Uses get_trip_summary_by_id (not
+            // get_last_trip_summary) since this dialog is always given a
+            // specific tripId by its caller -- correct regardless of which
+            // of the two real call sites invoked it. Degrades silently to
+            // the exact previous rating-only behavior on any failure --
+            // this is supplementary context, never worth blocking the
+            // actual feedback form over.
+            try {
+                JSONObject summary = new JSONObject(engine.callAttr("get_trip_summary_by_id", tripId).toString());
+                JSONObject phaseBreakdown = summary.optBoolean("found", false)
+                        ? summary.optJSONObject("phase_breakdown") : null;
+                if (phaseBreakdown != null && phaseBreakdown.length() > 0) {
+                    TextView phaseTimingText = new TextView(this);
+                    StringBuilder phaseBody = new StringBuilder("Where the time went:\n");
+                    if (!phaseBreakdown.isNull("driving_to_pickup_seconds")) {
+                        phaseBody.append(String.format("Driving to pickup: %s\n",
+                                formatMinutesSeconds(phaseBreakdown.optDouble("driving_to_pickup_seconds", 0))));
+                    }
+                    if (!phaseBreakdown.isNull("wait_at_restaurant_seconds")) {
+                        phaseBody.append(String.format("Waiting at restaurant: %s\n",
+                                formatMinutesSeconds(phaseBreakdown.optDouble("wait_at_restaurant_seconds", 0))));
+                    }
+                    if (!phaseBreakdown.isNull("driving_to_dropoff_seconds")) {
+                        phaseBody.append(String.format("Driving to dropoff: %s\n",
+                                formatMinutesSeconds(phaseBreakdown.optDouble("driving_to_dropoff_seconds", 0))));
+                    }
+                    if (!phaseBreakdown.isNull("parking_to_walking_seconds")) {
+                        phaseBody.append(String.format("Parking to walking: %s\n",
+                                formatMinutesSeconds(phaseBreakdown.optDouble("parking_to_walking_seconds", 0))));
+                    }
+                    if (!phaseBreakdown.isNull("completing_dropoff_seconds")) {
+                        phaseBody.append(String.format("Completing dropoff: %s\n",
+                                formatMinutesSeconds(phaseBreakdown.optDouble("completing_dropoff_seconds", 0))));
+                    }
+                    phaseTimingText.setText(phaseBody.toString());
+                    int bottomMargin = (int) (12 * getResources().getDisplayMetrics().density);
+                    phaseTimingText.setPadding(0, 0, 0, bottomMargin);
+                    layout.addView(phaseTimingText);
+                }
+            } catch (JSONException | RuntimeException e) { // covers PyException too
+                logDiagnostic("ERROR", "showFeedbackDialog phase-timing fetch exception: "
+                        + android.util.Log.getStackTraceString(e));
+            }
+
             layout.addView(ratingBar);
 
             // Five quick-tap categories, one word per option, no typing

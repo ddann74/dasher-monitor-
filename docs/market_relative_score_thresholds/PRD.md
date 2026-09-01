@@ -2,7 +2,9 @@
 
 Status: DRAFT. Investigation only, grounded in the real code and real
 schema. Nothing implemented yet — do not start coding from this PRD
-until the driver says "yes implement it."
+until the driver says "yes implement it." §4B (added at the driver's
+request) is a second, alternative design — see §5 for how the two
+relate; this PRD does not yet pick one over the other.
 
 ## 1. What "fixed thresholds" means here
 
@@ -89,8 +91,67 @@ For each learnable factor (`base_score`, `hourly_score`,
    this file already follows) so a driver can see "$2.10/km == 100
    (based on your last N offers)" instead of a bare number.
 
+## 4B. Alternative design (added at driver's request): quartile the composite score, not each factor
+
+A different, simpler shape for the same underlying idea — instead of
+making each of the four factor-level anchors in §4 market-relative,
+leave `calculate()`'s formulas exactly as they are and only change how
+the final composite `final_score` gets its **label and badge color**.
+
+### How labeling/color actually works today (confirmed by reading the real code)
+
+`SmartScoreEngine._label(score)` (drive_monitor.py) buckets the
+composite `final_score` at fixed breakpoints:
+
+| final_score | label |
+|---|---|
+| >= 85 | Excellent |
+| >= 70 | Good |
+| >= 50 | Fair |
+| < 50 | Poor |
+
+`DasherAccessibilityService.colorForLabel(label)` (Java) then maps
+that label straight to the live badge's color (deep green / lighter
+green / amber / red) — the same label also drives the badge text and
+`HapticFeedback.vibrateForLabel`. Both the 85/70/50 breakpoints and the
+four colors are fixed, identical for every driver and every market.
+
+### The alternative
+
+`offer_outcomes.smart_score` already stores the real composite
+`final_score` for **every** offer this app has ever scored (accepted,
+declined, or timed out — not just completed trips, same broad, low-
+bias sample §2 already relies on for `base_score`/`hourly_score`).
+Instead of the fixed 85/70/50 breakpoints, compute the driver's own
+recent quartile boundaries from that column (e.g. 25th/50th/75th
+percentile of `smart_score` over the same window §5 picks) and label
+against those instead: "Excellent" becomes "top quartile of what
+you've actually been offered lately," "Poor" the bottom quartile.
+`_label()`'s three-way branch structure doesn't need to change shape,
+only what breakpoints it compares against — same "gate on a minimum
+sample count, fall back to the fixed constants below that" pattern as
+everything else in this file.
+
+### How this relates to §4 (not both at once)
+
+§4 makes the six *inputs* to `final_score` market-relative. §4B makes
+the *label placed on the output* market-relative, leaving every input
+formula untouched. Doing both simultaneously would be confusing for
+the reason §5's calibration question already flags: a score could
+drift for two independent reasons at once (each factor's own anchor
+moving, AND the label thresholds on top of that also moving), with no
+way to tell which one changed. This PRD does not pick between them —
+see the new open question below.
+
 ## 5. Open questions (need a driver decision before implementation)
 
+- **§4 vs. §4B, or a staged combination**: build the per-factor anchors
+  (§4), the composite-label quartiles (§4B), both, or start with just
+  one and revisit? §4B is the smaller, more self-contained change (one
+  function's breakpoints, not four formulas) and reuses data already
+  proven to work for §4's own `base_score`/`hourly_score` case — a
+  reasonable candidate to build first if the driver wants to start
+  somewhere concrete, but that's a product call, not a coding one.
 - **Interaction with `recalculate_personal_calibration`**: once an
   anchor is itself market-relative, does per-factor weight calibration
   still mean the same thing? A factor could simultaneously have its
@@ -118,8 +179,11 @@ For each learnable factor (`base_score`, `hourly_score`,
 
 ## 6. Success criteria (not started — nothing here is implemented yet)
 
-- [ ] §5's open questions answered by the driver (recorded in
-      PROGRESS.md before any of the boxes below are started).
+- [ ] §5's open questions answered by the driver, INCLUDING which of
+      §4/§4B (or both, or a staged order) to actually build (recorded
+      in PROGRESS.md before any of the boxes below are started).
+
+§4 (per-factor anchors), if chosen:
 - [ ] `base_score` anchor learnable from `offer_outcomes`, gated on a
       minimum sample count, falling back to the fixed $2.00/km anchor
       below that count.
@@ -131,4 +195,16 @@ For each learnable factor (`base_score`, `hourly_score`,
 - [ ] Real executable test proving at least one factor: same raw
       input, anchor shifts after seeding synthetic historical data,
       and the resulting sub-score changes accordingly.
+
+§4B (composite-score quartile labeling), if chosen:
+- [ ] `_label()`'s breakpoints learnable from `offer_outcomes.smart_score`'s
+      real quartile distribution, gated on a minimum sample count,
+      falling back to the exact fixed 85/70/50 breakpoints below that
+      count.
+- [ ] `colorForLabel`/the badge/haptics need no change — they already
+      key off the label string, not a raw score number.
+- [ ] Real executable test: same `final_score`, label changes once
+      enough synthetic historical `offer_outcomes` rows shift the
+      quartile boundaries around it.
+
 - [ ] Driver sign-off.
