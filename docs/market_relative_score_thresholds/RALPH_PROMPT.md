@@ -7,6 +7,14 @@ choice, which sample population, how this coexists with
 floor) — none of these are coding judgment calls. Do not start §6 until
 PROGRESS.md records the driver's actual answers to §5.
 
+The PRD now describes TWO designs — §4 (per-factor anchors) and §4B
+(quartile the composite score's label instead, added later at the
+driver's request). §5's new first open question is which one to build.
+Do not assume §4 just because it was written first, and do not build
+both at once without an explicit driver answer — §4B's own text
+explains why running both simultaneously would be confusing (two
+independent things could move the same score for unrelated reasons).
+
 Once those answers exist, run this prompt repeatedly (one iteration
 per invocation) until every box in
 `docs/market_relative_score_thresholds/PRD.md` §6 is checked.
