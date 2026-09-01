@@ -1,8 +1,8 @@
 # PRD — database restore has no validation and no safety copy
 
-Status: DRAFT. Investigation only, grounded in the real code. Nothing
-implemented yet — do not start coding from this PRD until the driver
-says "yes implement it."
+Status: IMPLEMENTED and tested (Python half). On-device confirmation of
+the Java-side file flow is blocked (no Android emulator/device
+available). See PROGRESS.md.
 
 ## 1. The real bug found
 
@@ -100,15 +100,15 @@ database until the chosen file is proven safe:
 
 ## 5. Success criteria
 
-- [ ] Chosen backup file is copied to a temp location first, never
+- [x] Chosen backup file is copied to a temp location first, never
       streamed directly over the live database path.
-- [ ] `validate_backup_file` implemented and rejects a non-SQLite file
+- [x] `validate_backup_file` implemented and rejects a non-SQLite file
       and a SQLite file missing this app's core tables.
-- [ ] A real pre-restore safety copy is taken via the existing
+- [x] A real pre-restore safety copy is taken via the existing
       `backup_database_to` before the live database is touched.
-- [ ] Restoring a genuinely valid backup still works end-to-end (no
+- [x] Restoring a genuinely valid backup still works end-to-end (no
       regression on the working case).
-- [ ] Real executable test (Python side): `validate_backup_file`
+- [x] Real executable test (Python side): `validate_backup_file`
       against a real valid DB, a non-SQLite file, and a SQLite file
       missing the `trips` table.
 - [ ] On-device confirmation of the Java-side file flow — blocked, no
