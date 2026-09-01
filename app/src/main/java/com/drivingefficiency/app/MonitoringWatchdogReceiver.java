@@ -68,6 +68,21 @@ public class MonitoringWatchdogReceiver extends BroadcastReceiver {
     }
 
     /**
+     * docs/boot_resume_monitoring/PRD.md ss3 -- was monitoring supposed to
+     * be running the moment everything last died (a process kill, a
+     * reboot, an app update)? This flag is written to SharedPreferences
+     * (a file on disk, durable across process death AND a reboot), set
+     * true in TripForegroundService.startTracking() and false in
+     * stopTracking(), so it already means exactly the right thing -- this
+     * is just the first reader of it outside the watchdog itself.
+     * Defaults to false if never set (e.g. a fresh install).
+     */
+    public static boolean wasIntendedActive(Context context) {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(KEY_INTENDED_ACTIVE, false);
+    }
+
+    /**
      * Queries the current mode via the same engine-connection pattern
      * already used for logging, so the watchdog can schedule itself
      * faster specifically while in DASHER mode. Defaults to GENERAL

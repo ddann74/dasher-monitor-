@@ -1,8 +1,10 @@
 # PRD — monitoring doesn't actually resume after a device reboot
 
-Status: DRAFT. Investigation only, grounded in the real code. Nothing
-implemented yet — do not start coding from this PRD until the driver
-says "yes implement it."
+Status: IMPLEMENTED, built from §4's own stated recommendations (no
+driver override given): both `ACTION_BOOT_COMPLETED` and
+`ACTION_MY_PACKAGE_REPLACED` trigger resume; a real notification is
+shown, not a Toast. On-device confirmation is explicitly blocked (see
+§5's own note on why that specifically matters here). See PROGRESS.md.
 
 ## 1. The real bug found
 
@@ -108,13 +110,14 @@ the same call this app already makes elsewhere.
 
 ## 5. Success criteria
 
-- [ ] `MonitoringWatchdogReceiver.wasIntendedActive(Context)` added.
-- [ ] `BootAndUpdateReceiver` calls it and starts
+- [x] `MonitoringWatchdogReceiver.wasIntendedActive(Context)` added.
+- [x] `BootAndUpdateReceiver` calls it and starts
       `TripForegroundService` when `true`, for `ACTION_BOOT_COMPLETED`
-      (and `ACTION_MY_PACKAGE_REPLACED`, pending §4's answer).
-- [ ] The outcome (resumed vs. stayed off) is logged either way.
-- [ ] The driver is notified visibly on a real auto-resume, not just
-      via the diagnostic log (pending §4's format answer).
+      and `ACTION_MY_PACKAGE_REPLACED` (§4's own recommendation, used
+      absent a driver override).
+- [x] The outcome (resumed vs. stayed off) is logged either way.
+- [x] The driver is notified visibly on a real auto-resume via a
+      notification, not a Toast (§4's own recommendation).
 - [ ] On-device confirmation — blocked, no Android emulator/device
       available in this environment. Note: this is the one item in
       this PRD that most needs real-device confirmation, since
