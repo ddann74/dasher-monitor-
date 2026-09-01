@@ -20,14 +20,35 @@ No change to `WEIGHT_HOURLY_RATE`, `hourly_score`'s formula, or any
 other factor in `calculate()` -- confirmed via diff review, matching
 PRD §3's non-goals.
 
-## §4.B — deliberately NOT started
+## §5 answered (2026-08-31)
 
-PRD §5's open questions (what timestamp counts as "accepted," and
-whether this should be designed jointly with
-`docs/deadhead_stacked_order_baseline/` §7's per-job timing work) have
-not been answered by the driver. Per RALPH_PROMPT.md's explicit
-guardrail, §4.B was not started without that answer -- no schema
-change, no payout capture, no `get_hourly_rate_accuracy_summary()`.
+Both open questions answered:
+
+1. **"Accepted" timestamp**: option (b) — a new real `accepted_ts`
+   captured at `add_pickup` time, through to `end_time`. Not the trip's
+   own `start_time`, since that would make every actual result look
+   artificially better than reality (real decide/idle time before
+   driving off goes uncounted).
+2. **Stacked/batch orders**: design jointly with
+   `docs/deadhead_stacked_order_baseline/` §7's per-job timing work —
+   both need the same per-job (not per-trip) shape, so solving them as
+   two unrelated schemas would likely mean building "one row per job"
+   twice.
+
+Recorded in PRD §5 directly. This settles *what* the feature should
+measure and *what shape* it needs, not the actual schema. See PRD §5's
+own note: the real per-job table/columns still need a design pass that
+spans both this PRD and `docs/deadhead_stacked_order_baseline/` §7 —
+neither has done that yet, and that PRD's §7/§8 explicitly forbids
+starting without one.
+
+## §4.B — still NOT started
+
+Per RALPH_PROMPT.md's updated guardrail: answering §5 didn't create
+the joint per-job schema design §4.B actually needs to be coded from.
+No schema change, no payout capture, no
+`get_hourly_rate_accuracy_summary()` yet -- the next real step is that
+joint design pass, not implementation.
 
 ## Verification (2026-08-31) — ACTUALLY EXECUTED, not just reviewed
 
@@ -66,5 +87,5 @@ baseline separately from a specific-restaurant case.
 
 Also verified: `ast.parse(drive_monitor.py)` clean after every edit.
 
-Remaining PRD §6 boxes: everything under §4.B (blocked on §5's open
-questions), plus driver sign-off.
+Remaining PRD §6 boxes: everything under §4.B (blocked on the joint
+per-job schema design, not on §5 anymore), plus driver sign-off.

@@ -1,9 +1,11 @@
 # PRD — hourly-rate estimate vs. actual result
 
 Status: §4.A (the wait-time fix to the live estimate) IMPLEMENTED and
-tested. §4.B (capturing real results for an actual-vs-estimated
-comparison) remains NOT started -- its open questions (§5) still need a
-driver decision. See PROGRESS.md.
+tested. §5's two open questions are now ANSWERED. §4.B itself is still
+NOT started -- answering §5 removed the ambiguity about *what* to
+build, but the per-job schema itself (shared with
+`docs/deadhead_stacked_order_baseline/` §7) still needs its own design
+pass before any code is written. See PROGRESS.md.
 
 ## 1. What the code actually does today
 
@@ -125,33 +127,34 @@ needs a schema change):**
    `get_distance_accuracy_summary()` — average estimate error,
    direction of bias (over- or under-estimating), sample count.
 
-## 5. Open questions (need a driver decision before B is implemented)
+## 5. Open questions
 
-- **What time span counts as "actual"?** `self.pickup` has no
-  "accepted_ts" field today — only `arrived_at` (pickup arrival) and
-  the trip's own `start_time` (first sustained-speed detection, which
-  can be well after an offer is accepted while parked). The honest
-  candidates: (a) trip `start_time` -> `end_time` — biased toward
-  looking better than reality, since real time spent deciding/idle
-  between accept and driving off isn't counted; (b) a new real
-  "offer accepted" timestamp, captured at `add_pickup` time, ->
-  `end_time` — closer to "was this offer worth it," but a bigger
-  change (needs a new field threaded through `add_pickup` ->
-  `_start_trip` -> the persisted row). Recommend (b), since (a) would
-  make every actual result look artificially better than it was,
-  undermining the whole point of the comparison — but this is a real
-  product decision, not a coding one.
-- **Stacked/batch orders**: same problem `docs/deadhead_stacked_order_baseline/`
-  §7 already flagged for phase timing — a single trip can carry
-  multiple accepted offers/payouts, and `self.pickup` is a single dict
-  overwritten by each `add_pickup` call. A real per-job answer needs
-  per-pickup payout capture, not per-trip — likely the same underlying
-  fix as `docs/deadhead_stacked_order_baseline/` §7 (per-job rows
-  instead of per-trip columns), so these two probably want to be
-  designed together rather than as two separate schemas.
+- **What time span counts as "actual"?** ANSWERED (2026-08-31): option
+  (b) — a new real "offer accepted" timestamp, captured at `add_pickup`
+  time, through to `end_time`. Not (a) (trip `start_time` ->
+  `end_time`), since that would make every actual result look
+  artificially better than it was (real decide/idle time before
+  driving off goes uncounted), undermining the whole point of the
+  comparison. This means `add_pickup` needs a new `accepted_ts =
+  time.time()` captured at call time, threaded through to `_start_trip`
+  and the persisted row the same way `claimed_distance_km`/
+  `score_snapshot_json` already are.
+- **Stacked/batch orders**: ANSWERED (2026-08-31) — yes, design this
+  jointly with `docs/deadhead_stacked_order_baseline/` §7's per-job
+  timing work, not as two separate schemas. Both need the same real
+  shape (a per-pickup/per-job row, not a per-trip column, since
+  `self.pickup` is a single dict overwritten by each `add_pickup` call
+  within one trip) — solving payout capture and phase-timing capture
+  as two unrelated schemas would likely mean building the "one row per
+  job" mechanism twice. IMPORTANT: this answers the *shape* question,
+  it does NOT mean §4.B is ready to implement — that joint per-job
+  schema still needs its own design pass (neither this PRD nor
+  `docs/deadhead_stacked_order_baseline/` §7/§8 has actually designed
+  it yet; §7/§8's own RALPH_PROMPT explicitly forbids starting it
+  without one). See RALPH_PROMPT.md.
 - Should A (the wait-time fix to the live estimate) ship on its own,
-  independent of B? It's fully self-contained and doesn't need a
-  driver decision the way B's open questions do.
+  independent of B? Moot — already shipped independently (§4.A,
+  merged in PR #4).
 
 ## 6. Success criteria
 
