@@ -3443,6 +3443,50 @@ class DriveMonitorEngine:
         """
         self.db.conn.close()
 
+    def validate_backup_file(self, path):
+        """
+        docs/database_restore_safety/PRD.md ss3. CONFIRMED REAL GAP,
+        fixed here: a driver-chosen restore file previously had zero
+        validation -- it was streamed straight over the live database
+        path, so picking the wrong file destroyed months of real trip/
+        learning data, discovered only on the next app restart when it
+        failed to open, by which point the original was already gone.
+        Called on a COPY of the chosen file (see the Java-side caller),
+        never the live database, and never the chosen file in place --
+        this must be safe to call and reject without side effects.
+
+        Opens read-only via a URI connection specifically so this can
+        never silently "validate" a missing path by creating a fresh
+        empty database there, which plain sqlite3.connect(path) would
+        otherwise do.
+        """
+        if not os.path.isfile(path):
+            return json.dumps({"valid": False, "reason": "File does not exist"})
+        try:
+            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        except sqlite3.OperationalError as e:
+            return json.dumps({"valid": False, "reason": f"Could not open as a database: {e}"})
+        try:
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()
+            if not integrity or integrity[0] != "ok":
+                return json.dumps({"valid": False, "reason": f"Integrity check failed: {integrity}"})
+            tables = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()}
+            required = {"trips"}
+            missing = required - tables
+            if missing:
+                return json.dumps({
+                    "valid": False,
+                    "reason": f"Missing expected table(s): {', '.join(sorted(missing))} -- "
+                              f"this doesn't look like a Dasher Monitor backup",
+                })
+            return json.dumps({"valid": True, "reason": None})
+        except sqlite3.DatabaseError as e:
+            return json.dumps({"valid": False, "reason": f"Not a valid database file: {e}"})
+        finally:
+            conn.close()
+
     def get_state(self):
         return self.trip_manager.state
 

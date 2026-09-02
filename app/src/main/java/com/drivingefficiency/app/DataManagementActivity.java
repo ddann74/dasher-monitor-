@@ -147,19 +147,29 @@ public class DataManagementActivity extends AppCompatActivity {
     }
 
     /**
-     * Reads the chosen backup file and replaces the live database file
-     * with it -- but ONLY after cleanly closing the current connection
-     * first (see close_database_for_restore's reasoning: replacing the
-     * file underneath a still-open connection risks corruption). Requires
-     * a full app restart afterward for the restored data to actually be
-     * picked up, rather than trying to hot-swap a live connection.
+     * Validates the chosen backup file, takes a real pre-restore safety
+     * copy of the CURRENT database, and only then replaces the live
+     * database file with it. docs/database_restore_safety/PRD.md --
+     * CONFIRMED REAL GAP, fixed here: this previously streamed the
+     * chosen file straight over the live database path with zero
+     * validation and no safety copy. The system file picker doesn't
+     * restrict selection to real backup files -- picking the wrong one
+     * destroyed months of real trip/learning data immediately, only
+     * discovered on the next restart when it failed to open, by which
+     * point the original was already unrecoverably gone.
+     *
+     * Order matters and is deliberate: copy to a temp candidate first
+     * (never write to the live path directly), validate that candidate,
+     * THEN take the safety copy (needs the live connection still open --
+     * see backup_database_to's own reasoning), THEN close the live
+     * connection and swap in the validated candidate. Nothing touches
+     * the live database until the candidate is proven real.
      */
     private void restoreDatabaseFromUri(android.net.Uri uri) {
+        java.io.File candidateFile = new java.io.File(getCacheDir(), "restore_candidate.db");
         try {
-            String dbPath = engine.callAttr("get_database_file_path").toString();
-            engine.callAttr("close_database_for_restore");
             try (java.io.InputStream in = getContentResolver().openInputStream(uri);
-                 java.io.OutputStream out = new java.io.FileOutputStream(dbPath)) {
+                 java.io.OutputStream out = new java.io.FileOutputStream(candidateFile)) {
                 if (in == null) {
                     Toast.makeText(this, "Could not open that backup file.", Toast.LENGTH_LONG).show();
                     return;
@@ -170,16 +180,72 @@ public class DataManagementActivity extends AppCompatActivity {
                     out.write(buffer, 0, read);
                 }
             }
+
+            JSONObject validation = new JSONObject(
+                    engine.callAttr("validate_backup_file", candidateFile.getAbsolutePath()).toString());
+            if (!validation.optBoolean("valid", false)) {
+                String reason = validation.optString("reason", "unknown reason");
+                logDiagnostic("ERROR", "Restore rejected -- not a valid backup: " + reason);
+                Toast.makeText(this, "That file isn't a valid Dasher Monitor backup: " + reason,
+                        Toast.LENGTH_LONG).show();
+                candidateFile.delete();
+                return; // live database is never touched
+            }
+
+            // Pre-restore safety copy -- taken from the still-open live
+            // connection (backup_database_to's own online-backup API,
+            // the same correct mechanism the driver's own Backup button
+            // uses), stored in app-external storage (survives longer than
+            // the cache dir) so a valid-but-still-wrong backup (e.g. from
+            // a different install) can still be recovered from manually.
+            String timestamp = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
+                    .format(new java.util.Date());
+            java.io.File safetyDir = new java.io.File(getExternalFilesDir(null), "PreRestoreBackups");
+            if (!safetyDir.exists()) {
+                safetyDir.mkdirs();
+            }
+            // Keep only the single most recent safety copy (PRD ss4) --
+            // this is a rollback net for the restore that's about to
+            // happen, not a backup archive (the driver's own Backup
+            // button already covers that).
+            java.io.File[] oldSafetyFiles = safetyDir.listFiles();
+            if (oldSafetyFiles != null) {
+                for (java.io.File old : oldSafetyFiles) {
+                    old.delete();
+                }
+            }
+            java.io.File safetyFile = new java.io.File(safetyDir, "pre_restore_" + timestamp + ".db");
+            engine.callAttr("backup_database_to", safetyFile.getAbsolutePath());
+
+            String dbPath = engine.callAttr("get_database_file_path").toString();
+            engine.callAttr("close_database_for_restore");
+            try (java.io.InputStream candidateIn = new java.io.FileInputStream(candidateFile);
+                 java.io.OutputStream dbOut = new java.io.FileOutputStream(dbPath)) {
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = candidateIn.read(buffer)) != -1) {
+                    dbOut.write(buffer, 0, read);
+                }
+            }
+            candidateFile.delete();
+
+            logDiagnostic("BACKUP", "Database restored (pre-restore safety copy saved to "
+                    + safetyFile.getAbsolutePath() + ")");
             new AlertDialog.Builder(this)
                     .setTitle("Restore Complete")
-                    .setMessage("The database has been replaced. Please FULLY CLOSE this app now "
+                    .setMessage("The database has been replaced. A safety copy of your previous "
+                            + "data was saved to " + safetyFile.getName() + " in case this backup "
+                            + "turns out to be wrong. Please FULLY CLOSE this app now "
                             + "(swipe it away from recent apps) and reopen it for the restored "
                             + "data to take effect.")
                     .setPositiveButton("OK", null)
                     .setCancelable(false)
                     .show();
-        } catch (RuntimeException | java.io.IOException e) {
+        } catch (JSONException | RuntimeException | java.io.IOException e) {
+            logDiagnostic("ERROR", "Database restore exception: " + android.util.Log.getStackTraceString(e));
             Toast.makeText(this, "Restore failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        } finally {
+            candidateFile.delete(); // no-op if already deleted or never created
         }
     }
 

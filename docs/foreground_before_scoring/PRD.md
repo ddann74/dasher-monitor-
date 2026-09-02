@@ -1,6 +1,13 @@
 # PRD: Don't present the notification-based offer score as authoritative
 
-Status: DRAFT -- awaiting sign-off before implementation begins.
+Status: IMPLEMENTED (all §6 boxes checked except sign-off) -- this PRD's
+own status line was stale, found and corrected during a 2026-09-02
+priority-triage pass. `launchDasherApp()` already fires unconditionally
+once a Dasher offer notification is recognized, which is functionally
+what the driver later separately asked for ("force the dasher app to
+appear in the foreground before the smart score can calculate the
+offer") -- the notification-based score is never shown as authoritative;
+the driver is pushed into the real app for the real screen-based score.
 Scope: this one feature only. Not a general codebase pass.
 
 ## 0. What this is / isn't
