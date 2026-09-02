@@ -126,13 +126,13 @@
             android:parentActivityName=".MainActivity" />
 
         <!-- Foreground service: GPS logging, trip state machine, and
-             (opt-in, see docs/screen_recording/PRD.md) screen recording -
+             (opt-in, see docs/screen_recording/PRD.md) screen recording.
              Android allows multiple foregroundServiceType values on one
              service, pipe-separated, declaring the UNION of everything
              this service might ever need. CONFIRMED REAL BUG, fixed in
              TripForegroundService.java (see
              startForegroundLocationOnly()'s own doc): declaring both
-             types here is NOT enough on its own -- each individual
+             types here is NOT enough on its own. Each individual
              startForeground() call must explicitly request only the
              type(s) relevant to that call via the 3-arg overload, or
              Android 14 implicitly requests ALL declared types (including
