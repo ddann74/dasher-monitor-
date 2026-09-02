@@ -160,6 +160,34 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self._create_schema()
 
+    def reopen(self, db_path):
+        """
+        docs/database_restore_safety/PRD.md -- CONFIRMED REAL BUG this
+        closes: a real driver hit "ProgrammingError: Cannot operate on
+        a closed database" on every database-backed feature (including
+        the smart score calculation and the diagnostic log itself)
+        after restoring a backup, because close_database_for_restore()
+        closes self.conn before the file swap and nothing ever reopened
+        it -- the restore dialog's "please fully close this app" was
+        the only thing standing in for a real fix, and a driver who
+        backgrounded the app instead of force-stopping it (an easy,
+        understandable mistake -- swiping an app away doesn't always
+        kill its process) was left with a permanently dead connection.
+
+        Called once the restored file is in place on disk (see the
+        Java-side restore flow). TripManager/SmartScoreEngine/
+        DriveMonitorEngine never cache a Database's `.conn` separately
+        -- they always read `self.db.conn` at the point of use -- so
+        reassigning it here on this SAME Database object (not a new
+        one) transparently fixes every existing holder, no restart
+        needed. Re-runs the exact schema/migration logic __init__
+        does, since a restored backup can legitimately be from an
+        older app version missing recently-added columns.
+        """
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self._create_schema()
+
     def _create_schema(self):
         c = self.conn.cursor()
         c.executescript("""
@@ -3544,11 +3572,28 @@ class DriveMonitorEngine:
         Closes the live database connection cleanly -- MUST be called
         before the actual database file on disk is replaced with a
         restored backup. Replacing the file underneath a still-open
-        connection risks corruption; this is why a restore also requires
-        a full app restart afterward rather than trying to hot-swap the
-        connection in place.
+        connection risks corruption. See reopen_database_after_restore(),
+        called right after the file swap completes -- the connection IS
+        hot-swapped back in place on this same, already-running engine;
+        an app restart is no longer required for the restore to take
+        effect.
         """
         self.db.conn.close()
+
+    def reopen_database_after_restore(self):
+        """
+        docs/database_restore_safety/PRD.md -- call once the Java-side
+        restore flow has finished copying the restored file into place
+        at self._db_path, right after close_database_for_restore(). See
+        Database.reopen()'s own docstring for the real bug this closes:
+        without this, every database-backed feature on this already-
+        running engine -- the smart score calculation, the diagnostic
+        log, everything -- kept hitting the connection
+        close_database_for_restore() closed, until the app process was
+        fully killed and relaunched (not just backgrounded/swiped away,
+        an easy real-world mistake to make).
+        """
+        self.db.reopen(self._db_path)
 
     def validate_backup_file(self, path):
         """

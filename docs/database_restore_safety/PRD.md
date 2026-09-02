@@ -5,8 +5,16 @@ the Java-side file flow is blocked (no Android emulator/device
 available). §6 (added 2026-09-02): driver reported "I can't load the
 backup database file" -- root cause found and fixed (the restore
 picker's overly narrow MIME-type filter was hiding the file from the
-system picker) -- awaiting driver confirmation this was the actual
-symptom. See PROGRESS.md.
+system picker). §7 (added 2026-09-02, CRITICAL): driver hit the exact
+real bug §3's own design flagged as a risk -- confirmed via a real
+screenshot showing "ProgrammingError: Cannot operate on a closed
+database" on every database-backed feature (smart score, diagnostic
+log, everything) after a restore, because the connection this restore
+flow closes was never reopened and the driver, understandably,
+didn't realize backgrounding the app isn't the same as force-stopping
+it. Fixed: the connection is now hot-swapped back in place after the
+restore completes, on this same running engine -- no restart required
+at all, not just documented more clearly. See PROGRESS.md.
 
 ## 1. The real bug found
 
@@ -174,3 +182,92 @@ from code reading, not confirmed against the driver's exact screen.
 - [ ] Driver confirms this was the actual symptom seen (vs. a
       different failure mode not yet diagnosed) and that the backup
       file now appears/selects correctly.
+
+## 7. Driver-reported (2026-09-02, CRITICAL): "the app keeps crashing" after a restore attempt
+
+### 7.1 Real evidence
+
+A real screenshot of the Diagnostics screen showed a live error toast:
+**"Could not share log: ProgrammingError: Cannot operate on a closed
+database."** This is a Python `sqlite3` error meaning the live
+connection was closed and never reopened -- concrete, direct proof,
+not a guess.
+
+### 7.2 Root cause, confirmed
+
+`restoreDatabaseFromUri` (Java) calls `close_database_for_restore()`
+(Python) right before swapping the database file on disk -- necessary,
+replacing a file underneath a still-open connection risks corruption.
+But nothing ever reopened it afterward. The restore's own success
+dialog told the driver to "fully close this app now (swipe it away
+from recent apps) and reopen it" -- but `PythonBridge.engine` is a
+`static` Java field, living for the lifetime of the PROCESS, not the
+Activity. Swiping an app away from Recent Apps does not reliably kill
+its process on every device/OEM (a real, well-known Android behavior,
+not unique to this app) -- if the process survived, every subsequent
+`PythonBridge.getEngine()` call across every Activity/Service kept
+returning the SAME already-closed connection, forever, until an actual
+force-stop. Every database-backed feature -- the smart score
+calculation (`SmartScoreEngine.calculate()` queries the database for
+several of its six factors), the diagnostic log, trip tracking,
+literally everything -- was hitting this same dead connection. This is
+almost certainly also what explains the earlier "I didn't see the
+smart score come up" report in the same conversation, not a separate
+bug in the scoring code itself.
+
+### 7.3 Fix: hot-swap the connection back in place, no restart required at all
+
+`Database.reopen(self, db_path)` (new): reassigns `self.conn` to a
+fresh connection and re-runs the exact schema/migration logic
+`__init__` already does (a restored backup can legitimately be from an
+older app version missing recently-added columns). Since
+`TripManager`/`SmartScoreEngine`/`DriveMonitorEngine` all read
+`self.db.conn` at the point of use rather than caching a copy of it,
+and all three hold a reference to the SAME `Database` object (not a
+copy), reassigning `.conn` on that one object transparently fixes
+every existing holder -- confirmed by an executable test (§7.4).
+
+`DriveMonitorEngine.reopen_database_after_restore()` (new): thin
+wrapper calling `self.db.reopen(self._db_path)`. Java calls this right
+after the file swap completes, in its own `try/catch` -- if it somehow
+fails, the restore dialog falls back to the original "please restart"
+guidance (now naming Force Stop explicitly, not just "swipe away")
+rather than silently claiming success.
+
+### 7.4 Verification -- ACTUALLY EXECUTED, reproducing the real bug first
+
+Wrote and ran a script against the real, modified `drive_monitor.py`
+(plain `python3`, `DriveMonitorEngine` backed by a real sqlite file):
+called `close_database_for_restore()`, then confirmed calling
+`log_diagnostic()` throws the EXACT SAME error the driver's screenshot
+showed (`ProgrammingError: Cannot operate on a closed database.`) --
+reproducing the real bug first, not just fixing blind. Then called
+`reopen_database_after_restore()` and confirmed: `log_diagnostic()`
+succeeds again, AND `engine.trip_manager.db.conn` / `engine.smart_score.db.conn`
+both see the reopened connection too (not just `engine.db.conn`
+directly) -- proving the fix reaches every component that shares the
+Database object, not only the one call site that happened to be
+tested.
+
+`ast.parse(drive_monitor.py)` clean. Brace/paren balance confirmed
+(52/52, 279/279) in `DataManagementActivity.java` after the edit.
+Not verified on-device -- no Android emulator/device available in this
+environment; the Java-side call ordering and dialog text are verified
+by code review only.
+
+## 8. Success criteria for §7
+
+- [x] `Database.reopen()` implemented, re-running the same schema/
+      migration logic `__init__` uses
+- [x] `DriveMonitorEngine.reopen_database_after_restore()` implemented
+      and called from the Java restore flow right after the file swap
+- [x] Restore dialog no longer claims a restart is required when the
+      reopen succeeds; falls back to real Force-Stop guidance (not
+      just "swipe away") only if it doesn't
+- [x] Executable test: reproduced the exact real error first, then
+      proved the fix resolves it for every component sharing the
+      Database object (`TripManager`, `SmartScoreEngine`), not just
+      the engine's own direct connection
+- [ ] Driver confirms a restore now works without needing to force-stop
+      the app afterward
+- [ ] Driver sign-off
