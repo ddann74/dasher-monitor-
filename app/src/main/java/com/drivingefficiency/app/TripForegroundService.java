@@ -551,6 +551,60 @@ public class TripForegroundService extends Service {
     }
 
     /**
+     * docs/dash_monitoring_awareness/PRD.md -- CONFIRMED REAL GAP, fixed
+     * here: auto-start (in DasherAccessibilityService.checkCurrentForegroundWindow
+     * and DrivingDetectionReceiver) already detects Dasher/driving and
+     * already calls startForegroundService() -- but if that call is
+     * rejected (a real, documented Android 12+ background-service-start
+     * restriction) or otherwise doesn't result in monitoring actually
+     * running, the only trace was a silent diagnostic log line. A driver
+     * who opens Dasher and starts driving would have no way to know this
+     * dash isn't being tracked at all.
+     *
+     * Static and Context-based (not an instance method like
+     * raisePermissionRevokedAlert) specifically so DasherAccessibilityService
+     * and DrivingDetectionReceiver -- different components, neither of
+     * them a running instance of this service -- can both call it, per
+     * PRD ss5's own recommendation ("one mechanism, not three copies").
+     * Mirrors raisePermissionRevokedAlert's notification shape (sound +
+     * vibration, high priority, its own channel) for consistency, and
+     * the same engine-lookup + FallbackLogger pattern every other
+     * standalone receiver in this codebase already uses for logging
+     * outside a running Service/Activity.
+     */
+    static void raiseMonitoringNotActiveAlert(android.content.Context context, String reason) {
+        NotificationManager manager = context.getSystemService(NotificationManager.class);
+        if (manager != null) {
+            String channelId = "monitoring_not_active_alert";
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                NotificationChannel channel = new NotificationChannel(
+                        channelId, "Dash Not Monitored Alerts", NotificationManager.IMPORTANCE_HIGH);
+                channel.setDescription("Alerts immediately if a dash starts without monitoring actually running");
+                channel.enableVibration(true);
+                manager.createNotificationChannel(channel);
+            }
+            Notification notification = new Notification.Builder(context, channelId)
+                    .setContentTitle("⚠ This dash is not being tracked")
+                    .setContentText("Monitoring didn't start -- open Dasher Monitor to check.")
+                    .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                    .setPriority(Notification.PRIORITY_HIGH)
+                    .setDefaults(Notification.DEFAULT_SOUND | Notification.DEFAULT_VIBRATE)
+                    .setAutoCancel(true)
+                    .build();
+            manager.notify(9400, notification);
+        }
+        try {
+            PyObject engine = PythonBridge.getEngine(context);
+            engine.callAttr("log_diagnostic", "ALERT",
+                    "Dash active but monitoring is not running (" + reason + ") -- alert raised");
+        } catch (RuntimeException e) { // covers PyException too
+            FallbackLogger.log(context, "ALERT", "Dash active but monitoring is not running ("
+                    + reason + ") -- alert raised (engine unavailable: "
+                    + android.util.Log.getStackTraceString(e) + ")");
+        }
+    }
+
+    /**
      * Fixes a real, confirmed bug: the feedback dialog had zero automatic
      * trigger anywhere -- it only appeared if manually navigated to via
      * Last Trip Summary. A background service can't show a dialog

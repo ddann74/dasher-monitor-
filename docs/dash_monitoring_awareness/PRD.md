@@ -1,8 +1,12 @@
 # PRD — alert the driver if a dash is happening without active monitoring
 
-Status: DRAFT. Investigation only, grounded in the real code. Nothing
-implemented yet — do not start coding from this PRD until the driver
-says "yes implement it."
+Status: IMPLEMENTED, built from §5's own stated recommendations (no
+driver override was given when the ralph-loop continuation reached
+this PRD) — a single shared static alert method, reused by all three
+real auto-start call sites (§5 point 1's open question), with a 5s
+delayed re-verification (§5 point 2's open question). See PROGRESS.md,
+including a real finding that `DasherAccessibilityService` has THREE
+auto-start call sites, not the two this PRD's own investigation named.
 
 Driver-reported, marked "crucial": "I want the app to know when I'm in
 dash mode automatically and let me know if the current dash is not
@@ -122,14 +126,14 @@ currently the one silent gap in an otherwise well-alerted app.
 
 ## 6. Success criteria
 
-- [ ] Auto-start failure (or "called but didn't actually end up
+- [x] Auto-start failure (or "called but didn't actually end up
       running") from `checkCurrentForegroundWindow` is verified, not
       just assumed from a lack of a thrown exception.
-- [ ] A loud, driver-visible alert (not just a diagnostic log line)
+- [x] A loud, driver-visible alert (not just a diagnostic log line)
       fires when Dasher is confirmed active but monitoring isn't.
-- [ ] The same coverage extended to `DrivingDetectionReceiver`'s
+- [x] The same coverage extended to `DrivingDetectionReceiver`'s
       auto-start path.
-- [ ] The alert mechanism is a single shared implementation, not three
+- [x] The alert mechanism is a single shared implementation, not three
       independently-written copies (per §5's recommendation).
 - [ ] On-device confirmation — blocked, no Android emulator/device
       available in this environment. This item in particular needs a
