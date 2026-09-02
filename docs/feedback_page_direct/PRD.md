@@ -1,6 +1,13 @@
 # PRD: Show the feedback page directly, not via a tap-required notification
 
-Status: DRAFT -- awaiting sign-off before implementation begins.
+Status: IMPLEMENTED (all §6 boxes checked except sign-off) -- this PRD's
+own status line was stale, found and corrected during a 2026-09-02
+priority-triage pass. This is exactly what the driver later separately
+asked for ("show me the feedback page not in the notification") --
+already the real, live behavior; if it's still only arriving via
+notification tap, the cause is `docs/feedback_prompt_never_shown/`
+(a separate, still-open reliability question about the trigger itself),
+not this delivery mechanism.
 Scope: this one feature only. Not a general codebase pass.
 
 ## 0. What this is / isn't

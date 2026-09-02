@@ -1,6 +1,12 @@
 # PRD: RoadWarrior icon -- copy address to clipboard (supersedes auto-navigate)
 
-Status: DRAFT -- awaiting sign-off before implementation begins.
+Status: IMPLEMENTED (all §6 boxes checked except on-device confirmation
+and sign-off) -- this PRD's own status line was stale, found and
+corrected during a 2026-09-02 priority-triage pass. The icon copies the
+resolved address to the clipboard (not auto-navigate) and is shown/
+cleared by `_check_approaching_stop`/arrival detection, the same
+appear-on-approach/disappear-on-complete behavior the driver later
+separately asked for.
 Scope: this one feature only. Not a general codebase pass.
 
 ## 0. What this is / isn't
