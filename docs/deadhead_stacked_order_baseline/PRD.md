@@ -8,7 +8,12 @@ tested this pass (2026-09-02), built jointly with
 exact same per-job row shape (see §7.4). A real, previously-undocumented
 data-loss bug was found and fixed while doing this design pass - see
 §7.4.1. Part 2B (full dropoff-side per-job phase timing, i.e. the
-original §7.2/§8 scope) remains a genuinely blocked DRAFT - see §7.6.
+original §7.2/§8 scope) got its own design pass on 2026-09-02 (§7.6) --
+put directly to the driver, who chose to gather real evidence (a
+stacked-order dropoff screenshot/log) before committing to either
+linkage heuristic considered, rather than build the one with the known,
+real risk of silently mislabeling a job's timing. Genuinely blocked on
+that evidence, not on more design or a driver decision anymore.
 Scope: two related measurement gaps for stacked/batch orders. Not a
 general codebase pass.
 
@@ -413,28 +418,84 @@ divide-by-zero rate.
       every field populated correctly.
 - [ ] User sign-off
 
-## 7.6 Part 2B - full dropoff-side per-job phase timing (still blocked, NOT started)
+## 7.6 Part 2B - full dropoff-side per-job phase timing (design pass done 2026-09-02, STILL BLOCKED - needs real evidence, not code)
 
 The ORIGINAL §7.2 scope - `dropoff_arrival_ts`, `walking_confirmed_ts`,
 `job_end_ts` captured per job, and `_build_trip_summary_dict` returning
 a per-job list of phase breakdowns - is NOT resolved by §7.4 above.
-Real reason, confirmed while doing this design pass: pickup-side data
-(§7.4) has a natural per-job anchor (`self.pickup`, overwritten exactly
-once per job, snapshot-on-overwrite works cleanly). Dropoff-side events
-have no equivalent - `dropoff_arrival_ts`/`walking_confirmed_ts` are
-captured against `StopsBuffer`'s stop list via geofencing, with no
-existing mechanism linking a specific dropoff arrival to a specific
-EARLIER pickup job when a trip has 2+ of each. Building that linkage
-(nearest-unresolved-stop matching? explicit stop-to-job IDs threaded
-through the whole stops pipeline?) is a real, separate design question
-this pass did not resolve - still needs its own pass, still blocking
-`docs/feedback_dialog_phase_timings/` §4B's per-phase scoring for a
-multi-job trip. Not started; no timeline implied.
+This section is the design pass that was missing; it identifies exactly
+what's blocking, and why the block can't be resolved by more code
+reading alone.
 
-## 8. Success criteria for Part 2B (not started, blocked - see §7.6)
+### 7.6.1 The real blocker, confirmed from the actual parser
 
-- [ ] A real per-job dropoff-linkage design exists (own design pass,
-      not yet done)
+`DropoffScreenParser`'s own documented, confirmed screen structure
+(built from two real screenshots) is: customer name, delivery deadline,
+street address, suburb/state/postcode, unit, delivery instruction.
+**Nothing on the dropoff screen identifies which restaurant/order it
+belongs to.** Pickup-side data (§7.4) has a natural per-job anchor
+because `self.pickup` is a single dict overwritten exactly once per
+job, in a KNOWN order (accept order), matching `add_pickup`'s own call
+order 1:1. Dropoff-side has no equivalent identifier at all - a stop
+registered via `add_stop`/`add_stop_to_buffer` carries only an address,
+never a restaurant name or order reference.
+
+### 7.6.2 Two linkage approaches considered, and why neither was picked yet
+
+1. **Ordinal pairing by real chronological order** - pair the Nth job
+   to complete pickup-departure (`offer_distance_accuracy` rows are
+   already trip-scoped and chronological, per §7.4) with the Nth
+   dropoff to be arrival-matched (`stops.arrival_time`, via
+   `_evaluate_arrivals`). Needs no new UI, buildable today on top of
+   §7.4's existing per-job rows and the already-persisted `stops`
+   table. **Real weakness, not a minor edge case**: stacked-order
+   routing commonly does NOT deliver in pickup order (a driver often
+   picks up A then B, but delivers B first if that route is more
+   efficient) - ordinal pairing would then silently mislabel which
+   job's phase timing belongs to which dropoff, which is WORSE than
+   §7.4's current honest "not linked yet" NULL state, not better.
+2. **One-tap driver confirmation** - when a batch trip's dropoff is
+   detected, ask directly ("this dropoff is for: [Restaurant A] /
+   [Restaurant B]"). Always correct, no guessing - but real driver
+   friction (one extra tap per batch dropoff) and needs new UI/flow
+   work to detect "this is a batch trip" and present the choice
+   cleanly.
+
+### 7.6.3 Decision (2026-09-02): gather real evidence before designing further
+
+Put to the driver directly rather than assumed: **the decision was to
+gather real evidence first**, not build either heuristic yet.
+`DropoffScreenParser` was built from only two real screenshots, both
+single-order deliveries - a real batch-order dropoff screen has never
+actually been seen. It's possible the Dasher app's own UI already
+shows an order/stop identifier near the dropoff details (e.g. a
+"Stop 1 of 2" label, or the restaurant name appearing on a nearby
+screen) that `DropoffScreenParser` simply isn't looking for yet,
+which would make this whole linkage problem far more solvable than
+either heuristic above. That can only be confirmed from a real
+screenshot or diagnostic log of an actual stacked/batch-order
+delivery, not from further code reading.
+
+**What's needed to unblock this**: a real screenshot (or the app's own
+diagnostic log, if it captures the visible text of the dropoff screen
+the way `FULL_TEXT_DUMP` does for the offer screen) from an actual
+trip with 2+ stacked orders, specifically showing what the dropoff
+screen looks like when a second order is still pending. Once that
+exists, re-open this section and either extend `DropoffScreenParser`
+to read a real identifier if one exists on screen, or fall back to
+one of §7.6.2's two heuristics with a fully-informed choice between
+them.
+
+Not started; explicitly blocked on evidence, not on more design work.
+
+## 8. Success criteria for Part 2B (blocked on §7.6.3's evidence, not started)
+
+- [x] A real per-job dropoff-linkage design pass exists (§7.6) - it
+      concluded evidence is needed before a linkage approach can be
+      chosen, which is this pass's real, honest output.
+- [ ] Real evidence gathered (§7.6.3): a screenshot or diagnostic log
+      of an actual stacked-order trip's dropoff screen(s).
+- [ ] A linkage approach chosen based on that evidence (not guessed).
 - [ ] Schema migration: per-job dropoff/walking/job-end timestamp
       columns added to `offer_distance_accuracy`
 - [ ] Capture points (dropoff arrival, walking confirmed, job end)
