@@ -246,15 +246,44 @@ public class DataManagementActivity extends AppCompatActivity {
             }
             candidateFile.delete();
 
+            // CONFIRMED REAL BUG, fixed here: a driver hit "Cannot operate
+            // on a closed database" on every database-backed feature
+            // (smart score, diagnostic log, everything) after restoring,
+            // because close_database_for_restore() above closes the
+            // connection and nothing ever reopened it -- this dialog used
+            // to just ask the driver to manually "fully close" the app
+            // instead of the app actually recovering itself, and swiping
+            // an app away from recent apps doesn't always kill its
+            // process, so that instruction alone wasn't reliable. Now the
+            // connection is hot-swapped back in place on this same,
+            // already-running engine -- no restart needed. Kept in its
+            // own try/catch: if THIS specific step somehow fails, the
+            // engine is left in the same closed-connection state a
+            // restart would already fix, so that's still offered as a
+            // fallback rather than silently hidden.
+            boolean reopenedWithoutRestart = true;
+            try {
+                engine.callAttr("reopen_database_after_restore");
+                logDiagnostic("BACKUP", "Database restored and connection reopened -- no app restart needed");
+            } catch (RuntimeException e) {
+                reopenedWithoutRestart = false;
+                logDiagnostic("ERROR", "reopen_database_after_restore exception: "
+                        + android.util.Log.getStackTraceString(e));
+            }
+
             logDiagnostic("BACKUP", "Database restored (pre-restore safety copy saved to "
                     + safetyFile.getAbsolutePath() + ")");
+            String message = "The database has been replaced. A safety copy of your previous "
+                    + "data was saved to " + safetyFile.getName() + " in case this backup "
+                    + "turns out to be wrong.";
+            message += reopenedWithoutRestart
+                    ? " The restored data is already active -- no restart needed."
+                    : " Please FULLY CLOSE this app now (from Recent Apps, swipe it away, or "
+                            + "use App Info -> Force Stop) and reopen it for the restored data "
+                            + "to take effect.";
             new AlertDialog.Builder(this)
                     .setTitle("Restore Complete")
-                    .setMessage("The database has been replaced. A safety copy of your previous "
-                            + "data was saved to " + safetyFile.getName() + " in case this backup "
-                            + "turns out to be wrong. Please FULLY CLOSE this app now "
-                            + "(swipe it away from recent apps) and reopen it for the restored "
-                            + "data to take effect.")
+                    .setMessage(message)
                     .setPositiveButton("OK", null)
                     .setCancelable(false)
                     .show();

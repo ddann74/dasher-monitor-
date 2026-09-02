@@ -107,3 +107,76 @@ diagnosis and fix from code reading, since the driver didn't provide
 an exact error message or screenshot. Awaiting driver confirmation
 this was the actual symptom (the file being unselectable in the
 picker), not a different failure mode.
+
+## §7 fix (2026-09-02, CRITICAL) — driver hit "Cannot operate on a closed database" after restoring, app "kept crashing"
+
+Driver reported two things in the same conversation: "I didn't see the
+smart score come up" and "the app keeps crashing so I can't give a
+diagnostic log" -- then, when it wouldn't even load far enough to
+reach the Diagnostics screen, sent a real screenshot showing a live
+error: **"Could not share log: ProgrammingError: Cannot operate on a
+closed database."** Real, direct evidence, not a guess.
+
+Traced it: `close_database_for_restore()` closes `self.db.conn` right
+before the Java side swaps the database file (necessary -- replacing
+a file under a live connection risks corruption). Nothing ever
+reopened it. The restore's own success dialog said "fully close this
+app now (swipe it away from recent apps)" -- but `PythonBridge.engine`
+is a `static` field living for the process's lifetime, and swiping an
+app away from Recent Apps does not reliably kill its process on every
+device (a real, well-known Android behavior). If the process survived,
+every subsequent `PythonBridge.getEngine()` call kept returning the
+SAME dead connection -- meaning the smart score calculation (which
+queries the database), the diagnostic log, and every other database-
+backed feature were all broken from that point on, which is very
+likely what "didn't see the smart score" and "keeps crashing" both
+actually were -- not two separate bugs, one shared root cause.
+
+### Fix
+
+- `Database.reopen(self, db_path)` (new): reassigns `self.conn` to a
+  fresh connection and re-runs `_create_schema()` (same migration
+  logic `__init__` uses -- a restored backup can be from an older app
+  version). Since `TripManager`/`SmartScoreEngine`/`DriveMonitorEngine`
+  all read `self.db.conn` live rather than caching it, and all three
+  share the SAME `Database` object, this transparently fixes every
+  holder at once.
+- `DriveMonitorEngine.reopen_database_after_restore()` (new): thin
+  wrapper, `self.db.reopen(self._db_path)`.
+- `DataManagementActivity.restoreDatabaseFromUri`: calls the new method
+  right after the file swap, in its own `try/catch`. Success dialog now
+  says the restored data is already active, no restart needed -- falls
+  back to explicit Force-Stop guidance (not just "swipe away", which
+  is exactly what didn't work here) only if the reopen call itself
+  fails.
+
+### Verification (2026-09-02) — ACTUALLY EXECUTED, reproduced the real bug first
+
+Wrote and ran a script against the real, modified `drive_monitor.py`:
+
+```
+PASS: reproduced the real bug -- ProgrammingError: Cannot operate on a closed database.
+PASS: log_diagnostic works again after reopen (row count: 1)
+PASS: TripManager.db sees the reopened connection too (row count: 0)
+PASS: SmartScoreEngine.db sees the reopened connection too (row count: 0)
+
+ALL ASSERTIONS PASSED
+```
+
+Deliberately reproduced the EXACT error string from the driver's
+screenshot first (`engine.close_database_for_restore()` then a plain
+`log_diagnostic()` call), confirming the diagnosis was right before
+writing the fix -- not fixing blind. Then confirmed the fix reaches
+`TripManager.db`/`SmartScoreEngine.db` specifically, not just the
+engine's own direct `.conn` access, since those are the objects
+`SmartScoreEngine.calculate()` (the smart-score path) and most of the
+rest of the app actually go through.
+
+`ast.parse(drive_monitor.py)` clean. Brace/paren balance in
+`DataManagementActivity.java` confirmed (52/52, 279/279) after the
+edit. Not verified on-device -- no Android emulator/device available
+in this environment.
+
+Told the driver, while this fix was in progress, to Force Stop (App
+Info -> Force Stop, not just swiping away) and reopen the app as an
+immediate unblock, independent of this code fix landing.
