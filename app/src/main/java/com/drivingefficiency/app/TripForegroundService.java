@@ -227,11 +227,16 @@ public class TripForegroundService extends Service {
     }
 
     /**
-     * The one place BOTH declared types are actually requested together
-     * -- called right before screen recording's own createVirtualDisplay()
-     * needs the mediaProjection type to be genuinely active, not just
-     * declared in the manifest. See startForegroundLocationOnly()'s own
-     * doc for why the routine/idle calls must NOT request this type too.
+     * The one place BOTH declared types are actually requested together.
+     * CONFIRMED REAL BUG, fixed in startTracking(): this must only be
+     * called AFTER ScreenRecordingController.acquireProjection() has
+     * already succeeded, never before -- a real driver's diagnostic log
+     * showed Android rejecting this exact type declaration when the
+     * process didn't yet hold a live MediaProjection grant (a stale/
+     * already-consumed consent token), crashing the whole foreground
+     * service. See ScreenRecordingController.acquireProjection's own
+     * doc for the full mechanism. See startForegroundLocationOnly()'s
+     * own doc for why the routine/idle calls must NOT request this type.
      */
     private void startForegroundWithRecording(Notification notification) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -363,15 +368,22 @@ public class TripForegroundService extends Service {
 
         // Opt-in screen recording (docs/screen_recording/PRD.md) - off
         // unless the driver both enabled the Setup toggle AND granted the
-        // MediaProjection consent dialog. This is the one place the
-        // mediaProjection foreground service type is actually requested
-        // (see startForegroundWithRecording's own doc for the real bug
-        // this replaces -- merely declaring it in the manifest was not
-        // enough, and requesting it unconditionally on every plain
-        // startForegroundLocationOnly() call above was the actual crash).
+        // MediaProjection consent dialog. CONFIRMED REAL BUG, fixed here
+        // (a real driver's diagnostic log): acquiring the projection
+        // MUST happen before promoting to the mediaProjection foreground
+        // service type, not after -- a stale/already-consumed consent
+        // token can make Android reject the type declaration itself,
+        // which used to crash the whole service since the type was
+        // requested unconditionally before this class got a chance to
+        // fail gracefully. See ScreenRecordingController.acquireProjection's
+        // own doc.
         if (ScreenRecordingController.isEnabled(this)) {
-            startForegroundWithRecording(buildNotificationForMode("GENERAL"));
-            boolean started = screenRecordingController.start(this);
+            boolean acquired = screenRecordingController.acquireProjection(this);
+            boolean started = false;
+            if (acquired) {
+                startForegroundWithRecording(buildNotificationForMode("GENERAL"));
+                started = screenRecordingController.beginCapture(this);
+            }
             isScreenRecordingActive = started;
             if (started) {
                 logDiagnostic("SCREEN_RECORDING", "Started recording for this trip");

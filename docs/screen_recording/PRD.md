@@ -12,6 +12,11 @@ before signing off, not just the checklist.
 capture screen recording by default. Investigated and designed, with
 an open question (§7.5) - explicitly NOT coded, per the driver's own
 instruction to add this to the PRD without implementing it yet.
+§9 (added 2026-09-02, CRITICAL, FIXED): a real diagnostic log from the
+driver showed a crash loop - screen recording surviving past the first
+trip in a session crashed the whole app on every subsequent trip start,
+confirmed by three identical stack traces. Root cause and fix
+documented in §9; see PROGRESS.md.
 Scope: this one feature only. Not a general codebase pass.
 
 ## 0. What this is / isn't
@@ -471,3 +476,109 @@ disclosed as a recommendation only, not built.
       that's wanted alongside this (separate ask, not assumed)
 - [ ] Executable/reviewed verification, same standard as §6
 - [ ] User sign-off
+
+## 9. Driver-reported (2026-09-02, CRITICAL): real crash loop, confirmed by a real diagnostic log
+
+### 9.1 Real evidence
+
+A real diagnostic log (`dasher_monitor_full_history16.txt`) showed the
+exact same crash three times, at the exact same line, each one killing
+the app process outright:
+
+```
+java.lang.SecurityException: Starting FGS with type mediaProjection
+callerApp=... targetSDK=34 requires permissions: all of the permissions
+allOf=true [android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION]
+any of the permissions allOf=false [android.permission.CAPTURE_VIDEO_OUTPUT,
+android:project_media]
+	at android.app.Service.startForeground(Service.java:863)
+	at com.drivingefficiency.app.TripForegroundService.startForegroundWithRecording(...)
+	at com.drivingefficiency.app.TripForegroundService.startTracking(...)
+	at com.drivingefficiency.app.TripForegroundService.onStartCommand(...)
+```
+
+The log shows a genuine crash LOOP: the first trip (with recording)
+completed successfully (a real 944MB recording). The moment that trip
+ended and monitoring auto-restarted for the next one, it crashed. The
+app process (or the watchdog) restarted it; the toggle was still on,
+the same underlying condition still held, and it crashed again --
+twice more, once only 5 seconds after the previous restart.
+
+### 9.2 Root cause, confirmed against the real crash trace
+
+`FOREGROUND_SERVICE_MEDIA_PROJECTION` IS already declared in the
+manifest (`<uses-permission>`) -- this is not a missing-declaration
+bug. The real issue: Android's `mediaProjection` foreground-service-
+type validation requires the calling process to currently hold a LIVE
+`MediaProjection` grant, independent of the manifest declaration. This
+codebase's own `ScreenRecordingController` class doc already flagged
+this as a real, "UNCONFIRMED on a real device" risk -- a MediaProjection
+consent token is very likely single-use, not safely reusable for a
+second trip within the same process. What wasn't anticipated: a stale/
+consumed token doesn't just make `getMediaProjection()` return null
+(handled gracefully) -- it can make Android reject the foreground-
+service-TYPE DECLARATION ITSELF, and
+`TripForegroundService.startForegroundWithRecording()` (added in the
+`docs/permissions_screen_crash/PRD.md` fix) was being called
+UNCONDITIONALLY whenever the recording toggle was on, before this
+class ever got a chance to check whether a live projection actually
+existed. Worse: this was true even of the OLD (pre-that-fix) code too
+-- `isEnabled()` only checks the persisted toggle preference, never
+whether a valid consent is actually currently held, so the underlying
+race existed either way; the crash simply became visible once the
+type was requested explicitly.
+
+### 9.3 Fix
+
+Split `ScreenRecordingController.start()` into two phases, matching
+Android's own documented order (`getMediaProjection()` ->
+`startForeground(..., MEDIA_PROJECTION)` -> `createVirtualDisplay()`):
+
+- `acquireProjection(Service)` (new): checks the toggle, checks
+  `hasPendingConsent()`, and calls `getMediaProjection()` -- all of
+  which can fail cleanly (returns false, sets `lastFailureReason`)
+  while the service is still only in its plain location-type
+  foreground state, before the mediaProjection type is ever requested.
+- `beginCapture(Service)` (new): the rest of the old `start()` --
+  `MediaRecorder` setup and `createVirtualDisplay()`. Only ever called
+  after `acquireProjection()` has already succeeded AND the caller has
+  already promoted to the mediaProjection foreground type.
+- `TripForegroundService.startTracking()`: now calls
+  `acquireProjection()` FIRST; only if that succeeds does it call
+  `startForegroundWithRecording()` (promoting the type) and THEN
+  `beginCapture()`. If `acquireProjection()` fails for any reason
+  (toggle off, no consent, stale/consumed token), the mediaProjection
+  type is never requested at all -- the existing failure-logging/alert
+  branches (unchanged) still fire with an accurate reason, and the
+  service stays safely in its already-active location-only state.
+
+### 9.4 Verification
+
+Brace/paren balance confirmed (`ScreenRecordingController.java` 47/47,
+184/184; `TripForegroundService.java` 172/172, 765/765) after all
+edits. Verified by code review: confirmed every existing call site of
+the old `start()` method was updated (only one real call site
+existed), confirmed the failure-branch logging/alert logic is
+unchanged in meaning (still distinguishes "no consent held" from "held
+but failed"), and confirmed `beginCapture()`'s internals are byte-for-
+byte the same as the old `start()` method's second half, just moved,
+not altered. Not verified on-device -- no Android emulator/device
+available in this environment, and this is exactly the class of bug
+that only reveals itself against real Android platform enforcement,
+which is precisely how the ORIGINAL bug was found (a real driver log),
+not from code review alone.
+
+## 10. Success criteria for §9
+
+- [x] Root cause confirmed against the real crash trace (three
+      identical occurrences, same line, same exception)
+- [x] `ScreenRecordingController.acquireProjection()`/`beginCapture()`
+      implemented, matching Android's documented
+      getMediaProjection -> startForeground -> createVirtualDisplay order
+- [x] `TripForegroundService.startTracking()` updated to the two-phase
+      call, mediaProjection type never requested unless a live
+      projection was already confirmed
+- [x] Existing failure-logging/alert behavior preserved (diff-reviewed)
+- [ ] Driver confirms a second/third trip in the same session with
+      recording enabled no longer crashes.
+- [ ] Driver sign-off.

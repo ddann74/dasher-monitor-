@@ -30,14 +30,16 @@ import java.util.Locale;
  *   from) invalidates it; the driver has to grant it again from Setup.
  *   TripForegroundService's caller is responsible for handling that
  *   visibly (see its own startTracking() comment), not this class.
- * - UNCONFIRMED on a real device: whether a single granted consent can be
- *   reused for a SECOND trip within the same still-alive process (calling
- *   getMediaProjection again with the same result data), or whether
- *   Android requires a fresh per-trip consent tap even without a process
- *   restart. No emulator/device is available in the environment this was
- *   written in to verify either way -- start() below assumes reuse works
- *   and reports failure honestly (returns false) if it doesn't, rather
- *   than crashing.
+ * - CONFIRMED on a real device (2026-09-02, a real driver's diagnostic
+ *   log): a single granted consent canNOT be reliably reused for a
+ *   SECOND trip within the same still-alive process. Worse than just
+ *   getMediaProjection() returning null (which acquireProjection()
+ *   below already handled gracefully) -- Android can reject the
+ *   mediaProjection foreground-service-type DECLARATION ITSELF when
+ *   the process doesn't currently hold a live grant, which used to
+ *   crash the whole foreground service before acquireProjection() was
+ *   split out to run (and be allowed to fail cleanly) before that
+ *   declaration is ever attempted. See acquireProjection()'s own doc.
  * - Captures the ENTIRE device screen, not just this app -- there is no
  *   API to scope it narrower. See PRD ss1.3.
  */
@@ -183,14 +185,39 @@ class ScreenRecordingController {
     }
 
     /**
-     * Starts recording for the current trip. Returns false (and does NOT
-     * start anything) if the toggle is off, no consent is currently held
-     * (a process restart clears it -- see class doc), or setup throws for
-     * any other reason -- callers must treat false as "not recording,"
-     * never assume success just because this was called. Call
-     * lastFailureReason() after a false return for why.
+     * CONFIRMED REAL BUG, closed by splitting start() into this method
+     * plus beginCapture() below: a real driver hit an uncaught
+     * SecurityException -- "Starting FGS with type mediaProjection ...
+     * requires permissions" -- thrown from TripForegroundService's own
+     * startForeground() call, BEFORE this class ever got a chance to
+     * call getMediaProjection() at all. Root cause, confirmed against
+     * the real crash log: this class's own class-doc "UNCONFIRMED...
+     * whether a single granted consent can be reused for a SECOND trip"
+     * note turned out to matter in a way the original start() design
+     * didn't anticipate -- a stale/already-consumed consent token
+     * doesn't just make getMediaProjection() return null (handled
+     * gracefully below); Android can reject the FOREGROUND SERVICE TYPE
+     * DECLARATION ITSELF if the calling process doesn't currently hold
+     * a live MediaProjection grant, independent of whatever this class
+     * does internally afterward. Since the app's own
+     * startForegroundWithRecording() call (which requests that type)
+     * used to run BEFORE this class ever attempted getMediaProjection(),
+     * a stale consent crashed the whole foreground service instead of
+     * just failing this one recording.
+     *
+     * Fix: acquire the projection FIRST (this method, callable while
+     * the service is still only in its plain location-type foreground
+     * state -- getMediaProjection() itself has no foreground-service-
+     * type precondition). The caller only promotes to the mediaProjection
+     * type (see TripForegroundService.startForegroundWithRecording)
+     * AFTER this succeeds, then calls beginCapture() to actually start
+     * recording -- matching Android's own documented order:
+     * getMediaProjection() -> startForeground(..., MEDIA_PROJECTION) ->
+     * createVirtualDisplay(). Returns false (setting lastFailureReason)
+     * on the toggle being off, no consent held, or acquisition failing --
+     * never throws.
      */
-    boolean start(Service service) {
+    boolean acquireProjection(Service service) {
         if (!isEnabled(service)) {
             lastFailureReason = "toggle is off";
             return false;
@@ -216,7 +243,28 @@ class ScreenRecordingController {
             // throws IllegalStateException -- must be registered before
             // the virtual display is created, not after.
             mediaProjection.registerCallback(projectionCallback, null);
+            return true;
+        } catch (Exception e) { // covers a stale/invalid consent token throwing instead of
+            // returning null, on some Android versions/OEMs -- confirmed real risk,
+            // same reasoning as the try/catch in beginCapture() below.
+            lastFailureReason = e.getClass().getSimpleName() + ": " + e.getMessage();
+            android.util.Log.e("ScreenRecordingController", "acquireProjection() failed", e);
+            releaseInternal();
+            return false;
+        }
+    }
 
+    /**
+     * Actually starts capturing -- MUST be called only after
+     * acquireProjection() returned true AND the caller has already
+     * promoted the service to the mediaProjection foreground service
+     * type (see this class's own doc and acquireProjection()'s doc for
+     * why that order is required). Returns false (setting
+     * lastFailureReason) on any MediaRecorder/MediaProjection setup
+     * failure -- never throws.
+     */
+    boolean beginCapture(Service service) {
+        try {
             WindowManager windowManager = (WindowManager) service.getSystemService(Context.WINDOW_SERVICE);
             DisplayMetrics metrics = new DisplayMetrics();
             windowManager.getDefaultDisplay().getRealMetrics(metrics);
@@ -249,7 +297,7 @@ class ScreenRecordingController {
             // doesn't support this combination of size/format) -- none of
             // them should crash the always-on foreground service.
             lastFailureReason = e.getClass().getSimpleName() + ": " + e.getMessage();
-            android.util.Log.e("ScreenRecordingController", "start() failed", e);
+            android.util.Log.e("ScreenRecordingController", "beginCapture() failed", e);
             releaseInternal();
             return false;
         }
@@ -268,8 +316,8 @@ class ScreenRecordingController {
         return lastStopWasLikelyEmpty;
     }
 
-    /** Safe to call even if start() never succeeded -- releaseInternal()
-      * itself null-checks everything. */
+    /** Safe to call even if acquireProjection()/beginCapture() never
+      * succeeded -- releaseInternal() itself null-checks everything. */
     void stop() {
         lastStopWasLikelyEmpty = false;
         try {
