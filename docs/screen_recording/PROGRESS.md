@@ -223,3 +223,43 @@ straightforward code fixes:
   unconfirmed, and a different KIND of gap than the first two passes
   checked for (steady-state correctness, not a failure/logging path).
 
+## §7 design pass (2026-09-02) — driver asked to "capture screen recording by default," design only, no code
+
+Driver asked two things: where the video files are stored (answered
+directly, see PRD §7.1 - `getExternalFilesDir()/ScreenRecordings/`,
+app-private external storage, no in-app player/export exists today),
+and to design "capture by default," explicitly instructed to add it to
+the PRD without writing any code from it yet.
+
+Re-read §1.1 (the OS's MediaProjection consent dialog can never be
+silently bypassed - a real platform constraint, not a design choice)
+and §1.3 (the real whole-screen privacy exposure this feature already
+carries) before designing anything, since "by default" has to respect
+both rather than re-litigate them. Confirmed from the real code
+(`ScreenRecordingController.isEnabled`, L72-74) that the setup toggle
+currently defaults to `false` via `getBoolean(KEY_ENABLED, false)`,
+and that the consent flow only ever fires from a driver's own tap
+inside `PermissionsActivity` today - nothing proactively surfaces it.
+
+Wrote PRD §7 with: what "by default" can/can't mean given the OS
+constraint (the toggle default and proactive prompting ARE within this
+app's control; the OS dialog itself is not); the real tradeoff a
+default-on toggle creates (removes §1.3's own "opt-in mitigates this"
+reasoning for any driver who never visits Settings); explicit
+non-goals (not attempting to bypass the OS dialog, not building an
+export/share feature as a side effect, not silently fixing the
+already-flagged no-storage-cap gap); and one genuinely open question
+(§7.5: should a new in-app first-run explanation screen be shown
+before the OS dialog, given the OS dialog's own wording is generic
+across every app) with a stated recommendation (yes) that is NOT acted
+on without the driver's own answer or explicit go-ahead.
+
+Updated the Status header and RALPH_PROMPT.md to mark this an
+explicitly-deferred addition - a real, deliberate "design only" ask
+from the driver, not an unanswered open question a future "continue"
+instruction should resolve on its own initiative the way other PRDs'
+stated recommendations get used.
+
+No code changed. §8's checklist (all boxes) is the tracking mechanism
+for §7's eventual implementation, once approved.
+
