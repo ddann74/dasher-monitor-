@@ -224,3 +224,60 @@ Remaining: §7.5's final box (user sign-off) is never mine to check.
 §7.6 (Part 2B, full dropoff-side per-job phase timing) remains blocked
 - no per-job dropoff-linkage design exists yet, a real, separate
 design question this pass did not resolve.
+
+## Part 2B design pass (2026-09-02) — driver asked to design the dropoff linkage
+
+Investigated the real code the driver's request needed:
+`DropoffScreenParser`'s confirmed screen structure (customer name,
+address, deadline, delivery instruction - no restaurant/order
+identifier at all), `TripManager.add_stop`/`_evaluate_arrivals`
+(dropoff arrival detection, geofence-based, first-wins UPDATE into a
+single trips-level column), the walking-detection code (confirmed it
+already holds a real reference to the matched stop object at the
+moment `walking_confirmed_ts` would fire, via `_check_approaching_stop`
+- just doesn't use it per-job yet), and `notifyRateThisDelivery`'s
+call sites (confirmed there is no distinct "this one job is done"
+event separate from either a dropoff's own walking/arrival timestamps
+or the whole trip ending - so "job_end_ts" was never going to be a new
+independent signal, just an alias for whichever of those is known,
+matching `_build_trip_summary_dict`'s own existing
+`completing_dropoff_start_ts = walking_confirmed_ts or dropoff_arrival_ts`
+pattern).
+
+Two real linkage approaches were identified:
+
+1. **Ordinal pairing by chronological order** - pair the Nth job
+   departed with the Nth dropoff arrived, reusing §7.4's already-
+   chronological `offer_distance_accuracy` rows and the already-
+   persisted `stops` table's `arrival_time`. Buildable today, no new
+   UI. Its real weakness (not a minor edge case): batch-order routing
+   commonly delivers OUT of pickup order for efficiency - this would
+   silently mislabel a job's phase timing rather than leaving it
+   honestly unlinked, which is worse than doing nothing.
+2. **One-tap driver confirmation** on a detected batch dropoff -
+   always correct, no guessing, but real UI/UX work and added driver
+   friction.
+
+Put both to the driver directly via a real decision point (this is a
+genuine UX/data-integrity tradeoff, not a coding detail one design
+recommendation should silently resolve) - presented a third option
+(gather real evidence about what the Dasher app's dropoff screen
+actually shows for a batch order before committing to either heuristic,
+since `DropoffScreenParser` was built from only two real single-order
+screenshots and a real batch-order dropoff screen has never actually
+been seen) and a fourth (leave Part 2B blocked, don't pursue this
+round). **Driver chose: gather real evidence first.**
+
+Wrote this investigation and both considered-and-deferred heuristics
+into PRD §7.6 (replacing the old "no per-job dropoff-linkage design
+exists yet" stub with the actual design pass and its real conclusion),
+updated §8's checklist to reflect the design pass itself as done
+(checked) while everything downstream of it stays blocked on real
+evidence, and updated the Status header and RALPH_PROMPT.md to make
+clear this is an ANSWERED question (gather evidence), not an open one
+to fall back to a stated recommendation on under a future blanket
+"continue" instruction.
+
+No code was written this pass - by design, per the driver's own
+choice: this was a design-only session, and the evidence needed to
+choose a real linkage approach doesn't exist yet.

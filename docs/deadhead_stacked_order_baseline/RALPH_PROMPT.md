@@ -10,12 +10,17 @@ own recommendation (no driver override given), fixing a real data-loss
 bug found during that pass (§7.4.1: a stacked order's earlier job never
 got persisted to `offer_distance_accuracy` at all). **Do NOT start on
 §8 (Part 2B, dropoff-side per-job phase timing) from this prompt** - §7.6
-explains why it's still blocked: no per-job dropoff-linkage design
-exists yet, a real, separate design question §7.4's pass did not
-resolve. Needs its own design pass before any code is written, the same
-investigate-before-implement discipline every other PRD in this repo
-follows - don't treat an existing RALPH_PROMPT.md as blanket permission
-to implement whatever gets added to the same file later.
+is now a completed design pass (2026-09-02), and it explains exactly
+why §8 is STILL blocked: two real linkage heuristics were identified
+and put to the driver directly, who chose to gather real evidence (a
+stacked-order dropoff screenshot/diagnostic log) rather than build
+either one blind - see §7.6.2/§7.6.3. Do not build the ordinal-pairing
+heuristic (or any other) on your own initiative even under a blanket
+"continue" instruction - this was already put to the driver and
+answered "gather evidence first," which is a real, already-given
+answer, not an unanswered open question to fall back to a stated
+recommendation on. Wait for that evidence (a new screenshot/log
+attached to a future message) before resuming §8.
 
 ---
 
