@@ -149,6 +149,19 @@ public class TripForegroundService extends Service {
         // never changes while the process is alive.
         logDiagnostic("DEVICE", "manufacturer=" + Build.MANUFACTURER + " model=" + Build.MODEL
                 + " sdk=" + Build.VERSION.SDK_INT + " knownAggressiveOem=" + OemBackgroundHelper.isKnownAggressiveOem());
+        // Crash-recovery gap fix (2026-09-02, docs/screen_recording/PRD.md
+        // ss11): onCreate() is the first point this app's own code runs
+        // again after a possible crash -- "next launch" in the driver's
+        // own words. A recording segment a crash interrupted before it
+        // could be cleanly finalized is left as an unplayable .mp4 (see
+        // ScreenRecordingController.hasMoovBox's own doc); clean those up
+        // here rather than leaving a broken-looking file for the driver
+        // to discover by trying to open it.
+        int orphanedRecordings = ScreenRecordingController.cleanUpOrphanedSegments(this);
+        if (orphanedRecordings > 0) {
+            logDiagnostic("SCREEN_RECORDING", "Removed " + orphanedRecordings
+                    + " unfinalized recording segment(s) left over from a previous crash");
+        }
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
 
         locationCallback = new LocationCallback() {
@@ -1023,8 +1036,13 @@ public class TripForegroundService extends Service {
             // even in logcat. Surfaced here so a 0-byte/near-empty
             // recording has an explanation in the log, not just a
             // confusing file size later with no context.
+            // Segmented recording (PRD ss11): currentFile() is the LAST
+            // segment of possibly several for this trip, not the whole
+            // trip's footage -- earlier segments were already finalized
+            // and logged nowhere individually, so the byte count below is
+            // deliberately scoped to "final segment," not "whole trip."
             logDiagnostic("SCREEN_RECORDING", "Stopped recording for this trip"
-                    + (finishedFile != null ? " (" + finishedFile.length() + " bytes)" : "")
+                    + (finishedFile != null ? " (final segment: " + finishedFile.length() + " bytes)" : "")
                     + (screenRecordingController.lastStopWasLikelyEmpty()
                             ? " -- stopped before any data was recorded, file may be empty/invalid" : ""));
         }

@@ -342,3 +342,87 @@ Remaining PRD §10 boxes: driver confirmation that the crash loop stops
 (the direct test - toggle recording on, complete two trips back to back
 in the same app session without force-closing between them) and driver
 sign-off. Both outstanding until reported back.
+
+## §11 fix (2026-09-02): "fix the crash-recovery gap so recordings finalize on next launch"
+
+Driver asked what happens to the video if the app crashes mid-recording
+(a follow-up question after §9/§10 shipped). Answered directly first: a
+graceful `onDestroy()` teardown finalizes the file (writes its `moov`
+index box via `MediaRecorder.stop()`); an actual process crash skips
+that, leaving a file with recorded frame data but no index - unplayable
+in any standard player, though not literally deleted. Driver then asked
+to fix it.
+
+**Investigated and rejected**: genuinely repairing a `moov`-less MP4
+(reconstructing the frame-offset/timing tables from the raw `mdat` data
+already on disk) is a hard, OEM/codec/Android-version-specific problem -
+real third-party tools exist for exactly this (`untrunc` and similar),
+and none of them work universally. With no Android SDK/emulator/device
+in this environment to verify a repair actually produces a playable
+file, shipping one risked exactly the failure mode this PRD's earlier
+audits kept finding and fixing: something that LOOKS successful (a
+renamed/"recovered" file) but is quietly still broken - worse than
+admitting the limitation, since the driver would trust footage that
+isn't actually there. Documented in PRD §11.1 rather than silently
+skipped.
+
+**What was actually fixed** (PRD §11.2):
+
+1. **`ScreenRecordingController.java`** - recording is no longer one
+   file per trip. Added `SEGMENT_DURATION_MS` (5 minutes) and rewired
+   `beginCapture()`/a new `newRecorder()` helper to use
+   `MediaRecorder.setMaxDuration()` + `setOnInfoListener` (Android's own
+   documented pattern for bounded-duration recording). A new
+   `rotateSegment()` method fires when a segment hits its time limit:
+   `stop()`s the finishing recorder (finalizing ITS `moov` box - the
+   real crash-safety boundary) and starts a fresh `MediaRecorder` on the
+   same `VirtualDisplay` via `VirtualDisplay.setSurface()` (no
+   re-acquiring the `MediaProjection` grant mid-trip). A crash now loses
+   at most one segment instead of the whole trip. First segment keeps
+   the original `trip_<timestamp>.mp4` naming (most trips stay under 5
+   minutes and still produce exactly one file, unchanged from before);
+   later segments get `_part2`, `_part3`, etc.
+2. Added `hasMoovBox(File)` - a from-scratch top-level ISO-BMFF box scan
+   (checks for the `moov` box's PRESENCE only, never parses its
+   contents - a simple, fully-verifiable-by-reading operation, unlike
+   the rejected repair approach) - and `cleanUpOrphanedSegments(Context)`,
+   which scans the recordings folder for `.mp4` files missing one and
+   deletes them.
+3. **`TripForegroundService.java`** - `onCreate()` (the first point this
+   app's own code runs again after any crash - literally "next launch")
+   now calls `cleanUpOrphanedSegments()` and logs how many orphaned
+   segments were removed, rather than leaving broken-looking files for
+   the driver to discover by trying to open them.
+
+**Self-caught bug during review**: `rotateSegment()`'s original single
+try/catch meant a failure starting the NEXT segment (after the previous
+one had already been successfully finalized) left the half-created
+`MediaRecorder` for that next segment un-released - a leaked native
+codec instance. Caught this before considering the fix done, split the
+method into two separate try/catch blocks (finalize-previous vs.
+start-next) so a failure in the second explicitly releases whatever was
+created.
+
+**Also fixed while reviewing existing callers**: `currentFile()`'s
+meaning changed (now "the current/last segment," not "the whole trip's
+one file"). Its one call site - `TripForegroundService`'s stop-tracking
+diagnostic log line, which reported a byte count implying it was the
+whole trip's size - was corrected to say "final segment" explicitly
+rather than leaving a now-misleading log message in place.
+
+**Verification**: same disclosed limitation as the rest of this PRD - no
+Android SDK/emulator/device, so code review plus static checks:
+brace/paren balance (`ScreenRecordingController.java` 74/74 braces,
+290/290 parens; `TripForegroundService.java` 173/173 braces, 774/774
+parens); traced every existing caller of `ScreenRecordingController`'s
+public methods against the changed internals; confirmed `moov` is always
+a top-level (never nested) box, so a shallow scan correctly detects
+presence/absence; confirmed `cleanUpOrphanedSegments()` can only ever
+run before any `beginCapture()` call in a process's lifetime (called
+once, in `onCreate()`), so it can never race with or delete a
+currently-in-progress recording.
+
+Remaining PRD §12 boxes: driver confirmation (a >5-minute trip with
+recording on produces multiple playable files; a real or forced crash
+mid-trip leaves only the current segment missing, not the whole trip)
+and driver sign-off.
