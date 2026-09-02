@@ -182,8 +182,65 @@ public class TripForegroundService extends Service {
         // correctly shows nothing (idle, Dasher closed) or flashing red
         // (idle, but Dasher happens to already be open) depending on
         // DasherAccessibilityService's independently-tracked state.
-        startForeground(NOTIFICATION_ID, buildIdleNotification());
+        startForegroundLocationOnly(buildIdleNotification());
         refreshStatusDot();
+    }
+
+    /**
+     * Driver-reported real bug this closes: "the app crashes during
+     * setup," reproduced by disabling location permission (which stops
+     * MainActivity's own startForegroundService(TripForegroundService)
+     * call from ever firing at all -- see MainActivity.onCreate) and
+     * confirming the crash goes away. Root cause: the manifest declares
+     * this service as BOTH foregroundServiceType="location|mediaProjection"
+     * (see AndroidManifest.xml's own comment on why -- screen recording,
+     * opt-in, needs mediaProjection declared), but every startForeground()
+     * call in this class used the plain 2-arg overload. Per Android 14's
+     * documented behavior, that overload implicitly requests ALL types
+     * declared in the manifest, not just the ones actually relevant to
+     * THIS specific call -- meaning even the very first, plain idle
+     * startForeground() in onCreate() (which runs on every single app
+     * launch, whether or not screen recording is enabled at all) was
+     * implicitly asking Android to start a mediaProjection-type
+     * foreground service with no active MediaProjection grant, which
+     * Android 14 can reject. The previous comment on the manifest
+     * ("declaring the type here is what Android 14+ requires... it
+     * doesn't request or imply the grant itself") was an untested
+     * assumption, not confirmed on a real device -- this is what real
+     * driver evidence found wrong with it.
+     *
+     * Explicitly requests ONLY the location type via the type-aware
+     * startForeground(int, Notification, int) overload (API 29+; the
+     * concept of foreground service types doesn't exist below that, so
+     * the plain 2-arg call is correct there). See
+     * startForegroundWithRecording() for the one place the
+     * mediaProjection type is deliberately ADDED, right when screen
+     * recording is actually about to start -- not before.
+     */
+    private void startForegroundLocationOnly(Notification notification) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
+        } else {
+            startForeground(NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * The one place BOTH declared types are actually requested together
+     * -- called right before screen recording's own createVirtualDisplay()
+     * needs the mediaProjection type to be genuinely active, not just
+     * declared in the manifest. See startForegroundLocationOnly()'s own
+     * doc for why the routine/idle calls must NOT request this type too.
+     */
+    private void startForegroundWithRecording(Notification notification) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                            | android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
+        } else {
+            startForeground(NOTIFICATION_ID, notification);
+        }
     }
 
     @Override
@@ -280,7 +337,7 @@ public class TripForegroundService extends Service {
         monitoringActive = true;
         isRunning = true;
         lastKnownMode = null; // force onModeChanged to fire on the next GPS fix
-        startForeground(NOTIFICATION_ID, buildNotificationForMode("GENERAL"));
+        startForegroundLocationOnly(buildNotificationForMode("GENERAL"));
         refreshStatusDot();
         startLocationUpdates();
         MonitoringWatchdogReceiver.markIntendedActive(this, true);
@@ -306,11 +363,14 @@ public class TripForegroundService extends Service {
 
         // Opt-in screen recording (docs/screen_recording/PRD.md) - off
         // unless the driver both enabled the Setup toggle AND granted the
-        // MediaProjection consent dialog. Called last, after the service
-        // is already running in the foreground with the manifest's
-        // location|mediaProjection type declared, which Android requires
-        // before createVirtualDisplay can succeed.
+        // MediaProjection consent dialog. This is the one place the
+        // mediaProjection foreground service type is actually requested
+        // (see startForegroundWithRecording's own doc for the real bug
+        // this replaces -- merely declaring it in the manifest was not
+        // enough, and requesting it unconditionally on every plain
+        // startForegroundLocationOnly() call above was the actual crash).
         if (ScreenRecordingController.isEnabled(this)) {
+            startForegroundWithRecording(buildNotificationForMode("GENERAL"));
             boolean started = screenRecordingController.start(this);
             isScreenRecordingActive = started;
             if (started) {
@@ -959,7 +1019,10 @@ public class TripForegroundService extends Service {
         if (fusedLocationClient != null && locationCallback != null) {
             fusedLocationClient.removeLocationUpdates(locationCallback);
         }
-        startForeground(NOTIFICATION_ID, buildIdleNotification());
+        // Back to idle -- recording (if it was active) was already
+        // stopped above, so this demotes back to location-only, matching
+        // startForegroundLocationOnly's own reasoning.
+        startForegroundLocationOnly(buildIdleNotification());
         refreshStatusDot();
         MonitoringWatchdogReceiver.markIntendedActive(this, false);
         MonitoringWatchdogReceiver.cancelWatchdog(this);

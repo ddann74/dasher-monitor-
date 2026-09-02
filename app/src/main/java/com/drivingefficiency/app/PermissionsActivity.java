@@ -349,6 +349,21 @@ public class PermissionsActivity extends AppCompatActivity {
      * actually fire IN_VEHICLE transitions reliably. That can only be
      * confirmed by real driving with this installed, checking the log
      * for DRIVING_DETECTION entries afterward.
+     *
+     * CONFIRMED REAL BUG, closed by the try/catch below: driver-reported
+     * "the app crashes during setup" -- this whole method previously had
+     * NO exception handling at all, unlike every other Google-Play-
+     * Services-touching call site in this codebase (see
+     * DrivingDetectionReceiver's own try/catch around a similar API
+     * surface). ActivityRecognition.getClient(this) and
+     * requestActivityTransitionUpdates() are real Google Play services
+     * calls that can throw synchronously (not just fail asynchronously
+     * via the addOnFailureListener already handled below) -- e.g. if
+     * Play Services is missing, outdated, or updating on this specific
+     * device. Since this runs from onResume() -- every single time the
+     * Permissions & Setup screen is opened, once ACTIVITY_RECOGNITION is
+     * already granted -- an uncaught throw here crashes the whole
+     * screen on every visit, not just once.
      */
     private void subscribeToDrivingDetectionIfPermitted() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
@@ -358,25 +373,30 @@ public class PermissionsActivity extends AppCompatActivity {
                 != PackageManager.PERMISSION_GRANTED) {
             return;
         }
-        java.util.List<com.google.android.gms.location.ActivityTransition> transitions = new java.util.ArrayList<>();
-        transitions.add(new com.google.android.gms.location.ActivityTransition.Builder()
-                .setActivityType(com.google.android.gms.location.DetectedActivity.IN_VEHICLE)
-                .setActivityTransition(com.google.android.gms.location.ActivityTransition.ACTIVITY_TRANSITION_ENTER)
-                .build());
-        com.google.android.gms.location.ActivityTransitionRequest request =
-                new com.google.android.gms.location.ActivityTransitionRequest(transitions);
+        try {
+            java.util.List<com.google.android.gms.location.ActivityTransition> transitions = new java.util.ArrayList<>();
+            transitions.add(new com.google.android.gms.location.ActivityTransition.Builder()
+                    .setActivityType(com.google.android.gms.location.DetectedActivity.IN_VEHICLE)
+                    .setActivityTransition(com.google.android.gms.location.ActivityTransition.ACTIVITY_TRANSITION_ENTER)
+                    .build());
+            com.google.android.gms.location.ActivityTransitionRequest request =
+                    new com.google.android.gms.location.ActivityTransitionRequest(transitions);
 
-        Intent intent = new Intent(this, DrivingDetectionReceiver.class);
-        int flags = PendingIntent.FLAG_UPDATE_CURRENT
-                | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_MUTABLE : 0);
-        PendingIntent pendingIntent = PendingIntent.getBroadcast(this, 3001, intent, flags);
+            Intent intent = new Intent(this, DrivingDetectionReceiver.class);
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT
+                    | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_MUTABLE : 0);
+            PendingIntent pendingIntent = PendingIntent.getBroadcast(this, 3001, intent, flags);
 
-        com.google.android.gms.location.ActivityRecognition.getClient(this)
-                .requestActivityTransitionUpdates(request, pendingIntent)
-                .addOnSuccessListener(unused ->
-                        logDiagnostic("DRIVING_DETECTION", "Subscribed to Activity Recognition transition updates"))
-                .addOnFailureListener(e ->
-                        logDiagnostic("ERROR", "Activity Recognition subscription failed: " + e.getMessage()));
+            com.google.android.gms.location.ActivityRecognition.getClient(this)
+                    .requestActivityTransitionUpdates(request, pendingIntent)
+                    .addOnSuccessListener(unused ->
+                            logDiagnostic("DRIVING_DETECTION", "Subscribed to Activity Recognition transition updates"))
+                    .addOnFailureListener(e ->
+                            logDiagnostic("ERROR", "Activity Recognition subscription failed: " + e.getMessage()));
+        } catch (RuntimeException e) {
+            logDiagnostic("ERROR", "subscribeToDrivingDetectionIfPermitted threw: "
+                    + android.util.Log.getStackTraceString(e));
+        }
     }
 
     private void logDiagnostic(String category, String message) {
