@@ -2,7 +2,11 @@
 
 Status: IMPLEMENTED and tested (Python half). On-device confirmation of
 the Java-side file flow is blocked (no Android emulator/device
-available). See PROGRESS.md.
+available). §6 (added 2026-09-02): driver reported "I can't load the
+backup database file" -- root cause found and fixed (the restore
+picker's overly narrow MIME-type filter was hiding the file from the
+system picker) -- awaiting driver confirmation this was the actual
+symptom. See PROGRESS.md.
 
 ## 1. The real bug found
 
@@ -114,3 +118,59 @@ database until the chosen file is proven safe:
 - [ ] On-device confirmation of the Java-side file flow — blocked, no
       Android emulator/device available in this environment.
 - [ ] Driver sign-off.
+
+## 6. Driver-reported (2026-09-02): "I can't load the backup database file"
+
+### 6.1 Root cause found
+
+`restoreDatabaseFromUri`'s file picker (`DataManagementActivity`,
+`REQUEST_RESTORE_DATABASE_FILE`) launched
+`ACTION_OPEN_DOCUMENT` filtered to `setType("application/octet-stream")`
+only — the same type the Backup button requests when it CREATES a
+file. That's fine for creation (the app controls the type at creation
+time), but wrong for opening an existing one: whatever storage
+provider the driver browses through afterward (Google Drive, a file
+manager, Downloads, a saved email attachment) is free to index a
+`.db` file under a completely different MIME type
+(`application/x-sqlite3` and similar are common). Android's Storage
+Access Framework then hides or greys out that exact file in the
+picker, since it no longer matches the app's requested type — this
+directly matches "I can't load the backup file": not a crash, not a
+rejected file, the file was never selectable in the first place.
+
+### 6.2 Fix
+
+Broadened the RESTORE picker's type to `"*/*"` (kept
+`CATEGORY_OPENABLE`). Confirmed safe to do — MIME type was never this
+feature's actual safety gate: `validate_backup_file` (§3/§5, already
+implemented) does real content validation (SQLite integrity check +
+required-table check) on whatever gets picked, regardless of its
+reported type, so a stray non-database file picked under the broader
+filter is still correctly rejected before touching the live database.
+The BACKUP button's `ACTION_CREATE_DOCUMENT` type was deliberately left
+unchanged — that's a different flow (the app names and types the file
+it creates), not the one the driver reported an issue with.
+
+### 6.3 Verification
+
+Brace/paren balance confirmed (50/50, 272/272) after the edit.
+Code-reviewed against the real `validate_backup_file` implementation
+to confirm it doesn't rely on MIME type anywhere (it opens the file
+read-only via a plain URI connection and inspects real SQLite content
+only) — broadening the picker filter doesn't weaken that check at all.
+Also checked whether this codebase enables SQLite WAL mode (which
+would leave `-wal`/`-shm` sidecar files that could make a restore
+silently not take effect even after a successful file copy) - it does
+not; no `journal_mode`/WAL pragma anywhere in `drive_monitor.py`, so
+the existing close-then-overwrite sequence isn't at risk of that
+separate failure mode. On-device confirmation that the file now
+actually appears in the picker remains blocked — no Android
+emulator/device available in this environment; this is a diagnosis
+from code reading, not confirmed against the driver's exact screen.
+
+- [x] §6.1's root cause found and fixed (picker MIME-type filter
+      broadened to `*/*`, confirmed not to weaken `validate_backup_file`'s
+      real content-based safety check)
+- [ ] Driver confirms this was the actual symptom seen (vs. a
+      different failure mode not yet diagnosed) and that the backup
+      file now appears/selects correctly.
