@@ -295,7 +295,11 @@ class Database:
             actual_deadhead_km REAL,
             actual_delivery_km REAL,
             actual_total_km REAL,
-            timestamp INTEGER
+            timestamp INTEGER,
+            accepted_ts REAL,
+            payout REAL,
+            estimated_hourly_rate REAL,
+            actual_hourly_rate REAL
         );
 
         CREATE TABLE IF NOT EXISTS delivery_speed_history (
@@ -435,6 +439,19 @@ class Database:
             if new_column not in trips_columns:
                 col_type = "TEXT" if new_column in ("deadline_text", "pickup_address") else "REAL"
                 self.conn.execute(f"ALTER TABLE trips ADD COLUMN {new_column} {col_type}")
+        self.conn.commit()
+
+        # Migration for databases that already existed before per-job
+        # accept-time/payout/hourly-rate tracking was added -- see
+        # docs/deadhead_stacked_order_baseline/PRD.md ss7.4 and
+        # docs/hourly_rate_actual_vs_estimated/PRD.md ss4.B (same joint
+        # design, same shared row -- one row per pickup JOB, not per trip).
+        distance_accuracy_columns = [
+            row["name"] for row in self.conn.execute("PRAGMA table_info(offer_distance_accuracy)")
+        ]
+        for new_column in ("accepted_ts", "payout", "estimated_hourly_rate", "actual_hourly_rate"):
+            if new_column not in distance_accuracy_columns:
+                self.conn.execute(f"ALTER TABLE offer_distance_accuracy ADD COLUMN {new_column} REAL")
         self.conn.commit()
 
 
@@ -1901,7 +1918,7 @@ class TripManager:
         self.db.conn.commit()
 
     def add_pickup(self, restaurant_name, lat, lon, claimed_distance_km=None, score_snapshot_json=None,
-                   deadline_text=None, address=None):
+                   deadline_text=None, address=None, payout=None):
         """
         Called once per delivery when the pickup location is known (e.g.
         from the offer screen). lat/lon start as placeholders (0.0, 0.0)
@@ -1923,7 +1940,26 @@ class TripManager:
         the offer screen is the restaurant NAME, not an address; the real
         value normally arrives slightly later via update_pickup_address
         once GoogleApiHelper's geocoding resolves.
+        payout: docs/hourly_rate_actual_vs_estimated/PRD.md ss4.B -- the
+        offer's real payout, appended as the LAST parameter (not inserted
+        earlier) so existing positional callers (e.g.
+        DeveloperTestingActivity, which doesn't pass this) keep working
+        unchanged. Stored alongside a real accept-time timestamp so
+        `actual_hourly_rate` can eventually be computed from the real
+        "accepted -> job done" span, not trip start (see PRD ss5).
+
+        docs/deadhead_stacked_order_baseline/PRD.md ss7.4.1: before
+        overwriting self.pickup below, if the OUTGOING job (a stacked/
+        batch order's earlier pickup) already completed its own pickup
+        arrival+departure, persist ITS offer_distance_accuracy row now --
+        otherwise this overwrite would silently lose it forever, since
+        _persist_distance_accuracy (trip end) only ever reads whichever
+        pickup happens to be self.pickup at that point. A real,
+        previously-undocumented data-loss bug, not just a wrong number.
         """
+        if self.pickup is not None and self.pickup.get("recorded") and self._deadhead_distance_km is not None:
+            self._persist_pickup_job_row(self.pickup, self._deadhead_distance_km, time.time())
+
         self.pickup = {
             "restaurant_name": restaurant_name, "lat": lat, "lon": lon,
             "arrived_at": None, "recorded": False,
@@ -1931,6 +1967,8 @@ class TripManager:
             "score_snapshot_json": score_snapshot_json,
             "deadline_text": deadline_text,
             "address": address,
+            "payout": payout,
+            "accepted_ts": time.time(),
         }
         # Baseline for THIS pickup's deadhead leg -- see __init__'s
         # _deadhead_baseline_km comment for the real bug this closes. For a
@@ -3016,20 +3054,80 @@ class TripManager:
             }
 
         if self.pickup and self.pickup.get("claimed_distance_km") is not None                 and self._deadhead_distance_km is not None:
-            actual_deadhead_km = self._deadhead_distance_km
-            self.db.conn.execute("""
-                INSERT INTO offer_distance_accuracy
-                    (trip_id, restaurant_name, claimed_distance_km, actual_deadhead_km,
-                     actual_delivery_km, actual_total_km, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (
-                self.trip_id, self.pickup["restaurant_name"],
-                self.pickup["claimed_distance_km"],
-                round(actual_deadhead_km, 3), round(actual_delivery_km, 3),
-                round(actual_total_km, 3), summary["end_time"],
-            ))
+            self._persist_pickup_job_row(
+                self.pickup, self._deadhead_distance_km, summary["end_time"],
+                distance_at_departure_km=self._distance_at_departure_km,
+                cumulative_km_now=actual_total_km,
+            )
 
         return delivery_speed_event
+
+    def _persist_pickup_job_row(self, job, deadhead_km, now_ts,
+                                 distance_at_departure_km=None, cumulative_km_now=None):
+        """
+        docs/deadhead_stacked_order_baseline/PRD.md ss7.4 / ss7.4.2 --
+        the shared per-JOB persistence this PRD's design pass called for,
+        jointly with docs/hourly_rate_actual_vs_estimated/PRD.md ss4.B
+        (both need the exact same row: one per pickup job, not per trip).
+
+        Called from two places:
+        1. _persist_distance_accuracy (trip end, the current/last job) --
+           distance_at_departure_km/cumulative_km_now ARE known, so
+           actual_delivery_km/actual_total_km/actual_hourly_rate are
+           computed for real, same values this already produced before
+           this refactor.
+        2. add_pickup (an EARLIER job in a stacked order, about to be
+           overwritten) -- distance_at_departure_km/cumulative_km_now are
+           NOT known (that job's own dropoff hasn't happened, and isn't
+           linkable to a specific dropoff event yet -- ss7.6), so those
+           three fields are left NULL rather than fabricated. What IS
+           real at this point -- restaurant_name, claimed_distance_km,
+           actual_deadhead_km, accepted_ts, payout, estimated_hourly_rate
+           -- is still persisted instead of silently lost, which is the
+           real bug ss7.4.1 found and this method fixes.
+        """
+        if job is None or job.get("claimed_distance_km") is None or deadhead_km is None:
+            return
+
+        actual_delivery_km = None
+        actual_total_km = None
+        actual_hourly_rate = None
+        delivery_leg_known = distance_at_departure_km is not None and cumulative_km_now is not None
+        if delivery_leg_known:
+            actual_total_km = cumulative_km_now
+            actual_delivery_km = actual_total_km - distance_at_departure_km
+            payout = job.get("payout")
+            accepted_ts = job.get("accepted_ts")
+            # payout >0 guards against the Java side's established "-1 means
+            # unknown" sentinel (DasherAccessibilityService.lastSeenPayout)
+            # producing a nonsensical negative rate.
+            if payout is not None and payout > 0 and accepted_ts is not None:
+                elapsed_hours = (now_ts - accepted_ts) / 3600.0
+                if elapsed_hours > 0:
+                    actual_hourly_rate = payout / elapsed_hours
+
+        estimated_hourly_rate = None
+        if job.get("score_snapshot_json"):
+            try:
+                estimated_hourly_rate = json.loads(job["score_snapshot_json"]).get("hourly_rate")
+            except (ValueError, TypeError):
+                pass  # malformed/legacy snapshot -- leave estimated_hourly_rate unset, not fatal
+
+        self.db.conn.execute("""
+            INSERT INTO offer_distance_accuracy
+                (trip_id, restaurant_name, claimed_distance_km, actual_deadhead_km,
+                 actual_delivery_km, actual_total_km, timestamp,
+                 accepted_ts, payout, estimated_hourly_rate, actual_hourly_rate)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            self.trip_id, job["restaurant_name"], job["claimed_distance_km"],
+            round(deadhead_km, 3),
+            round(actual_delivery_km, 3) if actual_delivery_km is not None else None,
+            round(actual_total_km, 3) if actual_total_km is not None else None,
+            now_ts,
+            job.get("accepted_ts"), job.get("payout"), estimated_hourly_rate,
+            round(actual_hourly_rate, 2) if actual_hourly_rate is not None else None,
+        ))
 
 
 # ------------------------------------------------------------------------- #
@@ -4129,9 +4227,14 @@ class DriveMonitorEngine:
         rows = []
         for r in accuracy_rows:
             when = datetime.fromtimestamp(r["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
+            # docs/deadhead_stacked_order_baseline/PRD.md ss7.4.2: an earlier
+            # job in a stacked order gets a real row with actual_delivery_km/
+            # actual_total_km left NULL (its own dropoff isn't linkable yet,
+            # ss7.6) -- format as "N/A" rather than crashing on None:.2f.
+            delivery_km = f"{r['actual_delivery_km']:.2f}" if r["actual_delivery_km"] is not None else "N/A"
+            total_km = f"{r['actual_total_km']:.2f}" if r["actual_total_km"] is not None else "N/A"
             rows.append([r["trip_id"], r["restaurant_name"], f"{r['claimed_distance_km']:.2f}",
-                         f"{r['actual_deadhead_km']:.2f}", f"{r['actual_delivery_km']:.2f}",
-                         f"{r['actual_total_km']:.2f}", when])
+                         f"{r['actual_deadhead_km']:.2f}", delivery_km, total_km, when])
         sections.append(self._format_table("DISTANCE ACCURACY",
             ["TripID", "Restaurant", "ClaimedKM", "DeadheadKM", "DeliveryKM", "TotalKM", "Timestamp"], rows))
 
@@ -4490,7 +4593,7 @@ class DriveMonitorEngine:
         return json.dumps(DropoffScreenParser.parse(lines))
 
     def add_pickup(self, restaurant_name, lat, lon, claimed_distance_km=None, score_snapshot_json=None,
-                   deadline_text=None, address=None):
+                   deadline_text=None, address=None, payout=None):
         """
         Registers the pickup location so real wait time can be measured
         once the driver arrives and later leaves. Called once per offer,
@@ -4516,9 +4619,11 @@ class DriveMonitorEngine:
         deadline_text: the offer's real "Deliver by X pm" text, carried
         through to the trip row for the post-trip phase-timing breakdown.
         address: usually None here -- see TripManager.add_pickup's doc.
+        payout: docs/hourly_rate_actual_vs_estimated/PRD.md ss4.B -- see
+        TripManager.add_pickup's doc for why this is appended last.
         """
         self.trip_manager.add_pickup(restaurant_name, lat, lon, claimed_distance_km, score_snapshot_json,
-                                      deadline_text, address)
+                                      deadline_text, address, payout)
 
     def update_pickup_coordinates(self, lat, lon):
         """
@@ -4644,7 +4749,12 @@ class DriveMonitorEngine:
         total_trip_errors = []
         for row in rows:
             claimed = row["claimed_distance_km"]
-            if claimed is None:
+            # docs/deadhead_stacked_order_baseline/PRD.md ss7.4.2: since that
+            # fix, a row can exist for an earlier job in a stacked order with
+            # claimed_distance_km known but actual_delivery_km/actual_total_km
+            # still NULL (that job's own dropoff isn't linkable yet -- ss7.6)
+            # -- skip those here rather than crash on None arithmetic.
+            if claimed is None or row["actual_delivery_km"] is None or row["actual_total_km"] is None:
                 continue
             delivery_only_errors.append(abs(claimed - row["actual_delivery_km"]))
             total_trip_errors.append(abs(claimed - row["actual_total_km"]))
@@ -4662,6 +4772,42 @@ class DriveMonitorEngine:
             "avg_delivery_only_error_km": round(avg_delivery_only_error, 3),
             "avg_total_trip_error_km": round(avg_total_trip_error, 3),
             "conclusion": conclusion,
+        })
+
+    def get_hourly_rate_accuracy_summary(self):
+        """
+        docs/hourly_rate_actual_vs_estimated/PRD.md ss4.B / ss6 -- mirrors
+        get_distance_accuracy_summary() immediately above: how far off is
+        the live hourly-rate estimate from what a delivery actually paid
+        per hour, using this driver's own recorded jobs. Only rows where
+        BOTH estimated_hourly_rate and actual_hourly_rate were captured
+        count -- an earlier job in a stacked order (ss7.4.2 of the
+        deadhead PRD) may have one but not the other, and is correctly
+        excluded here rather than compared against a missing number.
+        """
+        rows = self.db.conn.execute("""
+            SELECT estimated_hourly_rate, actual_hourly_rate FROM offer_distance_accuracy
+            WHERE estimated_hourly_rate IS NOT NULL AND actual_hourly_rate IS NOT NULL
+        """).fetchall()
+
+        if not rows:
+            return json.dumps({"sample_count": 0})
+
+        errors = [row["actual_hourly_rate"] - row["estimated_hourly_rate"] for row in rows]
+        avg_signed_error = sum(errors) / len(errors)
+        avg_abs_error = sum(abs(e) for e in errors) / len(errors)
+        if avg_signed_error < -0.5:
+            bias_direction = "overestimating"
+        elif avg_signed_error > 0.5:
+            bias_direction = "underestimating"
+        else:
+            bias_direction = "accurate"
+
+        return json.dumps({
+            "sample_count": len(rows),
+            "avg_signed_error": round(avg_signed_error, 2),
+            "avg_abs_error": round(avg_abs_error, 2),
+            "bias_direction": bias_direction,
         })
 
     def reset_all_data(self):

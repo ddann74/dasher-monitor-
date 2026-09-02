@@ -1,11 +1,18 @@
 # PRD — hourly-rate estimate vs. actual result
 
 Status: §4.A (the wait-time fix to the live estimate) IMPLEMENTED and
-tested. §5's two open questions are now ANSWERED. §4.B itself is still
-NOT started -- answering §5 removed the ambiguity about *what* to
-build, but the per-job schema itself (shared with
-`docs/deadhead_stacked_order_baseline/` §7) still needs its own design
-pass before any code is written. See PROGRESS.md.
+tested. §4.B IMPLEMENTED and tested this pass (2026-09-02), jointly
+with `docs/deadhead_stacked_order_baseline/` §7.4's design pass and
+implementation -- see that PRD's §7.4 for the shared per-job schema
+design, and this PRD's PROGRESS.md for the hourly-rate-specific half.
+Honest scope limit carried over from that joint design: `actual_hourly_rate`
+is only ever computed for a job whose own completion is known -- today
+that's the LAST job in any trip (including every single-job trip, the
+common case) -- an EARLIER job in a stacked/batch order gets its
+`payout`/`accepted_ts`/`estimated_hourly_rate` persisted (closing a
+real data-loss bug, see the other PRD's §7.4.1) but not
+`actual_hourly_rate`, since that needs a per-job dropoff link that
+still doesn't exist (§7.6 of the other PRD).
 
 ## 1. What the code actually does today
 
@@ -163,9 +170,12 @@ needs a schema change):**
 - [x] Real executable test proving A: same distance/speed, two
       restaurants with different learned `avg_wait`, confirms the one
       with the longer wait produces a lower `hourly_rate`/`hourly_score`.
-- [ ] §4.B (only after the open questions in §5 are answered by the
-      driver): payout captured at accept time, actual hourly rate
-      computed and persisted at trip end.
-- [ ] `get_hourly_rate_accuracy_summary()` implemented and returns real
+- [x] §4.B: payout captured at accept time (`accepted_ts`/`payout` on
+      `TripManager.add_pickup`), actual hourly rate computed and
+      persisted -- at trip end for the current/last job, and (the
+      §7.4.1 bug fix) also for an earlier stacked-order job's
+      payout/accepted-time/estimated-rate data, though not that job's
+      `actual_hourly_rate` -- see Status header's honest scope limit.
+- [x] `get_hourly_rate_accuracy_summary()` implemented and returns real
       numbers from a real recorded trip in a test.
 - [ ] Driver sign-off.

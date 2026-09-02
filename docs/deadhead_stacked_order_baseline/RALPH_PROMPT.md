@@ -3,11 +3,16 @@
 Run this prompt repeatedly (one iteration per invocation) until every box
 in `docs/deadhead_stacked_order_baseline/PRD.md` §6 is checked.
 
-**Part 1 (§6) is done** - all boxes checked except user sign-off. **Do
-NOT start on §8 (Part 2, per-job timing breakdown) from this prompt** -
-PRD §7.2 explicitly says that part "needs its own schema migration...
-not designed in full detail here." It needs a proper design pass (a new
-PRD section or its own PRD) before any code is written, the same
+**Part 1 (§6) is done** - all boxes checked except user sign-off.
+**Part 2A (§7.4-§7.5) is also done** (2026-09-02) - the design pass this
+guardrail required was completed (§7.4) and then implemented per its
+own recommendation (no driver override given), fixing a real data-loss
+bug found during that pass (§7.4.1: a stacked order's earlier job never
+got persisted to `offer_distance_accuracy` at all). **Do NOT start on
+§8 (Part 2B, dropoff-side per-job phase timing) from this prompt** - §7.6
+explains why it's still blocked: no per-job dropoff-linkage design
+exists yet, a real, separate design question §7.4's pass did not
+resolve. Needs its own design pass before any code is written, the same
 investigate-before-implement discipline every other PRD in this repo
 follows - don't treat an existing RALPH_PROMPT.md as blanket permission
 to implement whatever gets added to the same file later.
