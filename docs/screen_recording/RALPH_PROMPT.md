@@ -3,6 +3,21 @@
 Run this prompt repeatedly (one iteration per invocation) until every box
 in `docs/screen_recording/PRD.md` §6 is checked.
 
+**§6 is done** (all boxes checked except sign-off). **PRD §7/§8 (added
+2026-09-02, "capture by default") is a separate, later addition -
+DRAFT, investigated and designed, explicitly NOT approved for
+implementation.** The driver asked for this to be added to the PRD
+without writing any code from it. Do NOT start on §8's checklist from
+this prompt, even under a blanket "continue" instruction, until the
+driver has actually answered §7.5's open question (or otherwise says
+"yes implement it") - this was a deliberate "design only, don't code"
+instruction, not an oversight to fill in via a stated recommendation
+the way other PRDs' open questions get resolved under blanket continue.
+The guardrail below ("never default-on") describes §1-§6's ORIGINAL,
+already-implemented opt-in design and stays true for that scope; it is
+exactly what §7 proposes changing, deliberately, with its own sign-off
+gate - not a contradiction to resolve, two different scopes.
+
 ---
 
 You are implementing `docs/screen_recording/PRD.md` for the

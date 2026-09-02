@@ -69,9 +69,26 @@ public class DataManagementActivity extends AppCompatActivity {
                             + "This cannot be undone. The app will need a full restart "
                             + "afterward. Continue?")
                     .setPositiveButton("Choose Backup File", (dialog, which) -> {
+                        // Driver-reported real bug: "I can't load the backup
+                        // database file." Root cause -- this picker used to
+                        // filter to setType("application/octet-stream")
+                        // only, the same type the Backup button requests
+                        // when CREATING a file. But a provider the driver
+                        // browses through afterward (Google Drive, a file
+                        // manager, Downloads, a saved email attachment) is
+                        // free to re-index a .db file under a completely
+                        // different MIME type (application/x-sqlite3, etc.)
+                        // -- Android's Storage Access Framework then hides
+                        // or greys out that exact file, since it no longer
+                        // matches the requested type. Safe to broaden to
+                        // "*/*" here: MIME type was never this app's real
+                        // safety gate -- validate_backup_file() already does
+                        // real content validation (integrity check + schema
+                        // check) on whatever gets picked, regardless of its
+                        // reported type.
                         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                         intent.addCategory(Intent.CATEGORY_OPENABLE);
-                        intent.setType("application/octet-stream");
+                        intent.setType("*/*");
                         startActivityForResult(intent, REQUEST_RESTORE_DATABASE_FILE);
                     })
                     .setNegativeButton("Cancel", null)

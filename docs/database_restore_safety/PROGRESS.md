@@ -66,3 +66,44 @@ validation and the safety copy have completed.
 
 Remaining PRD §5 boxes: on-device confirmation (blocked) and driver
 sign-off.
+
+## §6 fix (2026-09-02) — driver reported "I can't load the backup database file"
+
+Read `restoreDatabaseFromUri`'s file-picker Intent setup
+(`REQUEST_RESTORE_DATABASE_FILE`) and found a real, well-known Android
+Storage Access Framework gotcha: the picker filtered to
+`setType("application/octet-stream")`, the same type the Backup
+button requests when CREATING a file -- but a `.db` file can get
+re-indexed under a different MIME type by whatever provider the
+driver later browses through to select it (Google Drive, a file
+manager, Downloads, a saved email attachment all commonly report
+`.db` under something like `application/x-sqlite3`, not
+`application/octet-stream`). Android's SAF then hides or greys out
+that exact file, matching the reported symptom precisely -- not a
+crash, not a rejected file, never selectable at all.
+
+Fix: broadened the RESTORE picker's `setType` to `"*/*"` (kept
+`CATEGORY_OPENABLE`). Confirmed this doesn't weaken the real safety
+check -- `validate_backup_file` never looks at MIME type, only real
+SQLite content (integrity check + required-table check) via a
+read-only URI connection, so a stray non-database file picked under
+the broader filter is still correctly rejected before the live
+database is ever touched. Left the BACKUP button's
+`ACTION_CREATE_DOCUMENT` type unchanged -- a different flow (the app
+controls the type when CREATING its own file), not what was reported
+broken.
+
+Also checked, since a restore silently not taking effect would look
+similar from the driver's side: whether this app enables SQLite WAL
+mode, which would leave `-wal`/`-shm` sidecar files that could make a
+plain file-copy restore not actually take effect. Confirmed it does
+not (`grep` for `journal_mode`/WAL across `drive_monitor.py` -- nothing
+found) -- ruled out as a contributing cause.
+
+Verified: brace/paren counts in `DataManagementActivity.java` balanced
+(50/50, 272/272) before and after the edit. Not verified on-device --
+no Android emulator/device available in this environment; this is a
+diagnosis and fix from code reading, since the driver didn't provide
+an exact error message or screenshot. Awaiting driver confirmation
+this was the actual symptom (the file being unselectable in the
+picker), not a different failure mode.

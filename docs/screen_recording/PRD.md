@@ -8,6 +8,10 @@ premortem/silent-failure audit passes after initial implementation
 consent-staleness gap. This introduces a genuinely new, privacy-
 sensitive capability this app has never had before - read §1.3 and §5
 before signing off, not just the checklist.
+§7 (added 2026-09-02, DRAFT, NOT implemented): the driver asked to
+capture screen recording by default. Investigated and designed, with
+an open question (§7.5) - explicitly NOT coded, per the driver's own
+instruction to add this to the PRD without implementing it yet.
 Scope: this one feature only. Not a general codebase pass.
 
 ## 0. What this is / isn't
@@ -337,4 +341,133 @@ this is the least independently-verifiable PRD in this repo so far.
 - [x] No change to existing GPS/accessibility/notification behavior when
       the toggle is off (diff-reviewed - every new code path is gated
       behind `ScreenRecordingController.isEnabled()`/`hasPendingConsent()`)
+- [ ] User sign-off
+
+## 7. Driver request (2026-09-02, DRAFT - NOT implemented, not approved): capture by default
+
+Driver asked: "capture screen recording by default" and "where are the
+videos located." The second question is answered directly - see below;
+this section is the investigation and design for the first, written up
+per the driver's own explicit instruction to add it to the PRD but NOT
+write any code from it yet.
+
+### 7.1 Where the videos are located today (answers the driver's second question)
+
+`context.getExternalFilesDir(null)/ScreenRecordings/trip_<timestamp>.mp4`
+(`ScreenRecordingController.recordingsDir`/`RECORDINGS_DIR_NAME`) - on a
+real device this resolves to app-private EXTERNAL storage, e.g.
+`/storage/emulated/0/Android/data/com.drivingefficiency.app/files/ScreenRecordings/`.
+Per §1.2's own design note, this is deliberately private app storage,
+not the shared/public `MediaStore` gallery - confirmed still true,
+nothing about this has changed. Practically, this means:
+
+- The videos do **not** appear in the Photos/Gallery app on the phone.
+- No in-app player or export/share button exists (§6's own checklist:
+  "basic in-app review" is COUNT + TOTAL SIZE + delete-all only, not
+  playback) - confirmed by re-reading `PermissionsActivity`'s screen-
+  recording section in full, not assumed.
+- The only ways to actually retrieve a file today: a file manager app
+  that can browse `Android/data/...` (Android 11+ restricts this for
+  many file managers unless the user explicitly grants "All files
+  access"), or a computer connected over USB with file transfer/adb.
+  **This is itself a real, disclosed gap this PRD has never closed** -
+  worth a separate, explicit driver decision (an in-app "share/export"
+  action?) if watching the recordings is something the driver actually
+  wants to do, independent of the "by default" request below.
+
+### 7.2 What "by default" can and cannot mean here
+
+§1.1 point 1 already established, as a real Android platform
+constraint (not a design choice): **the OS's own MediaProjection
+consent dialog cannot be silently bypassed, ever, by any app, for any
+reason** - "start recording automatically, every time, with zero
+taps" is not achievable on this OS, full stop. That has not changed
+and this section does not attempt to re-litigate it. What CAN
+change, entirely within this app's own control:
+
+1. **The setup toggle's default value** - currently
+   `isEnabled()` reads `getBoolean(KEY_ENABLED, false)`
+   (`ScreenRecordingController.java` L72-74) - off unless the driver
+   has explicitly turned it on. Flipping this default to `true` means
+   a driver who never opens Settings still gets prompted for the
+   (unavoidable) one-time consent dialog the first time monitoring
+   starts, instead of screen recording silently never happening at
+   all because they never found the toggle.
+2. **Proactively surfacing the consent prompt**, rather than requiring
+   the driver to remember to visit `PermissionsActivity` and tap
+   "Enable" themselves. Today, per §1.1/§3, the consent flow only ever
+   fires from a driver's own tap inside `PermissionsActivity` - there
+   is no code path today that surfaces it from anywhere else (e.g. on
+   first app launch, or the first time `startTracking()` runs with the
+   toggle on but no consent yet held).
+
+### 7.3 The real tradeoff this creates - directly extends §1.3, not a new concern
+
+§1.3 already discloses screen recording's core privacy exposure (whole
+device screen, not just this app, for the full trip duration) and
+names "opt-in, off by default" as part of how this PRD's original
+design mitigates it. **Flipping the default to on removes exactly that
+mitigation for every driver who installs the app and never visits
+Settings** - they would get the OS consent dialog (which they must
+still affirmatively tap "Start now" on for anything to actually
+record - Android does not allow a default-accepted state, per §1.1),
+but would arrive at that dialog without ever having made an
+affirmative, in-app choice to want this feature at all. A driver who
+taps through an unexpected system dialog without reading it closely is
+a real, known UX pattern this PRD hasn't had to reckon with while the
+feature was opt-in - it does have to now, since "by default" only
+narrows the OS's own consent gate, it does not add a NEW gate this app
+controls to soften that risk (unless one is deliberately designed - see
+non-goals below).
+
+### 7.4 Non-goals for this addition
+
+- Not attempting to bypass or auto-accept the OS consent dialog itself
+  - confirmed impossible (§1.1/§7.2), not a design choice being
+    declined.
+- Not (yet) designing an in-app viewer/export for existing recordings
+  (§7.1's own disclosed gap) - a real, related but separate ask, not
+  bundled into "capture by default" without being asked to.
+- Not changing §5.2's storage-cap decision (still no cap, still
+  manual delete-all only) - a default-on toggle would mean MORE
+  drivers accumulating recordings with no cap by default, which makes
+  §5.2's already-flagged near-term follow-up more urgent, not
+  something to silently fix as a side effect here.
+
+### 7.5 Open question - genuinely blocking, matching §5's own pattern
+
+Should flipping the toggle's default to `true` be paired with a NEW,
+explicit first-run explanation screen ("This app can record your
+screen during trips to help you review deliveries later - screen
+recording captures your ENTIRE screen, not just this app, for the
+whole trip") shown BEFORE the OS's own consent dialog ever appears -
+so the driver's first encounter with this feature is an in-app
+explanation they control, not a system dialog they might tap through
+on reflex? Or is the OS's own consent dialog (which does show Android's
+standard "this will let Dasher Monitor record everything displayed
+on your screen" warning) considered sufficient disclosure on its own,
+matching how §1.1/§3's original opt-in design already relied on it? This
+is a real driver preference about how much additional friction to add
+in front of an OS gate that already exists either way - not purely a
+coding call, and not decided here. **Recommend the first-run
+explanation screen** - the OS dialog's own wording is generic across
+every app that ever requests this permission, while a driver
+proactively defaulted INTO this by an app update deserves to know
+specifically why, before being asked to tap through it - but this is
+disclosed as a recommendation only, not built.
+
+## 8. Success criteria for §7 (NOT started - explicitly not to be coded without a follow-up "yes implement it")
+
+- [ ] §7.5's open question answered by the driver (or their explicit
+      go-ahead to build it per this section's own recommendation)
+- [ ] Toggle default flipped from `false` to `true`
+      (`ScreenRecordingController.isEnabled`)
+- [ ] Consent prompt proactively surfaced (exact trigger point - first
+      app launch? first `startTracking()` with no consent held? -
+      still needs a specific decision, not just "proactively" left
+      vague)
+- [ ] §7.5's first-run explanation screen, if that's the chosen answer
+- [ ] §7.1's in-app export/share gap addressed, IF the driver confirms
+      that's wanted alongside this (separate ask, not assumed)
+- [ ] Executable/reviewed verification, same standard as §6
 - [ ] User sign-off
