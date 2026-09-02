@@ -1,6 +1,11 @@
 # PRD: Stop per-second speeding samples from crushing the Safety score to zero
 
-Status: DRAFT -- awaiting sign-off before implementation begins.
+Status: IMPLEMENTED and tested (all §6 boxes checked except sign-off)
+-- this PRD's own status line was stale, found and corrected during a
+2026-09-02 ralph-loop continuation pass. §2's checklist (pre-
+implementation requirements, a different section from §6's tracking
+checklist) is also fully satisfied -- see PROGRESS.md for the real
+executed-test output.
 Scope: this one scoring bug only. Not a general codebase pass.
 
 ## 0. What this is / isn't

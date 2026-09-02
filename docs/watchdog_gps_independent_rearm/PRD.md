@@ -1,6 +1,9 @@
 # PRD: Make the watchdog's redundant re-arm actually independent of GPS
 
-Status: DRAFT - awaiting sign-off before implementation begins.
+Status: IMPLEMENTED (all §6 boxes checked except sign-off) -- this
+PRD's own status line was stale, found and corrected during a
+2026-09-02 ralph-loop continuation pass. Already went through its own
+premortem pass (§3a, P1/P2 found and documented).
 Scope: this one structural gap only. Not a general codebase pass.
 
 ## 0. What this is / isn't

@@ -1,6 +1,8 @@
 # PRD: Make the monitoring watchdog survive what it exists to catch
 
-Status: DRAFT -- awaiting sign-off before implementation begins. This PRD
+Status: IMPLEMENTED (all §6 boxes checked except on-device confirmation
+and sign-off) -- this PRD's own status line was stale, found and
+corrected during a 2026-09-02 ralph-loop continuation pass. This PRD
 is about core service reliability, not a UI feature -- read §1 and §4a
 carefully before signing off; the fix here narrows a real gap, it does
 not (and cannot) promise to eliminate OS/OEM process kills entirely.
