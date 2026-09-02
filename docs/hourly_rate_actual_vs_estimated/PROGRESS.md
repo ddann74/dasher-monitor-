@@ -89,3 +89,71 @@ Also verified: `ast.parse(drive_monitor.py)` clean after every edit.
 
 Remaining PRD §6 boxes: everything under §4.B (blocked on the joint
 per-job schema design, not on §5 anymore), plus driver sign-off.
+
+## §4.B implementation (2026-09-02)
+
+The joint per-job schema design this section was blocked on is now
+done - see `docs/deadhead_stacked_order_baseline/PRD.md` §7.4 for the
+full design (this PRD needed the exact same per-job row that PRD's
+Part 2A already builds) and that PRD's own PROGRESS.md for the shared
+implementation details (schema migration, `TripManager.add_pickup`'s
+new `payout` parameter, the `_persist_pickup_job_row` helper, and two
+real production crash bugs found and fixed as a direct consequence).
+This entry covers the hourly-rate-specific pieces only.
+
+- `payout` is now captured at accept time:
+  `DasherAccessibilityService`'s real `add_pickup` call site (the one
+  fed from the offer screen) now passes `lastSeenPayout` - already a
+  real, existing variable at that call site (already used one line
+  above for `save_pending_offer_for_recovery`), just never threaded
+  into `add_pickup` before this.
+- `accepted_ts` is captured unconditionally in `add_pickup` via
+  `time.time()`, matching §5's already-answered "accepted_ts, not trip
+  start" decision exactly.
+- `actual_hourly_rate = payout / ((now_ts - accepted_ts) / 3600.0)` -
+  computed for the current/last job at trip end (every single-job
+  trip, the common case, gets this correctly); an EARLIER job in a
+  stacked order does NOT get this yet (needs a per-job dropoff link
+  that doesn't exist - see the other PRD's §7.6), though its payout/
+  accepted_ts/estimated_hourly_rate ARE still persisted rather than
+  lost, closing a real data-loss bug the other PRD's §7.4.1 found.
+- `estimated_hourly_rate` is read straight out of the job's own
+  `score_snapshot_json["hourly_rate"]` - already stored at add_pickup
+  time, already contains this from `SmartScoreEngine.calculate()`'s
+  return dict, so no new parameter was needed for it (only §4.B's
+  design draft in §4 originally assumed one would be).
+- `DriveMonitorEngine.get_hourly_rate_accuracy_summary()` implemented,
+  mirroring `get_distance_accuracy_summary()`: average signed/absolute
+  error between estimate and actual, plus a bias-direction label
+  (overestimating/underestimating/accurate), across every row where
+  BOTH values are known.
+- A real "View Hourly Rate Accuracy" button added to `TripHistoryActivity`
+  (mirroring the existing "View Distance Accuracy" button/dialog) so
+  this is actually reachable in the app, not just callable from Python.
+
+## Verification (2026-09-02) — ACTUALLY EXECUTED
+
+Same `test_per_job_accuracy.py` script as the deadhead PRD's own
+verification (scratchpad, throwaway, run via plain `python3` against
+the real modified `drive_monitor.py`, `time.time()` monkeypatched to a
+controllable fake clock so elapsed-time math reflects the simulated
+drive, not real wall-clock milliseconds) covers both PRDs' shared code
+in one run. Hourly-rate-specific assertions confirmed:
+
+- `payout`/`estimated_hourly_rate` are persisted for BOTH jobs in a
+  2-job stacked trip (from `score_snapshot_json`, real, not guessed).
+- `actual_hourly_rate` is computed correctly for the LAST job
+  (`payout / elapsed-hours`, checked against the row's own persisted
+  `timestamp`/`accepted_ts` directly, not just "some number came out")
+  and correctly left NULL for the EARLIER job.
+- `get_hourly_rate_accuracy_summary()` returns `sample_count == 1` (only
+  the job with both values counts) and a real, well-formed JSON result
+  without crashing.
+- Regression: a normal single-job trip still gets a correct
+  `actual_hourly_rate` at trip end, exactly as this section intends for
+  the common case.
+
+`ast.parse(drive_monitor.py)` confirmed clean after every edit.
+
+Remaining PRD §6 box: driver sign-off (never mine to check). No other
+boxes remain unchecked.

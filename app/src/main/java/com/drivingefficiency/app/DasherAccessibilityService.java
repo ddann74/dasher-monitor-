@@ -1012,9 +1012,17 @@ public class DasherAccessibilityService extends AccessibilityService {
                 // (straight from the offer screen), stored so it can be
                 // checked against actual measured distance once this
                 // delivery completes.
+                // docs/hourly_rate_actual_vs_estimated/PRD.md ss4.B -- payout
+                // appended as the LAST arg (address=null threaded through
+                // explicitly since Chaquopy matches by position, not name);
+                // lastSeenPayout carries the same -1 "unknown" sentinel this
+                // codebase already uses elsewhere (see the
+                // save_pending_offer_for_recovery call above) -- the Python
+                // side guards against it rather than needing a null here.
                 engine.callAttr("add_pickup", restaurantName, 0.0, 0.0,
                         parsed.optDouble("distance_km", 0.0), score.toString(),
-                        parsed.isNull("deadline_text") ? null : parsed.optString("deadline_text", null));
+                        parsed.isNull("deadline_text") ? null : parsed.optString("deadline_text", null),
+                        null, lastSeenPayout);
                 geocodePickupAndCheckTraffic(restaurantName);
                 checkCurrentWeather();
             }

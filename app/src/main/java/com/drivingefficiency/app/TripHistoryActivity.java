@@ -32,6 +32,7 @@ public class TripHistoryActivity extends AppCompatActivity {
         Button viewSummaryButton = findViewById(R.id.viewSummaryButton);
         Button viewTripHistoryButton = findViewById(R.id.viewTripHistoryButton);
         Button viewDistanceAccuracyButton = findViewById(R.id.viewDistanceAccuracyButton);
+        Button viewHourlyRateAccuracyButton = findViewById(R.id.viewHourlyRateAccuracyButton);
         Button addressBookButton = findViewById(R.id.addressBookButton);
         Button acceptanceStatsButton = findViewById(R.id.acceptanceStatsButton);
         Button personalCalibrationButton = findViewById(R.id.personalCalibrationButton);
@@ -40,6 +41,7 @@ public class TripHistoryActivity extends AppCompatActivity {
         viewSummaryButton.setOnClickListener(v -> showLastTripSummary());
         viewTripHistoryButton.setOnClickListener(v -> showTripHistory());
         viewDistanceAccuracyButton.setOnClickListener(v -> showDistanceAccuracy());
+        viewHourlyRateAccuracyButton.setOnClickListener(v -> showHourlyRateAccuracy());
         addressBookButton.setOnClickListener(v -> showAddressBook());
         acceptanceStatsButton.setOnClickListener(v -> showAcceptanceStats());
         personalCalibrationButton.setOnClickListener(v -> showPersonalCalibration());
@@ -96,6 +98,64 @@ public class TripHistoryActivity extends AppCompatActivity {
                         .show();
             } catch (JSONException | PyException e) {
                 Toast.makeText(this, "Could not load distance accuracy: " + e.getMessage(),
+                        Toast.LENGTH_LONG).show();
+            }
+        }
+
+    /**
+         * docs/hourly_rate_actual_vs_estimated/PRD.md ss4.B/ss6 -- mirrors
+         * showDistanceAccuracy() above: how far off the live hourly-rate
+         * estimate is from what a delivery actually paid per hour, from
+         * this driver's own recorded jobs. Only jobs where BOTH the
+         * estimate and a real actual rate were captured count -- see
+         * get_hourly_rate_accuracy_summary()'s own doc for why an earlier
+         * job in a stacked order doesn't have both yet.
+         */
+        private void showHourlyRateAccuracy() {
+            try {
+                JSONObject result = new JSONObject(engine.callAttr("get_hourly_rate_accuracy_summary").toString());
+                int sampleCount = result.optInt("sample_count", 0);
+                if (sampleCount == 0) {
+                    new AlertDialog.Builder(this)
+                            .setTitle("Hourly Rate Accuracy")
+                            .setMessage("No completed deliveries with both an estimate and a real "
+                                    + "result yet -- this needs at least one full delivery (offer "
+                                    + "accepted, pickup completed, trip ended) to have data.")
+                            .setPositiveButton("OK", null)
+                            .show();
+                    return;
+                }
+
+                double avgSignedError = result.optDouble("avg_signed_error", 0);
+                double avgAbsError = result.optDouble("avg_abs_error", 0);
+                String biasDirection = result.optString("bias_direction", "");
+                String biasLabel;
+                switch (biasDirection) {
+                    case "overestimating":
+                        biasLabel = "The live estimate tends to run HIGHER than what deliveries actually pay per hour.";
+                        break;
+                    case "underestimating":
+                        biasLabel = "The live estimate tends to run LOWER than what deliveries actually pay per hour.";
+                        break;
+                    default:
+                        biasLabel = "The live estimate is tracking real results closely.";
+                }
+
+                String message = String.format(
+                        "Based on %d completed deliver%s:\n\n"
+                                + "%s\n\n"
+                                + "Avg signed error: $%.2f/hr\n"
+                                + "Avg absolute error: $%.2f/hr",
+                        sampleCount, sampleCount == 1 ? "y" : "ies",
+                        biasLabel, avgSignedError, avgAbsError);
+
+                new AlertDialog.Builder(this)
+                        .setTitle("Hourly Rate Accuracy")
+                        .setMessage(message)
+                        .setPositiveButton("OK", null)
+                        .show();
+            } catch (JSONException | PyException e) {
+                Toast.makeText(this, "Could not load hourly rate accuracy: " + e.getMessage(),
                         Toast.LENGTH_LONG).show();
             }
         }

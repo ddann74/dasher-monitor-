@@ -36,6 +36,7 @@
     <string name="nav_diagnostics">Diagnostics</string>
     <string name="nav_developer_testing">Developer Testing</string>
     <string name="view_distance_accuracy">View Distance Accuracy</string>
+    <string name="view_hourly_rate_accuracy">View Hourly Rate Accuracy</string>
     <string name="trusted_contacts_heading">Trusted Contacts</string>
     <string name="trusted_contacts_subtext">Personal SMS/Messenger messages are only read aloud for people added below (everyone else is ignored). A name matches if it appears ANYWHERE in the sender\'s name -- e.g. adding "Mom" matches "Mom", "Mom ❤️", or any name containing "mom". Tip: the same person often shows one name in SMS and a different one in Messenger (Messenger uses their Facebook name, not your saved contact name) -- add each variant, or one short piece that appears in both, like a first name.</string>
     <string name="trusted_contact_hint">e.g. a first name -- matches anywhere it appears</string>

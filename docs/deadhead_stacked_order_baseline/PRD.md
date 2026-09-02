@@ -1,11 +1,14 @@
 # PRD: Fix deadhead measurement for a stacked/batch-order pickup
 
 Status: Part 1 (deadhead measurement, §1-§6) IMPLEMENTED and tested -
-awaiting sign-off. Part 2 (§7, per-job timing breakdown) is a DRAFT
-addition, investigated but not yet implemented - added to this same PRD
-at the driver's request since it's the same underlying theme (per-job
-data collapsing/corrupting when jobs are stacked within one trip), not
-because it's the same fix.
+awaiting sign-off. Part 2A (§7.4-§7.6, the per-job schema design pass
+this PRD's own RALPH_PROMPT required before any code) IMPLEMENTED and
+tested this pass (2026-09-02), built jointly with
+`docs/hourly_rate_actual_vs_estimated/` §4.B since both needed the
+exact same per-job row shape (see §7.4). A real, previously-undocumented
+data-loss bug was found and fixed while doing this design pass - see
+§7.4.1. Part 2B (full dropoff-side per-job phase timing, i.e. the
+original §7.2/§8 scope) remains a genuinely blocked DRAFT - see §7.6.
 Scope: two related measurement gaps for stacked/batch orders. Not a
 general codebase pass.
 
@@ -284,22 +287,161 @@ already-committed fix.
 Should Part 1's already-fixed `_deadhead_baseline_km` snapshot become the
 SAME per-job anchor point the new timing columns use (i.e., generalize
 "per-job baseline" once, for both distance and timing), or should timing
-be captured independently? Recommend the former - avoids two parallel
-per-job tracking mechanisms for what's conceptually the same problem -
-but not decided unilaterally here.
+be captured independently? ANSWERED by the design pass below (§7.4):
+partially yes - the per-job *row* is shared with distance/payout data,
+but full per-job *phase timing* (dropoff side) is NOT part of that row
+yet - see §7.6 for why.
 
-## 8. Success criteria for Part 2 (not started)
+## 7.4 The design pass this PRD's own RALPH_PROMPT required, done 2026-09-02
 
-- [ ] Schema migration: per-job phase timestamp columns added to
-      `offer_distance_accuracy` (or a new dedicated table, if that proves
-      cleaner once designed in full)
-- [ ] Capture points (pickup arrival/departure, dropoff arrival, walking
-      confirmed, job end) write to the current job's own row, not a
+Per the RALPH_PROMPT guardrail ("needs a proper design pass ... before
+any code is written"), this is that pass - done jointly with
+`docs/hourly_rate_actual_vs_estimated/` §4.B, since re-reading both
+PRDs together confirmed they need the exact same real shape: a row per
+PICKUP JOB, not a per-trip column or a per-trip scalar field. No driver
+override was given by the time the ralph-loop continuation reached
+this design pass, so it proceeds on its own recommendation, documented
+here rather than assumed silently.
+
+### 7.4.1 A real, previously-undocumented bug found while designing this
+
+Re-reading `add_pickup`, `_evaluate_pickup`, and `_persist_distance_accuracy`
+together (not just each in isolation, as the original §1 investigation
+did) found something worse than "Part 1's deadhead fix only helps
+job #2's own number": **`offer_distance_accuracy` gets exactly ONE row
+inserted per TRIP, not one per JOB - `_persist_distance_accuracy` only
+ever reads `self.pickup` (a single dict) and the single scalar fields
+`_deadhead_distance_km`/`_distance_at_departure_km`/`_departure_timestamp`,
+all of which get silently OVERWRITTEN by the second `add_pickup` call in
+a stacked order.** For a 2+ job trip, job #1's claimed distance, real
+deadhead, and (new, per hourly_rate §4.B) payout/accepted-time data are
+never persisted anywhere at all once job #2 is added - not measured
+wrong, genuinely lost. This is confirmed directly from the code as
+written (not yet confirmed against a real stacked-order trip's data,
+same honest caveat as the rest of this PRD), and it's a bug even with
+Part 1's fix already in place, since Part 1 only fixed the VALUE
+computed for whichever job happens to be the last one standing when the
+trip ends.
+
+### 7.4.2 Scoped fix: persist a row per job at the moment it's known to be complete, not only at trip end
+
+`self.pickup` already gets overwritten by each new `add_pickup` call -
+that overwrite is exactly the moment an in-progress job's own data
+would otherwise be lost. Fix: right before that overwrite, if the
+OUTGOING job already has real deadhead + departure data (i.e. it was
+actually picked up and left, not still pending), persist its
+`offer_distance_accuracy` row THEN, using a shared helper -
+`TripManager._persist_pickup_job_row(job, deadhead_km, now_ts,
+distance_at_departure_km=None, cumulative_km_now=None)`. Called from
+two places:
+
+1. **`_persist_distance_accuracy` (trip end, the current/last job)** -
+   same as today, `distance_at_departure_km`/`cumulative_km_now` known,
+   so `actual_delivery_km`/`actual_total_km` are computed for real.
+2. **`add_pickup` (a stacked order's earlier job, about to be
+   overwritten)** - `distance_at_departure_km`/`cumulative_km_now` NOT
+   passed (that job's own dropoff hasn't happened yet, and isn't
+   linkable to a specific dropoff event - see §7.6), so
+   `actual_delivery_km`/`actual_total_km`/`actual_hourly_rate` are left
+   NULL rather than fabricated. What IS real and known at this point -
+   `restaurant_name`, `claimed_distance_km`, `actual_deadhead_km`
+   (Part 1's already-tested per-job value), `accepted_ts`, `payout`,
+   `estimated_hourly_rate` - is still persisted instead of silently
+   dropped. This closes §7.4.1's data-loss bug without needing to know
+   anything about the dropoff side at all.
+
+This deliberately does NOT restructure `self.pickup` into a multi-job
+list/dict (the bigger alternative considered) - that would touch every
+method that reads `self.pickup` (`update_pickup_coordinates`,
+`update_pickup_address`, `record_pickup_unassigned_for_long_wait`, plus
+every Java call site's "current pickup" assumption) for a benefit this
+PRD doesn't need: the single-slot-plus-snapshot-on-overwrite approach
+already captures every job's pickup-side data correctly, using the
+existing snapshot pattern this whole PRD already established in Part 1.
+Matches Part 1's own §2 scoping ("not a general codebase pass").
+
+### 7.4.3 Schema: extend `offer_distance_accuracy`, not a new table
+
+New columns (`ALTER TABLE`, same migration pattern already used for
+`trips`'s phase-timing columns): `accepted_ts REAL`, `payout REAL`,
+`estimated_hourly_rate REAL`, `actual_hourly_rate REAL`. Reuses the
+existing one-row-per-pickup table rather than inventing
+`offer_earnings_accuracy` (hourly_rate PRD §4's original B.3 draft
+proposal) - same precedent §7.2 already cited, now doubly justified
+since both PRDs' data lives on the literal same job.
+
+`estimated_hourly_rate` is read out of `job["score_snapshot_json"]`
+(already stored, already contains a real `"hourly_rate"` key from
+`SmartScoreEngine.calculate()`'s return dict) - no new parameter needed
+for it. `accepted_ts`/`payout` DO need new capture: `add_pickup` gains
+a `payout=None` parameter (appended at the end, not inserted into the
+middle - keeps existing positional call sites from
+`DeveloperTestingActivity` working unchanged) and sets
+`self.pickup["accepted_ts"] = time.time()` unconditionally (real
+accept-time, matching hourly_rate PRD §5's already-answered "accepted_ts,
+not trip start" decision).
+
+### 7.4.4 `actual_hourly_rate`, per hourly_rate PRD §5's answered question
+
+`actual_hourly_rate = payout / ((now_ts - accepted_ts) / 3600.0)`,
+guarded against `payout` being the Java side's existing `-1` "unknown"
+sentinel (`lastSeenPayout`'s established convention elsewhere in this
+codebase - see `DasherAccessibilityService`) or a non-positive elapsed
+time - both left NULL rather than producing a nonsensical negative or
+divide-by-zero rate.
+
+## 7.5 Success criteria for Part 2A (this design pass + its implementation)
+
+- [x] Design pass done and documented (this section) before any code
+      written, per the RALPH_PROMPT guardrail.
+- [x] §7.4.1's data-loss bug fixed: a stacked/batch order's earlier job
+      gets its own `offer_distance_accuracy` row instead of being
+      silently overwritten and lost.
+- [x] `accepted_ts`/`payout`/`estimated_hourly_rate`/`actual_hourly_rate`
+      columns added and populated (the shared piece with hourly_rate
+      PRD §4.B - see that PRD for its own checklist).
+- [x] No change to `deadhead_score`, `WEIGHT_DEADHEAD`, or
+      `_estimate_deadhead_km`'s fallback logic (diff-reviewed) - same
+      guardrail as Part 1.
+- [x] `self.pickup` stays a single slot (not restructured into a
+      multi-job list) - §7.4.2's deliberate scope limit, diff-reviewed.
+- [x] Executable test written and RUN: a synthetic 2-job stacked-order
+      trip confirms TWO `offer_distance_accuracy` rows exist afterward
+      (proving §7.4.1's bug is fixed - before this fix, only one row
+      would exist), job #1's row has real deadhead/payout/accepted_ts
+      but NULL delivery/hourly-rate fields, job #2's (trip-end) row has
+      every field populated correctly.
+- [ ] User sign-off
+
+## 7.6 Part 2B - full dropoff-side per-job phase timing (still blocked, NOT started)
+
+The ORIGINAL §7.2 scope - `dropoff_arrival_ts`, `walking_confirmed_ts`,
+`job_end_ts` captured per job, and `_build_trip_summary_dict` returning
+a per-job list of phase breakdowns - is NOT resolved by §7.4 above.
+Real reason, confirmed while doing this design pass: pickup-side data
+(§7.4) has a natural per-job anchor (`self.pickup`, overwritten exactly
+once per job, snapshot-on-overwrite works cleanly). Dropoff-side events
+have no equivalent - `dropoff_arrival_ts`/`walking_confirmed_ts` are
+captured against `StopsBuffer`'s stop list via geofencing, with no
+existing mechanism linking a specific dropoff arrival to a specific
+EARLIER pickup job when a trip has 2+ of each. Building that linkage
+(nearest-unresolved-stop matching? explicit stop-to-job IDs threaded
+through the whole stops pipeline?) is a real, separate design question
+this pass did not resolve - still needs its own pass, still blocking
+`docs/feedback_dialog_phase_timings/` §4B's per-phase scoring for a
+multi-job trip. Not started; no timeline implied.
+
+## 8. Success criteria for Part 2B (not started, blocked - see §7.6)
+
+- [ ] A real per-job dropoff-linkage design exists (own design pass,
+      not yet done)
+- [ ] Schema migration: per-job dropoff/walking/job-end timestamp
+      columns added to `offer_distance_accuracy`
+- [ ] Capture points (dropoff arrival, walking confirmed, job end)
+      write to the correct job's own row via that linkage, not a
       trip-wide column
 - [ ] `dropoff_arrival_ts`/`walking_confirmed_ts`'s existing first-wins
-      guard and `pickup_arrival_ts`/`pickup_departure_ts`'s existing
-      last-wins (no guard) behavior both replaced by this - confirmed
-      consistent per-job capture, not a mix of two different rules
+      guard replaced by real per-job capture
 - [ ] `_build_trip_summary_dict` returns a per-job list of phase
       breakdowns, not one trip-level dict
 - [ ] Executable test written and RUN: a synthetic batch-order trip (2+
