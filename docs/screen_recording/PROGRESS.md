@@ -263,3 +263,82 @@ stated recommendations get used.
 No code changed. §8's checklist (all boxes) is the tracking mechanism
 for §7's eventual implementation, once approved.
 
+## §9 fix (2026-09-02): real crash loop, CONFIRMED by a real diagnostic log
+
+Driver uploaded a real diagnostic log (`dasher_monitor_full_history16.txt`)
+saying "the app is still crashing and maybe stopping monitoring for some
+reason." The log showed three identical `SecurityException` stack traces,
+each at `TripForegroundService.startForegroundWithRecording
+(TripForegroundService.java:238)`, each followed shortly by a fresh process
+start - a crash loop, not a one-off. This is exactly P6 from the "second
+pass" section above coming true: "whether a delay between granting consent
+and actually starting a trip risks the grant going stale" - except the real
+trigger turned out to be simpler than a delay: **reusing an already-granted
+MediaProjection consent token for a SECOND trip in the same still-alive
+process.**
+
+**Root cause, precisely**: PR #12 (the foreground-service-type fix earlier
+this session) made `startForegroundWithRecording()` declare the
+`mediaProjection` type via the 3-arg `startForeground()` overload -
+correctly scoped to only fire when the recording toggle is on, but called
+*unconditionally* whenever the toggle was on, *before*
+`ScreenRecordingController` ever got a chance to check whether a currently
+LIVE `MediaProjection` grant actually existed. `FOREGROUND_SERVICE_
+MEDIA_PROJECTION` (the manifest permission) is necessary but not
+sufficient - Android's foreground-service-type validator also requires the
+calling process to currently hold a live grant, obtained via
+`MediaProjectionManager.getMediaProjection()`, before the type can be
+declared. A driver's first trip after granting consent worked fine (fresh
+token, `getMediaProjection()` succeeds); the SECOND trip in the same
+process reused the same stored `pendingResultCode`/`pendingResultData`
+without re-prompting (by design - re-prompting every trip would defeat the
+point of "grant once"), and Android rejected the type declaration itself
+- not inside `ScreenRecordingController` where the old `start()` method
+could catch and report it via `lastFailureReason()`, but one level up, at
+the `startForeground()` call in `TripForegroundService` that fired before
+`ScreenRecordingController` was ever invoked. That threw an uncaught
+`SecurityException` straight out of `startForegroundWithRecording()`,
+crashing the whole service (killing GPS tracking, not just recording) -
+matching the driver's own words, "maybe stopping monitoring for some
+reason."
+
+**Fix**: reordered to match Android's documented MediaProjection
+foreground-service sequence - acquire the projection FIRST, and only
+promote the foreground-service type (and only then attempt the actual
+capture) if that acquisition succeeds:
+
+- `ScreenRecordingController.start(Service)` split into two methods:
+  `acquireProjection(Service)` (calls `getMediaProjection()`, registers the
+  stop callback, returns false with `lastFailureReason` set on any failure
+  - safe to fail, throws nothing) and `beginCapture(Service)` (the actual
+  `MediaRecorder`/`VirtualDisplay` setup, unchanged from the old `start()`
+  body past the projection-acquisition step).
+- `TripForegroundService.startTracking()`'s recording block now calls
+  `acquireProjection()` BEFORE `startForegroundWithRecording()`, and only
+  calls `startForegroundWithRecording()` + `beginCapture()` if acquisition
+  succeeded. If it fails (stale token, no consent, or any other reason),
+  the service falls back to `startForegroundLocationOnly()` instead -
+  GPS tracking continues normally, recording is skipped for that trip, and
+  the existing "no consent held" / "enabled but failed" alert paths (see
+  the original §7 implementation notes above) still fire to tell the
+  driver why.
+- `ScreenRecordingController`'s class-level doc updated: the "UNCONFIRMED
+  on a real device" note for cross-trip reuse (originally written 2026-08-
+  31, flagged again as P6 on 2026-08-31) is now "CONFIRMED on a real
+  device (2026-09-02, a real driver's diagnostic log)" - the assumption
+  was wrong, and the fix no longer depends on it being right: a stale
+  token now degrades to "no recording this trip," not "no monitoring this
+  trip."
+
+**Verification**: same disclosed limitation as the rest of this PRD - no
+Android SDK/emulator/device in this environment, so this is code review
+against the real stack trace plus brace/paren-balance checks, not a live
+repro. `TripForegroundService.java`: 172/172 braces, 765/765 parens.
+`ScreenRecordingController.java`: 47/47 braces, 184/184 parens. Grepped
+for any other call site of the old `start()` method - none found; the
+single call site in `TripForegroundService` was the only caller.
+
+Remaining PRD §10 boxes: driver confirmation that the crash loop stops
+(the direct test - toggle recording on, complete two trips back to back
+in the same app session without force-closing between them) and driver
+sign-off. Both outstanding until reported back.
