@@ -478,6 +478,7 @@ public class TripForegroundService extends Service {
                 lastLoggedAccessibility = hasAccessibility;
                 refreshStatusDot();
             }
+            updatePermissionAlertVibration();
             if (monitoringActive) {
                 accessibilityHeartbeatHandler.postDelayed(this, ACCESSIBILITY_HEARTBEAT_INTERVAL_MS);
             }
@@ -588,7 +589,22 @@ public class TripForegroundService extends Service {
             lastLoggedBatteryExempt = hasBatteryExemption;
             lastLoggedAccessibility = hasAccessibility;
         }
+        updatePermissionAlertVibration();
     }
+
+    // Driver-requested (2026-09-02): a normal notification's default
+    // vibration is one short buzz -- easy to miss with the phone mounted
+    // or pocketed while driving. See startPermissionAlertVibration()'s
+    // own doc for the repeating, alarm-style pattern this drives instead.
+    private static final long[] PERMISSION_ALERT_VIBRATION_PATTERN = {0, 800, 400};
+    // Safety cap, not an oversight: a genuinely unbounded vibration the
+    // driver never notices would just drain the battery with no benefit
+    // once it's clear nobody's responding to it.
+    private static final long PERMISSION_ALERT_VIBRATION_MAX_MS = 90 * 1000;
+    private final android.os.Handler permissionAlertVibrationHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable stopPermissionAlertVibrationRunnable = this::stopPermissionAlertVibration;
+    private boolean permissionAlertVibrationActive = false;
 
     /**
      * High-priority alert, same urgency as the existing GPS-silence
@@ -633,6 +649,70 @@ public class TripForegroundService extends Service {
         // directly, every time this alert fires.
         logDiagnostic("ALERT", permissionName + " revoked while monitoring active -- immediate notification raised. "
                 + buildInstallTimingNote());
+        startPermissionAlertVibration();
+    }
+
+    /**
+     * Driver-requested (2026-09-02): an alarm-style REPEATING vibration,
+     * not the notification's own single default buzz -- runs until
+     * either updatePermissionAlertVibration() detects every critical
+     * permission is back (called from checkAndLogPermissions() and
+     * accessibilityHeartbeatRunnable, the same two places that already
+     * detect a permission being restored) or PERMISSION_ALERT_VIBRATION_MAX_MS
+     * elapses, whichever comes first. Safe to call while already
+     * vibrating (e.g. a second permission drops moments after the
+     * first) -- restarts the same pattern, not a problem since the
+     * effect is identical either way.
+     */
+    private void startPermissionAlertVibration() {
+        android.os.Vibrator vibrator = (android.os.Vibrator) getSystemService(VIBRATOR_SERVICE);
+        if (vibrator == null || !vibrator.hasVibrator()) {
+            return; // real device without a vibration motor, or service unavailable -- nothing to do
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(android.os.VibrationEffect.createWaveform(PERMISSION_ALERT_VIBRATION_PATTERN, 0));
+        } else {
+            vibrator.vibrate(PERMISSION_ALERT_VIBRATION_PATTERN, 0);
+        }
+        permissionAlertVibrationActive = true;
+        permissionAlertVibrationHandler.removeCallbacks(stopPermissionAlertVibrationRunnable);
+        permissionAlertVibrationHandler.postDelayed(stopPermissionAlertVibrationRunnable, PERMISSION_ALERT_VIBRATION_MAX_MS);
+    }
+
+    private void stopPermissionAlertVibration() {
+        if (!permissionAlertVibrationActive) {
+            return;
+        }
+        android.os.Vibrator vibrator = (android.os.Vibrator) getSystemService(VIBRATOR_SERVICE);
+        if (vibrator != null) {
+            vibrator.cancel();
+        }
+        permissionAlertVibrationActive = false;
+        permissionAlertVibrationHandler.removeCallbacks(stopPermissionAlertVibrationRunnable);
+    }
+
+    /**
+     * Whether ANY of the 4 monitored critical permissions is currently
+     * known to be missing while monitoring is active -- reads the
+     * shared lastLogged* snapshots (the same staleness model
+     * refreshStatusDot() already relies on for these same fields)
+     * rather than forcing a fresh re-check from every call site.
+     */
+    private boolean anyCriticalPermissionMissing() {
+        return monitoringActive && (
+                Boolean.FALSE.equals(lastLoggedLocation)
+                || Boolean.FALSE.equals(lastLoggedOverlay)
+                || Boolean.FALSE.equals(lastLoggedNotificationAccess)
+                || Boolean.FALSE.equals(lastLoggedAccessibility));
+    }
+
+    /** Called after either heartbeat updates its permission snapshot --
+      * stops the alarm-style vibration once nothing critical is missing
+      * anymore, without waiting for the MAX_MS safety cap. */
+    private void updatePermissionAlertVibration() {
+        if (!anyCriticalPermissionMissing() && permissionAlertVibrationActive) {
+            stopPermissionAlertVibration();
+        }
     }
 
     /**
@@ -1028,6 +1108,7 @@ public class TripForegroundService extends Service {
         releaseTripWakeLock(); // safety net -- in case the trip never properly transitioned to IDLE first
         accessibilityHeartbeatHandler.removeCallbacks(accessibilityHeartbeatRunnable);
         watchdogRearmHandler.removeCallbacks(watchdogRearmRunnable);
+        stopPermissionAlertVibration(); // safety net -- monitoringActive is now false, nothing should still be vibrating
         if (screenRecordingController.isRecording()) {
             java.io.File finishedFile = screenRecordingController.currentFile();
             screenRecordingController.stop(); // clears isScreenRecordingActive via the StopListener
@@ -1583,6 +1664,7 @@ public class TripForegroundService extends Service {
         }
         accessibilityHeartbeatHandler.removeCallbacks(accessibilityHeartbeatRunnable);
         watchdogRearmHandler.removeCallbacks(watchdogRearmRunnable);
+        stopPermissionAlertVibration(); // final safety net -- the service is going away either way
         // Final safety net, same reasoning as force_end_trip just above --
         // must not leave MediaRecorder/MediaProjection resources held if
         // the service is torn down through a path that didn't already
