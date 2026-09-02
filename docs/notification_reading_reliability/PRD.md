@@ -1,8 +1,11 @@
 # PRD — personal messages with no extractable sender name are silently dropped
 
-Status: DRAFT. Investigation only, grounded in a real driver-provided
-diagnostic log. Nothing implemented yet — do not start coding from
-this PRD until the driver says "yes implement it."
+Status: IMPLEMENTED and tested. §5's open question was built from its
+own stated recommendation (no driver override given when the ralph
+loop continuation reached this PRD) -- see PROGRESS.md. Also found and
+fixed a second, deeper real bug while implementing: the Python-side
+empty-trusted-list default didn't apply to a blank sender name at all,
+even before this PRD's Java-side fix -- see PROGRESS.md.
 
 Driver-reported: "I don't know if all notifications are being read out
 by the app — it missed the one being paused."
@@ -97,14 +100,13 @@ paused" the driver is describing.
 
 ## 6. Success criteria
 
-- [ ] Sender name extraction reads `EXTRA_MESSAGES`'s last message's
+- [x] Sender name extraction reads `EXTRA_MESSAGES`'s last message's
       sender when present, falling back to `EXTRA_TITLE` only when it
       isn't.
-- [ ] "Could not extract any usable sender name" is logged distinctly
+- [x] "Could not extract any usable sender name" is logged distinctly
       from "a real name was extracted but isn't trusted."
-- [ ] §5's open question answered by the driver before that specific
-      behavior (read-anyway vs. stay-dropped for name-less messages
-      with a non-empty trusted list) is implemented.
+- [x] §5's open question implemented per its own stated recommendation
+      (read anyway only when the trusted list is genuinely empty).
 - [ ] On-device confirmation — blocked, no Android emulator/device
       available in this environment; this specifically needs a real
       `MessagingStyle` notification from a real messaging app to

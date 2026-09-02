@@ -46,11 +46,29 @@ public class DrivingDetectionReceiver extends BroadcastReceiver {
                     logToEngine(context, "DRIVING_DETECTION",
                             "Activity Recognition detected entering a vehicle -- attempting auto-start");
                     if (!TripForegroundService.isRunning) {
-                        Intent startIntent = new Intent(context, TripForegroundService.class);
-                        startIntent.setAction(TripForegroundService.ACTION_START_TRACKING);
-                        context.startForegroundService(startIntent);
-                        logToEngine(context, "DRIVING_DETECTION",
-                                "Auto-started monitoring from detected driving motion (Dasher was never opened)");
+                        // docs/dash_monitoring_awareness/PRD.md -- own
+                        // try/catch (not just the outer one below) so a
+                        // real startForegroundService rejection (a
+                        // documented Android 12+ background-start
+                        // restriction) raises the loud alert specifically,
+                        // not just a generic exception log line. No
+                        // delayed re-verification here (unlike
+                        // DasherAccessibilityService's equivalent) --
+                        // a BroadcastReceiver is meant to be short-lived,
+                        // and the synchronous throw is the primary real
+                        // failure mode either way.
+                        try {
+                            Intent startIntent = new Intent(context, TripForegroundService.class);
+                            startIntent.setAction(TripForegroundService.ACTION_START_TRACKING);
+                            context.startForegroundService(startIntent);
+                            logToEngine(context, "DRIVING_DETECTION",
+                                    "Auto-started monitoring from detected driving motion (Dasher was never opened)");
+                        } catch (RuntimeException e) {
+                            logToEngine(context, "ERROR", "Auto-start from driving detection threw: "
+                                    + android.util.Log.getStackTraceString(e));
+                            TripForegroundService.raiseMonitoringNotActiveAlert(context,
+                                    "driving detected, Dasher never opened");
+                        }
                     }
                 }
             }

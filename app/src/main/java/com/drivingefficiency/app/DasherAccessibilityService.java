@@ -169,10 +169,9 @@ public class DasherAccessibilityService extends AccessibilityService {
                     // monitoring should start immediately in that case too,
                     // not just be silently detected.
                     if (!TripForegroundService.isRunning) {
-                        Intent autoStartIntent = new Intent(this, TripForegroundService.class);
-                        autoStartIntent.setAction(TripForegroundService.ACTION_START_TRACKING);
-                        startForegroundService(autoStartIntent);
-                        logDiagnostic("AUTO_START", "Dasher already open at service connect, monitoring was off -- started automatically");
+                        attemptAutoStartMonitoring(TripForegroundService.ACTION_START_TRACKING, "AUTO_START",
+                                "Dasher already open at service connect, monitoring was off -- started automatically",
+                                "Dasher open at service connect");
                     }
                 } else if (isDasherForeground) {
                     // Reverse-direction correction: mode was stuck showing
@@ -199,6 +198,47 @@ public class DasherAccessibilityService extends AccessibilityService {
             }
         } catch (RuntimeException e) {
             logDiagnostic("ERROR", "checkCurrentForegroundWindow exception: " + android.util.Log.getStackTraceString(e));
+        }
+    }
+
+    // docs/dash_monitoring_awareness/PRD.md ss4 point 1's "give it a
+    // moment, then check for real" delay -- a few seconds, matching the
+    // order of magnitude of this app's other re-arm/re-check timers.
+    // The PRIMARY failure mode (Android rejecting a background
+    // startForegroundService call) throws synchronously and is already
+    // caught below without needing this delay; this is the secondary,
+    // belt-and-suspenders check for "the call didn't throw, but
+    // monitoring still isn't actually running."
+    private static final long MONITORING_VERIFY_DELAY_MS = 5 * 1000;
+    private final android.os.Handler monitoringVerifyHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+
+    /**
+     * docs/dash_monitoring_awareness/PRD.md -- shared by all three real
+     * auto-start call sites in this file (service-connect detection,
+     * the debounced foreground transition, and Dash-Paused auto-resume)
+     * so the alerting logic exists exactly once, not copied three times.
+     * Every one of them already calls this instead of
+     * startForegroundService directly.
+     */
+    private void attemptAutoStartMonitoring(String action, String logCategory, String successMessage,
+                                             String failureReasonForAlert) {
+        Intent intent = new Intent(this, TripForegroundService.class);
+        intent.setAction(action);
+        try {
+            startForegroundService(intent);
+            logDiagnostic(logCategory, successMessage);
+            monitoringVerifyHandler.postDelayed(() -> {
+                if (!TripForegroundService.isRunning) {
+                    logDiagnostic("ERROR", "Auto-start appeared to succeed but monitoring still "
+                            + "isn't running " + MONITORING_VERIFY_DELAY_MS / 1000 + "s later ("
+                            + failureReasonForAlert + ")");
+                    TripForegroundService.raiseMonitoringNotActiveAlert(this, failureReasonForAlert);
+                }
+            }, MONITORING_VERIFY_DELAY_MS);
+        } catch (RuntimeException e) {
+            logDiagnostic("ERROR", "Auto-start threw (" + failureReasonForAlert + "): "
+                    + android.util.Log.getStackTraceString(e));
+            TripForegroundService.raiseMonitoringNotActiveAlert(this, failureReasonForAlert);
         }
     }
 
@@ -458,10 +498,9 @@ public class DasherAccessibilityService extends AccessibilityService {
                     // Uses the same proven cross-component trigger
                     // already used for Dash Paused auto-resume.
                     if (isDasher && !TripForegroundService.isRunning) {
-                        Intent autoStartIntent = new Intent(this, TripForegroundService.class);
-                        autoStartIntent.setAction(TripForegroundService.ACTION_START_TRACKING);
-                        startForegroundService(autoStartIntent);
-                        logDiagnostic("AUTO_START", "Dasher opened while monitoring was off -- started automatically");
+                        attemptAutoStartMonitoring(TripForegroundService.ACTION_START_TRACKING, "AUTO_START",
+                                "Dasher opened while monitoring was off -- started automatically",
+                                "Dasher opened, foreground transition");
                     }
                 }
                 if (isDasher) {
@@ -599,11 +638,10 @@ public class DasherAccessibilityService extends AccessibilityService {
                 return; // stay paused for as long as this screen shows, regardless of what else is on it
             }
             if (pausedByAutoDetection && !TripForegroundService.isRunning) {
-                Intent resumeIntent = new Intent(this, TripForegroundService.class);
-                resumeIntent.setAction(TripForegroundService.ACTION_START_TRACKING);
-                startForegroundService(resumeIntent);
+                attemptAutoStartMonitoring(TripForegroundService.ACTION_START_TRACKING, "AUTO_PAUSE",
+                        "Dash Paused screen no longer showing -- GPS tracking resumed",
+                        "resuming after Dash Paused screen cleared");
                 pausedByAutoDetection = false;
-                logDiagnostic("AUTO_PAUSE", "Dash Paused screen no longer showing -- GPS tracking resumed");
                 return;
             }
 

@@ -3,12 +3,14 @@ package com.drivingefficiency.app;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.Person;
 import android.app.PendingIntent;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Parcelable;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 
@@ -219,19 +221,44 @@ public class AppNotificationListenerService extends NotificationListenerService 
 
             // --- Personal: trusted-contacts allowlist (SMS / Messenger) ---
             if (isPersonalMessagingApp) {
-                boolean trusted = engine.callAttr("is_trusted_sender", title.toString())
-                        .toBoolean();
+                // docs/notification_reading_reliability/PRD.md -- CONFIRMED
+                // REAL GAP, fixed here: a real driver log showed repeated
+                // "Ignored (not on trusted list: )" with a BLANK sender name
+                // -- EXTRA_TITLE alone is often blank/generic for a real
+                // MessagingStyle notification, since the actual per-message
+                // sender lives in EXTRA_MESSAGES instead, never read before
+                // this. A genuinely trusted contact's message could be
+                // silently dropped, indistinguishable in the log from a
+                // stranger correctly being filtered.
+                String senderName = extractPersonalMessageSenderName(extras, title);
+                boolean senderNameAvailable = senderName.length() > 0;
+                // Always asks Python, even with a blank name -- is_trusted_sender's
+                // own "no contacts added yet -> read everything" default (PRD ss5's
+                // answer to its open question) must still apply for a name-less
+                // message when the trusted list is genuinely empty; only the
+                // LOGGING below distinguishes the two cases, not whether this
+                // check runs at all.
+                boolean trusted = engine.callAttr("is_trusted_sender", senderName).toBoolean();
                 if (trusted && text.length() > 0) {
-                    VoiceAnnouncer.speak("Message from " + title + ": " + text);
+                    String displayName = senderNameAvailable ? senderName : "someone";
+                    VoiceAnnouncer.speak("Message from " + displayName + ": " + text);
                     // Sender name only, never the message body/content --
                     // same privacy principle already used for personal
                     // messages elsewhere. This is specifically what makes
                     // it verifiable that this path is actually working,
                     // which it previously wasn't -- no logging existed
                     // here at all, in either direction.
-                    logDiagnostic("PERSONAL_MSG", "Read aloud (trusted sender: " + title + ")");
+                    logDiagnostic("PERSONAL_MSG", "Read aloud (trusted sender: " + displayName + ")");
+                } else if (!senderNameAvailable) {
+                    // Distinct from "ignored, not trusted" (PRD ss4 point 2)
+                    // -- this is "couldn't even tell who it was from",
+                    // previously logged identically to a correctly-filtered
+                    // stranger, making the two indistinguishable after the
+                    // fact.
+                    logDiagnostic("PERSONAL_MSG", "Ignored -- no usable sender name could be extracted "
+                            + "(EXTRA_TITLE and EXTRA_MESSAGES both empty/unavailable)");
                 } else {
-                    logDiagnostic("PERSONAL_MSG", "Ignored (not on trusted list: " + title + ")");
+                    logDiagnostic("PERSONAL_MSG", "Ignored (not on trusted list: " + senderName + ")");
                 }
                 return; // SMS/Messenger notifications are always handled by
                         // the paths above (trusted or silently ignored) --
@@ -253,6 +280,51 @@ public class AppNotificationListenerService extends NotificationListenerService 
             // PyException alone to avoid silently crashing this always-on notification listener.
             logDiagnostic("ERROR", "onNotificationPosted exception (pkg=" + packageName + "): " + android.util.Log.getStackTraceString(e));
         }
+    }
+
+    /**
+     * docs/notification_reading_reliability/PRD.md ss4 point 1 -- a real
+     * MessagingStyle conversation notification's top-level EXTRA_TITLE is
+     * often the conversation title, not necessarily a clean per-message
+     * sender name (blank, generic, or the phone number rather than a saved
+     * contact name for some apps/configurations -- confirmed against a
+     * real driver-provided diagnostic log showing exactly this). The real
+     * per-message sender identity lives in EXTRA_MESSAGES instead, never
+     * read before this fix. Prefers the LAST message's sender (the most
+     * recent, most relevant one for "who do I need to check against the
+     * trusted list right now"), falling back to EXTRA_TITLE only when
+     * EXTRA_MESSAGES isn't present or carries no usable sender.
+     *
+     * android.app.Person requires API 28 -- guarded, falls back to
+     * EXTRA_TITLE on older devices rather than requiring a higher minSdk
+     * just for this.
+     *
+     * Never returns null -- callers treat an empty string as "no usable
+     * sender name," not a null to additionally null-check.
+     */
+    private String extractPersonalMessageSenderName(Bundle extras, CharSequence titleFallback) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            try {
+                Parcelable[] messagesBundle = extras.getParcelableArray(Notification.EXTRA_MESSAGES);
+                if (messagesBundle != null && messagesBundle.length > 0) {
+                    List<Notification.MessagingStyle.Message> messages =
+                            Notification.MessagingStyle.Message.getMessagesFromBundleArray(messagesBundle);
+                    for (int i = messages.size() - 1; i >= 0; i--) {
+                        Person sender = messages.get(i).getSenderPerson();
+                        if (sender != null && sender.getName() != null && sender.getName().length() > 0) {
+                            return sender.getName().toString();
+                        }
+                    }
+                }
+            } catch (RuntimeException e) {
+                // Malformed/unexpected EXTRA_MESSAGES content from some
+                // other app -- fall through to the EXTRA_TITLE fallback
+                // below rather than losing this notification entirely.
+                logDiagnostic("ERROR", "extractPersonalMessageSenderName EXTRA_MESSAGES parse exception: "
+                        + android.util.Log.getStackTraceString(e));
+            }
+        }
+        return titleFallback != null ? titleFallback.toString() : "";
     }
 
     /**

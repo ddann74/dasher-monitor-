@@ -1,9 +1,13 @@
 # PRD: In-app screen recording during a trip
 
-Status: DRAFT - awaiting sign-off before implementation begins. This
-introduces a genuinely new, privacy-sensitive capability this app has
-never had before - read §1.3 and §5 before signing off, not just the
-checklist.
+Status: IMPLEMENTED (all §6 boxes checked except sign-off) -- this
+PRD's own status line was stale, found and corrected during a
+2026-09-02 ralph-loop continuation pass. Went through two additional
+premortem/silent-failure audit passes after initial implementation
+(see PROGRESS.md) that found and fixed a real delete-race and a silent
+consent-staleness gap. This introduces a genuinely new, privacy-
+sensitive capability this app has never had before - read §1.3 and §5
+before signing off, not just the checklist.
 Scope: this one feature only. Not a general codebase pass.
 
 ## 0. What this is / isn't

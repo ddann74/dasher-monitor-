@@ -1282,9 +1282,15 @@ class TrustedContacts:
         unrelated sender whose name happens to contain it (e.g. "Samantha").
         Use a longer or more specific fragment if that's a concern.
         """
-        normalized_sender = self._normalize(sender_name)
-        if not normalized_sender:
-            return False
+        # CONFIRMED REAL GAP, fixed here (docs/notification_reading_
+        # reliability/PRD.md): the empty-list check used to run AFTER the
+        # blank-name check, so a message with no extractable sender name
+        # returned False unconditionally -- even for a driver with ZERO
+        # trusted contacts configured, who has explicitly opted into
+        # "read everything by default" per this method's own docstring.
+        # Order matters: a genuinely empty trusted list must win even
+        # when there's no name to compare, since there's nothing to be
+        # selective ABOUT yet.
         all_trusted = self.list_all()
         if not all_trusted:
             # No contacts added yet at all -- read everything by default
@@ -1293,6 +1299,9 @@ class TrustedContacts:
             # allowlist (only matching entries get read) -- this default
             # only applies to a genuinely empty list, not a short list.
             return True
+        normalized_sender = self._normalize(sender_name)
+        if not normalized_sender:
+            return False
         for trusted_entry in all_trusted:
             if trusted_entry and trusted_entry in normalized_sender:
                 return True
