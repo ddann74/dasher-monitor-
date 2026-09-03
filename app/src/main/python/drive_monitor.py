@@ -561,6 +561,34 @@ class SmartScoreEngine:
     CALIBRATION_MIN_SAMPLES = 25
     CALIBRATION_MAX_ADJUSTMENT_PCT = 0.15
 
+    # docs/market_relative_score_thresholds/PRD.md ss4B (driver-approved
+    # design, "yes implement it" 2026-09-03): makes the Excellent/Good/
+    # Fair/Poor label breakpoints market-relative -- your own recent
+    # 75th/50th/25th percentile of every scored offer's smart_score,
+    # instead of the fixed 85/70/50 used identically for every driver.
+    # Driver's own answered design decisions:
+    # - 90-day window, 75th/50th/25th percentiles (not median/all-time).
+    # - ALL scored offers (accepted, declined, timed out), matching the
+    #   same broad sample already used for the Address Book/Profitability
+    #   Map's own rate stats -- not accepted-only.
+    # - A floor: each learned breakpoint can't drop below
+    #   LABEL_QUARTILE_FLOOR_FRACTION of the corresponding FIXED
+    #   breakpoint below, so a genuinely bad market stretch shows up as
+    #   fewer Excellent-labeled offers, not as "Excellent" quietly
+    #   redefined downward to mean something worse than it used to.
+    #   25 samples (same scale as CALIBRATION_MIN_SAMPLES) before trusting
+    #   a learned quartile boundary over the fixed constant -- quartiles
+    #   of a tiny sample are unstable.
+    LABEL_QUARTILE_MIN_SAMPLES = 25
+    LABEL_QUARTILE_WINDOW_DAYS = 90
+    LABEL_QUARTILE_FLOOR_FRACTION = 0.7
+    # The fixed breakpoints _label() has always used -- kept as named
+    # constants now that they're also the floor's own basis, not just
+    # inline numbers.
+    LABEL_FIXED_EXCELLENT = 85
+    LABEL_FIXED_GOOD = 70
+    LABEL_FIXED_FAIR = 50
+
     def __init__(self, db: Database):
         self.db = db
         self._live_traffic_ratio = None
@@ -1025,9 +1053,18 @@ class SmartScoreEngine:
         elif deadhead_is_restaurant_specific and deadhead_km > 5:
             restaurant_warning = f"Long deadhead to this restaurant historically (avg {deadhead_km:.1f} km)"
 
+        # docs/market_relative_score_thresholds/PRD.md ss4B -- computed
+        # once here (not via self._label(), which would re-run this same
+        # query) since both the label itself and the "why" transparency
+        # fields below need the same thresholds.
+        label_excellent, label_good, label_fair, label_is_learned, label_sample_count = \
+            self._learned_label_thresholds()
+
         return {
             "final_score": round(final_score, 1),
-            "label": self._label(final_score),
+            "label": self._bucket_label(final_score, label_excellent, label_good, label_fair),
+            "label_is_learned": label_is_learned,
+            "label_sample_count": label_sample_count,
             "verdict_sentence": verdict_sentence,
             "restaurant_warning": restaurant_warning,
             "base_rate_per_km": round(base_rate, 2),
@@ -1279,15 +1316,72 @@ class SmartScoreEngine:
         self.db.conn.execute("DELETE FROM personal_calibration")
         self.db.conn.commit()
 
+    def _label(self, score):
+        """
+        docs/market_relative_score_thresholds/PRD.md ss4B: buckets against
+        LEARNED, market-relative breakpoints when enough real history
+        exists, falling back to the original fixed 85/70/50 below that --
+        same "gate on a minimum sample count, fall back to the fixed
+        constant" pattern as every other learned value in this file.
+        Convenience entry point for callers (e.g. get_location_
+        profitability) that just want a label for one score, not the
+        thresholds themselves -- calculate() computes the thresholds
+        directly instead, to avoid querying twice for the same call.
+        """
+        excellent, good, fair, _is_learned, _sample_count = self._learned_label_thresholds()
+        return self._bucket_label(score, excellent, good, fair)
+
     @staticmethod
-    def _label(score):
-        if score >= 85:
+    def _bucket_label(score, excellent, good, fair):
+        if score >= excellent:
             return "Excellent"
-        if score >= 70:
+        if score >= good:
             return "Good"
-        if score >= 50:
+        if score >= fair:
             return "Fair"
         return "Poor"
+
+    def _learned_label_thresholds(self):
+        """
+        Returns (excellent, good, fair, is_learned, sample_count) -- the
+        three score breakpoints _label() compares against. Learned from
+        the real, recent distribution of offer_outcomes.smart_score
+        (LABEL_QUARTILE_WINDOW_DAYS days, ALL outcomes -- accepted,
+        declined, timed out, same broad low-bias sample already used
+        elsewhere in this app) once LABEL_QUARTILE_MIN_SAMPLES real
+        samples exist; otherwise returns the original fixed constants
+        with is_learned=False.
+
+        Floored against LABEL_QUARTILE_FLOOR_FRACTION of each fixed
+        breakpoint so a genuinely bad market stretch can't quietly
+        redefine "Excellent" downward to mean something worse than it
+        used to (driver's own explicit decision, PRD ss5) -- then
+        re-clamped to stay strictly ordered (excellent >= good >= fair),
+        a cheap safety pass in case a floor and a percentile ever
+        disagree on ordering in some edge-case distribution.
+        """
+        cutoff_ts = time.time() - self.LABEL_QUARTILE_WINDOW_DAYS * 86400
+        rows = self.db.conn.execute(
+            "SELECT smart_score FROM offer_outcomes "
+            "WHERE is_test_data = 0 AND smart_score IS NOT NULL AND timestamp >= ? "
+            "ORDER BY smart_score",
+            (cutoff_ts,),
+        ).fetchall()
+        scores = [r["smart_score"] for r in rows]
+        sample_count = len(scores)
+
+        if sample_count < self.LABEL_QUARTILE_MIN_SAMPLES:
+            return (self.LABEL_FIXED_EXCELLENT, self.LABEL_FIXED_GOOD,
+                    self.LABEL_FIXED_FAIR, False, sample_count)
+
+        excellent = max(_percentile(scores, 75), self.LABEL_FIXED_EXCELLENT * self.LABEL_QUARTILE_FLOOR_FRACTION)
+        good = max(_percentile(scores, 50), self.LABEL_FIXED_GOOD * self.LABEL_QUARTILE_FLOOR_FRACTION)
+        fair = max(_percentile(scores, 25), self.LABEL_FIXED_FAIR * self.LABEL_QUARTILE_FLOOR_FRACTION)
+        # Safety clamp -- keeps strict ordering even if a floor and a
+        # percentile ever disagree (see docstring).
+        good = min(good, excellent)
+        fair = min(fair, good)
+        return (excellent, good, fair, True, sample_count)
 
 
 # ------------------------------------------------------------------------- #
@@ -1316,6 +1410,25 @@ def _sample_stdev(values):
     mean = sum(values) / len(values)
     variance = sum((v - mean) ** 2 for v in values) / (len(values) - 1)
     return variance ** 0.5
+
+
+def _percentile(sorted_values, pct):
+    """
+    Linear-interpolation percentile (the same method numpy's default
+    and Excel's PERCENTILE.INC use) of an ALREADY-SORTED, non-empty
+    list -- shared by SmartScoreEngine._learned_label_thresholds
+    (docs/market_relative_score_thresholds/PRD.md ss4B). No new
+    dependency -- Chaquopy's bundled Python version isn't guaranteed to
+    include statistics.quantiles (added in 3.8), so this is a small,
+    self-contained implementation instead of assuming it's available.
+    """
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    rank = (pct / 100.0) * (len(sorted_values) - 1)
+    lower = int(rank)
+    upper = min(lower + 1, len(sorted_values) - 1)
+    fraction = rank - lower
+    return sorted_values[lower] + (sorted_values[upper] - sorted_values[lower]) * fraction
 
 
 # ------------------------------------------------------------------------- #
