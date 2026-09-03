@@ -326,14 +326,14 @@ analysis plus new UI.
       The Time Went" breakdown, and asked for more Address Book detail
       (avg $/km, avg $/hr, avg Smart Score + standard deviation). See §16
       for the full writeup.
-- [ ] **#29 - screen-recording-based tutorial/walkthrough to learn how
-      the app works.** DESIGNED, moved to its own PRD (2026-09-03) -
+- [x] **#29 - screen-recording-based tutorial/walkthrough to learn how
+      the app works.** IMPLEMENTED (2026-09-03), moved to its own PRD -
       the design was refined further in a later conversation (a staged,
-      simulated-delivery walkthrough, not static cards) plus a new
-      randomization ask. See `docs/tutorial_mode/PRD.md` for the full
-      investigation, design, and premortem - one real open question
-      there (§4, which randomized-environment option) still needs a
-      driver decision before implementation starts.
+      simulated-delivery walkthrough, not static cards, not actual
+      screen recording) plus a new randomization ask, which the driver
+      resolved as Option B + C combined. See `docs/tutorial_mode/PRD.md`
+      for the full investigation, design, premortem, and implementation
+      writeup - shipped in PR #28 (merged 2026-09-03).
 
 ## 6. Recommended priority order (my judgment call, not driver-specified)
 
