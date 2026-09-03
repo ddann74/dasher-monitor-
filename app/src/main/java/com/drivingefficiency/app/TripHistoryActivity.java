@@ -369,6 +369,21 @@ public class TripHistoryActivity extends AppCompatActivity {
                 }
 
                 StringBuilder body = new StringBuilder();
+                // Average $/km by outcome (driver backlog #6,
+                // docs/driver_backlog_2026_09_03/PRD.md) -- a real dollar
+                // figure, shown separately from the 0-100 per-factor scores
+                // below since it isn't one of those factors, it's the raw
+                // rate those factors are trying to judge.
+                JSONObject rateComparison = report.optJSONObject("rate_comparison");
+                if (rateComparison != null) {
+                    body.append(String.format("Average $/km -- accepted: %s, declined: %s, timed out: %s\n\n",
+                            rateComparison.isNull("avg_dollar_per_km_accepted") ? "n/a"
+                                    : String.format("$%.2f", rateComparison.optDouble("avg_dollar_per_km_accepted")),
+                            rateComparison.isNull("avg_dollar_per_km_declined") ? "n/a"
+                                    : String.format("$%.2f", rateComparison.optDouble("avg_dollar_per_km_declined")),
+                            rateComparison.isNull("avg_dollar_per_km_timed_out") ? "n/a"
+                                    : String.format("$%.2f", rateComparison.optDouble("avg_dollar_per_km_timed_out"))));
+                }
                 JSONArray comparison = report.optJSONArray("comparison");
                 if (comparison != null && comparison.length() > 0) {
                     body.append("--- Accepted vs Declined vs Timed Out, by factor ---\n");
@@ -421,11 +436,33 @@ public class TripHistoryActivity extends AppCompatActivity {
             }
         }
 
+    /**
+     * Driver backlog #9 (docs/driver_backlog_2026_09_03/PRD.md):
+     * "separate dasher and general trips from the report" -- trip.mode
+     * was already returned by get_trip_history() and already shown as a
+     * suffix on each row's own label, but there was no way to filter the
+     * list down to just one mode. A simple up-front chooser, filtered
+     * client-side (the full list is already in memory either way) --
+     * no Python change needed.
+     */
     private void showTripHistory() {
+            String[] modeChoices = {"All Trips", "Dasher Only", "General Only"};
+            new AlertDialog.Builder(this)
+                    .setTitle("Trip History")
+                    .setItems(modeChoices, (dialog, which) -> {
+                        String modeFilter = which == 1 ? "DASHER" : which == 2 ? "GENERAL" : null;
+                        showTripHistoryFiltered(modeFilter);
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        }
+
+    /** modeFilter: null shows all trips; "DASHER" or "GENERAL" shows only that mode. */
+    private void showTripHistoryFiltered(String modeFilter) {
             try {
                 JSONObject history = new JSONObject(engine.callAttr("get_trip_history").toString());
-                JSONArray trips = history.optJSONArray("trips");
-                if (trips == null || trips.length() == 0) {
+                JSONArray allTrips = history.optJSONArray("trips");
+                if (allTrips == null || allTrips.length() == 0) {
                     new AlertDialog.Builder(this)
                             .setTitle("Trip History")
                             .setMessage("No completed trips yet.")
@@ -434,15 +471,32 @@ public class TripHistoryActivity extends AppCompatActivity {
                     return;
                 }
 
-                String[] labels = new String[trips.length()];
-                int[] tripIds = new int[trips.length()];
-                java.text.SimpleDateFormat dateFormat =
-                        new java.text.SimpleDateFormat("MMM d, h:mm a", java.util.Locale.getDefault());
-                for (int i = 0; i < trips.length(); i++) {
-                    JSONObject trip = trips.optJSONObject(i);
+                java.util.List<JSONObject> trips = new java.util.ArrayList<>();
+                for (int i = 0; i < allTrips.length(); i++) {
+                    JSONObject trip = allTrips.optJSONObject(i);
                     if (trip == null) {
                         continue;
                     }
+                    String tripMode = "DASHER".equals(trip.optString("mode", "GENERAL")) ? "DASHER" : "GENERAL";
+                    if (modeFilter == null || modeFilter.equals(tripMode)) {
+                        trips.add(trip);
+                    }
+                }
+                if (trips.isEmpty()) {
+                    new AlertDialog.Builder(this)
+                            .setTitle("Trip History")
+                            .setMessage("No completed trips match this filter.")
+                            .setPositiveButton("OK", null)
+                            .show();
+                    return;
+                }
+
+                String[] labels = new String[trips.size()];
+                int[] tripIds = new int[trips.size()];
+                java.text.SimpleDateFormat dateFormat =
+                        new java.text.SimpleDateFormat("MMM d, h:mm a", java.util.Locale.getDefault());
+                for (int i = 0; i < trips.size(); i++) {
+                    JSONObject trip = trips.get(i);
                     tripIds[i] = trip.optInt("trip_id", -1);
                     long startTimeMs = (long) (trip.optDouble("start_time", 0) * 1000);
                     String dateLabel = dateFormat.format(new java.util.Date(startTimeMs));
@@ -528,7 +582,18 @@ public class TripHistoryActivity extends AppCompatActivity {
                         : "";
                 body.append(String.format("Deadhead: %.1f km%s\n", offerSnapshot.optDouble("deadhead_km", 0), deadheadTimeSuffix));
                 body.append(String.format("Pickup wait: %.0f min\n", offerSnapshot.optDouble("restaurant_wait_minutes", 0)));
-                body.append("Traffic: ").append(offerSnapshot.optString("traffic_risk", "")).append("\n");
+                // Raw ratio added alongside the existing High/Low label
+                // (driver backlog #14) -- only ever present when
+                // traffic_risk_source was "live" (a real Google Maps
+                // Distance Matrix result), since that's the only source
+                // with an actual ratio behind it; the zone/personal/
+                // generic sources are binary flags with nothing numeric
+                // to show, so this is correctly omitted for those rather
+                // than showing a fabricated number.
+                String trafficRatioSuffix = offerSnapshot.isNull("traffic_ratio") ? ""
+                        : String.format(" (%.0f%% of typical)", offerSnapshot.optDouble("traffic_ratio", 1.0) * 100.0);
+                body.append("Traffic: ").append(offerSnapshot.optString("traffic_risk", ""))
+                        .append(trafficRatioSuffix).append("\n");
                 body.append("Weather: ").append(offerSnapshot.optString("weather", "")).append("\n\n");
             }
 

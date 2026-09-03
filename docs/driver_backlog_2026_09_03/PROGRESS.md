@@ -135,3 +135,82 @@ fallback behavior matches this exact file's own established pattern
 
 PRD §4 box checked. Next per §6: #6 and #9 (accepted/declined $/km,
 Dasher/General separation).
+
+## #6 and #9 implemented (2026-09-03)
+
+Third/fourth items per §6, both small pure additions to already-returned
+data as the PRD predicted.
+
+**#6 - average $/km by outcome.** Added a `rate_comparison` block to
+`get_rejected_offers_report()` (`drive_monitor.py`). Deliberately a
+SEPARATE SQL query from the existing per-factor `comparison` block
+(which filters to `components_json IS NOT NULL`) - $/km doesn't depend
+on the components snapshot at all, and reusing that query would have
+silently excluded any offer with valid payout/distance but a missing or
+malformed components snapshot for an unrelated reason. Also excludes
+`distance_km <= 0` (would divide by zero) and `payout IS NULL` rows.
+Wired into `TripHistoryActivity.showRejectedOffersReport()`, shown one
+line above the existing per-factor comparison, using the same "n/a for
+missing" pattern already established there.
+
+Verified with a real, runnable Python test
+(`/tmp/.../test_rate_comparison.py` - pure `drive_monitor.py`, zero
+Android/Chaquopy dependency, matching this repo's established testing
+approach): seeded `offer_outcomes` with accepted/declined/timed-out
+rows plus a zero-distance row, a missing-payout row, and an
+`is_test_data=1` row, confirmed all three are correctly excluded and
+the remaining averages are exactly right. All assertions passed.
+
+**#9 - separate Dasher vs. General trips.** `trips.mode` was already
+returned by `get_trip_history()` and already shown as a per-row suffix,
+but there was no way to filter the list to one mode. Added a simple
+up-front chooser dialog ("All Trips" / "Dasher Only" / "General Only")
+in `TripHistoryActivity.showTripHistory()`, filtering the already-
+fetched trip list client-side (`showTripHistoryFiltered(String
+modeFilter)`) - no Python change needed, the full list was already in
+memory either way. Confirmed the single existing call site
+(`viewTripHistoryButton`'s click listener) needed no changes, since
+`showTripHistory()` kept its original name/signature.
+
+**Verification (both)**: same disclosed limitation as every Java-side
+change in this repo - no Android SDK/emulator/device, code review plus
+static checks. `TripHistoryActivity.java` brace/paren balance: 103/103
+braces, 677/677 parens. `drive_monitor.py` re-compiled cleanly
+(`python3 -m py_compile`) after the #6 change.
+
+PRD §5 boxes for #6 and #9 checked. Next per §6: #14 (surface traffic
+ratio), then #2 (per-offer omit/include toggle).
+
+## #14 implemented (2026-09-03): surface the traffic ratio
+
+`_get_traffic_risk()` (`drive_monitor.py`) previously returned only
+`(is_high_risk, source)` - a binary flag plus which of four fallback
+tiers produced it (live/zone/personal/generic). Added the raw ratio as
+a third return value, but ONLY populated when `source == "live"`: the
+other three tiers (`_get_traffic_risk_by_zone`, the personal-history
+proxy, the generic guess) are binary risk flags from entirely different
+methods with no underlying ratio - returning a fabricated number for
+those would misrepresent them as more precise than they are. Updated
+the single call site (`calculate()`) and added `traffic_ratio` to its
+returned dict, rounded to 2 decimals.
+
+`TripHistoryActivity`'s existing "Traffic: [label]" line now appends
+"(X% of typical)" when `traffic_ratio` is present, omitted entirely
+(not shown as "0%" or similar) when it's `null` - confirmed
+`JSONObject.isNull()` correctly treats a JSON `null` value the same as
+a missing key here, matching this file's other nullable-field patterns.
+
+**Verification**: real, runnable Python test
+(`/tmp/.../test_traffic_ratio.py`) covering all three real code paths:
+no live traffic ever recorded (ratio `None`, falls back to
+personal/generic), fresh live traffic recorded (ratio present, rounded,
+source `"live"`), and STALE live traffic (older than
+`LIVE_TRAFFIC_FRESHNESS_SECONDS`) correctly falling back and reporting
+`None` again rather than a stale number. All three assertions passed.
+Confirmed no other call site of `_get_traffic_risk()` exists (single
+caller, already updated for the new 3-tuple). `drive_monitor.py`
+recompiles cleanly; `TripHistoryActivity.java` brace/paren balance:
+103/103 braces, 684/684 parens.
+
+PRD §5 box for #14 checked. Next per §6: #2 (per-offer omit/include
+toggle).

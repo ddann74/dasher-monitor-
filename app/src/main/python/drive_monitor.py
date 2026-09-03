@@ -757,21 +757,29 @@ class SmartScoreEngine:
         then the personal-history proxy (_is_peak_hour, hour-of-day only);
         then the generic lunch/dinner guess.
 
-        Returns (is_high_risk, source) where source is "live", "zone",
-        "personal", or "generic".
+        Returns (is_high_risk, source, live_ratio) where source is "live",
+        "zone", "personal", or "generic", and live_ratio is the raw
+        Distance Matrix delay ratio (e.g. 1.23 = 23% slower than typical)
+        ONLY when source is "live" -- driver backlog #14
+        (docs/driver_backlog_2026_09_03/PRD.md), which asked for the
+        actual ratio, not just the High/Low label already returned
+        elsewhere. None for every other source: zone/personal/generic
+        are binary risk flags from a completely different method with no
+        underlying ratio to report -- returning a fabricated number for
+        those would be worse than reporting nothing.
         """
         live_ratio = getattr(self, "_live_traffic_ratio", None)
         live_ts = getattr(self, "_live_traffic_timestamp", None)
         if live_ratio is not None and live_ts is not None:
             if time.time() - live_ts <= self.LIVE_TRAFFIC_FRESHNESS_SECONDS:
-                return live_ratio >= self.LIVE_TRAFFIC_HIGH_RISK_RATIO, "live"
+                return live_ratio >= self.LIVE_TRAFFIC_HIGH_RISK_RATIO, "live", live_ratio
 
         zone_risk, zone_samples = self._get_traffic_risk_by_zone(lat, lon, hour_24)
         if zone_risk is not None:
-            return zone_risk, "zone"
+            return zone_risk, "zone", None
 
         is_high_risk, is_personalized, _ = self._is_peak_hour(hour_24)
-        return is_high_risk, ("personal" if is_personalized else "generic")
+        return is_high_risk, ("personal" if is_personalized else "generic"), None
 
     # Live weather (real, via Open-Meteo's BOM-model wrapper -- see WeatherHelper) ---
     LIVE_WEATHER_FRESHNESS_SECONDS = 15 * 60
@@ -894,7 +902,8 @@ class SmartScoreEngine:
         # _synthesize_verdict already treated "High" risk as a downside
         # ("heavier traffic than usual") -- the label and the number
         # disagreed with each other.
-        is_high_risk, traffic_risk_source = self._get_traffic_risk(hour_24, current_lat, current_lon)
+        is_high_risk, traffic_risk_source, live_traffic_ratio = self._get_traffic_risk(
+            hour_24, current_lat, current_lon)
         time_score = 70.0 if is_high_risk else 100.0
 
         # Weather (real, via Open-Meteo -- see WeatherHelper.java). Simple
@@ -978,6 +987,11 @@ class SmartScoreEngine:
             "delivery_speed_is_learned": delivery_speed_is_learned,
             "traffic_risk": traffic_risk_labels[traffic_risk_source],
             "traffic_risk_source": traffic_risk_source,
+            # Raw ratio (driver backlog #14) -- only ever set when
+            # traffic_risk_source is "live"; None otherwise (see
+            # _get_traffic_risk's own doc for why the other three sources
+            # have no real ratio to report).
+            "traffic_ratio": round(live_traffic_ratio, 2) if live_traffic_ratio is not None else None,
             "weather": weather_label,
             "weather_is_live": weather_is_live,
             "parking_note": "Not tracked separately -- folded into pickup wait time",
@@ -4105,7 +4119,33 @@ class DriveMonitorEngine:
             "avg_timed_out": avg(sums[k]["timed_out"]),
         } for k in factor_keys]
 
-        return json.dumps({"entries": entries, "comparison": comparison})
+        # Average $/km by outcome (driver backlog #6,
+        # docs/driver_backlog_2026_09_03/PRD.md) -- a SEPARATE query from
+        # `all_rows` above, deliberately: that one is scoped to rows with a
+        # components_json snapshot, but $/km only needs payout/distance_km,
+        # and coupling it to component-snapshot availability would silently
+        # drop offers that have valid payout/distance data but a missing or
+        # malformed components snapshot for some unrelated reason.
+        rate_rows = self.db.conn.execute("""
+            SELECT outcome, payout, distance_km FROM offer_outcomes
+            WHERE is_test_data = 0 AND payout IS NOT NULL
+              AND distance_km IS NOT NULL AND distance_km > 0
+        """).fetchall()
+        rates_by_outcome = {"accepted": [], "declined": [], "timed_out": []}
+        for row in rate_rows:
+            if row["outcome"] in rates_by_outcome:
+                rates_by_outcome[row["outcome"]].append(row["payout"] / row["distance_km"])
+
+        def avg_rate(values):
+            return round(sum(values) / len(values), 2) if values else None
+
+        rate_comparison = {
+            "avg_dollar_per_km_accepted": avg_rate(rates_by_outcome["accepted"]),
+            "avg_dollar_per_km_declined": avg_rate(rates_by_outcome["declined"]),
+            "avg_dollar_per_km_timed_out": avg_rate(rates_by_outcome["timed_out"]),
+        }
+
+        return json.dumps({"entries": entries, "comparison": comparison, "rate_comparison": rate_comparison})
 
     def export_trips_csv(self):
         """
