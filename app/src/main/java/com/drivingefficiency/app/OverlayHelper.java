@@ -448,8 +448,41 @@ public final class OverlayHelper {
             }
         });
 
-        windowManager.addView(dot, params);
-        statusDotView = dot;
+        // Driver backlog #16 (docs/driver_backlog_2026_09_03/PRD.md):
+        // "the status dot doesn't always appear." No diagnostic log was
+        // available to confirm a specific failure, so rather than guess,
+        // hardened an already-real, already-named-elsewhere risk class
+        // instead: WindowManager.addView() can throw at runtime (a real,
+        // OEM/OS-quirk-prone operation, per this app's own already-
+        // established reasoning for exactly this class of risk -- see
+        // TripForegroundService's GPS-tick handler, which wraps its own
+        // overlay-touching work for the identical reason: "real Java-side
+        // work... needs to catch more than PyException alone to avoid
+        // silently crashing the always-on foreground service"). This
+        // call was previously completely unguarded, and every one of
+        // refreshStatusDot()'s own call sites in TripForegroundService
+        // (onCreate, startTracking, stopTracking, and others) calls it
+        // directly, several with NO surrounding try/catch of their own --
+        // so a single addView failure here couldn't just mean "the dot
+        // doesn't show," it could silently abort whatever the caller was
+        // doing next (e.g. stopTracking()'s own watchdog-cancellation
+        // calls, several lines below its own refreshStatusDot() call).
+        // The status dot is called far more often than this class's other
+        // overlays (every GPS tick, via refreshStatusDot), so it has far
+        // more real-world exposure to any such transient failure -- a
+        // plausible reason THIS overlay specifically would be the one
+        // reported as intermittent. HONESTLY SCOPED: this is a hardening
+        // of a real, disclosed risk, not a confirmed fix -- no log or
+        // device evidence ever confirmed this exact exception was the
+        // driver's actual cause.
+        try {
+            windowManager.addView(dot, params);
+            statusDotView = dot;
+        } catch (RuntimeException e) {
+            FallbackLogger.log(context, "ERROR", "OverlayHelper.showStatusDot addView failed: "
+                    + android.util.Log.getStackTraceString(e));
+            return;
+        }
 
         if (state == DotState.RED_FLASHING || state == DotState.BLUE_FLASHING) {
             statusDotAnimator = ObjectAnimator.ofFloat(dot, "alpha", 1f, 0.3f);
