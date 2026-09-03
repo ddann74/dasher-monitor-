@@ -634,6 +634,13 @@ public class DasherAccessibilityService extends AccessibilityService {
                     startForegroundService(pauseIntent);
                     pausedByAutoDetection = true;
                     logDiagnostic("AUTO_PAUSE", "Dash Paused screen detected -- GPS tracking paused");
+                    // Driver-reported real gap (docs/driver_backlog_2026_09_03/PRD.md
+                    // ss4, #27): this detection was entirely silent -- it stopped
+                    // GPS tracking and wrote a log line, but never spoke anything,
+                    // so a driver relying on the voice announcements (the same
+                    // mechanism as the mode-switch/smart-score speech elsewhere in
+                    // this class) would never know a pause was auto-detected at all.
+                    VoiceAnnouncer.speak("Dash paused. Monitoring stopped.");
                 }
                 return; // stay paused for as long as this screen shows, regardless of what else is on it
             }

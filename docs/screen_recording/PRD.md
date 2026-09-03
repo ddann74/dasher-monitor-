@@ -22,6 +22,17 @@ crash" gap. Full binary repair was investigated and explicitly rejected
 (unverifiable without a real device); fixed instead via segmented
 recording (bounds crash loss to one ≤5-minute segment) plus startup
 detection/cleanup of orphaned segments. See §11/§12; PROGRESS.md.
+§13 (added 2026-09-03, CRITICAL, self-correcting §9's own fix): a THIRD
+real diagnostic log showed recording had never once actually started
+since §9's fix shipped - not crashing, but silently failing on every
+attempt, including a freshly granted first-use consent token. §9's
+reordering (acquire projection before promoting the foreground-service
+type) had the order backwards per Android's real requirement. Fixed by
+restoring the correct order (type first) while keeping the original
+crash fixed via a new try/catch around the type-declaration call
+itself, independent of ordering. "Doesn't crash" and "actually
+produces a playable recording" are now treated as two separate claims
+needing separate confirmation - see §13.4. See §13/§14; PROGRESS.md.
 Scope: this one feature only. Not a general codebase pass.
 
 ## 0. What this is / isn't
@@ -699,4 +710,123 @@ not a live repro:
       produces multiple playable files, and a forced crash mid-trip (or
       the next real crash, whichever comes first) leaves only the
       current segment missing rather than the whole trip.
+- [ ] Driver sign-off.
+
+## 13. Driver-reported (2026-09-03, CRITICAL, self-correcting a prior fix): recording never actually started, on ANY attempt, including a freshly granted first-use consent
+
+A third real diagnostic log (`dasher_monitor_full_history17.txt`) from
+this same driver, covering a fresh install/rebuild (the log's own
+`App installed 4 min ago` line on its very first entry), showed screen
+recording failing on its ONE genuine attempt with consent actually
+held - and that attempt was the very first, on a token that had just
+been granted moments earlier, never previously used. Every other
+attempt in the multi-day log simply had no consent held at all (process
+restarts, expected/already-alerted behavior). Searched the whole log
+for "Started recording" - zero matches, anywhere, across several days
+of use.
+
+### 13.1 What the log showed
+
+```
+[2026-09-02 22:59:59] SCREEN_RECORDING: Enabled and consent held, but
+starting the recorder failed: SecurityException: Media projections
+require a foreground service of type
+ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+```
+
+### 13.2 Root cause: §9/§10's own fix had the call order backwards
+
+§9's fix (2026-09-02) reordered `acquireProjection()` (calling
+`getMediaProjection()`) to run BEFORE `startForegroundWithRecording()`
+(the foreground-service type declaration), on the documented
+assumption that `getMediaProjection()` "has no foreground-service-type
+precondition." That assumption is what this new log disproves.
+
+Tracing the exact exception through the code (`beginCapture()`'s
+`createVirtualDisplay()` is the only call that can throw this specific
+message, and the log shows no crash/uncaught exception at the point
+`startForegroundWithRecording()` itself runs - confirming that call
+succeeded without throwing) shows: `getMediaProjection()` itself did
+NOT reject the call (no exception logged from `acquireProjection()`,
+which sets its own distinct `lastFailureReason` text on failure) - it
+returned a `MediaProjection` object without complaint. That object was
+then rejected LATER, when `beginCapture()` actually tried to use it via
+`createVirtualDisplay()`, with exactly this message.
+
+This matches Android's real (and, on reflection, better-documented)
+requirement for API 34+: `startForeground(..., FOREGROUND_SERVICE_TYPE_
+MEDIA_PROJECTION)` must be called BEFORE `MediaProjectionManager
+#getMediaProjection()`, not after. A `MediaProjection` obtained before
+its foreground-service type is live is accepted at acquisition time but
+invalid at actual use. §9's fix had this backwards - it correctly
+stopped the ORIGINAL crash (a stale-token type-declaration rejection,
+thrown as an uncaught `SecurityException` from `startForeground()`
+itself), but as an unnoticed side effect of the reordering, broke
+recording entirely: it went from "crashes on a stale second-trip token"
+to "never works, on any token, including a fresh first-use one" - and
+because the new failure mode fails gracefully (logged, not crashed),
+nothing in §9/§10's own verification (which checked "does it still
+crash" via code review and brace/paren balance, not "does it actually
+produce a working recording," since there's no device here to check
+that) caught it.
+
+### 13.3 Fix: restore the correct order, but keep the original crash fixed too
+
+The order is reversed back (type declaration first, then acquire
+projection, then begin capture) - but NOT simply back to the
+pre-§9 code, because that WOULD reintroduce the original crash. The
+real, durable fix is that `startForegroundWithRecording()` (the call
+that used to throw uncaught) is now itself wrapped in a `try/catch
+(SecurityException)`, changed from `void` to `boolean`, so a stale
+token is caught right where the original crash happened - independent
+of ordering - and `TripForegroundService.startTracking()` calls it
+FIRST, only proceeding to `acquireProjection()` -> `beginCapture()` if
+it succeeds, with a fallback to `startForegroundLocationOnly()` if
+recording setup fails after the type was promoted (so the service's
+declared type doesn't stay mismatched with reality for the rest of a
+trip that isn't actually recording).
+
+Both `ScreenRecordingController`'s class doc and `acquireProjection()`'s
+own doc were rewritten to describe this corrected order and both real
+diagnostic logs (2026-09-02 crash, 2026-09-03 silent-failure) that
+shaped it, rather than leaving the previous (now-wrong) reasoning in
+place.
+
+### 13.4 Honest note on confidence
+
+This is the THIRD real-diagnostic-log-driven iteration on this exact
+subsystem this session (§9/§10 fixed a crash; §13 here fixes a
+regression that fix silently introduced). No Android SDK/emulator/
+device exists in this environment at any point across all three passes
+- every conclusion here is inferred from real exception text and log
+sequencing, not from running the code. The previous fix's own
+"CONFIRMED on a real device" language turned out to be about the
+CRASH being fixed, not about recording actually WORKING - a distinction
+that matters and that this PRD is now explicit about: "doesn't crash"
+and "actually works" are being verified as two separate claims from
+here on, not one. §14's checklist reflects that a driver test
+confirming an actual PLAYABLE recording file is produced is the only
+thing that closes this out - not just "no crash observed."
+
+## 14. Success criteria for §13
+
+- [x] Root cause traced to the specific call (`createVirtualDisplay()`
+      inside `beginCapture()`) and the specific ordering requirement
+      (type declaration before `getMediaProjection()`) using the real
+      exception text and log sequencing
+- [x] `startForegroundWithRecording()` changed to `boolean`, wrapped in
+      its own `try/catch (SecurityException)` - the original crash stays
+      fixed independent of call order
+- [x] Call order in `startTracking()` reversed: type declaration ->
+      `acquireProjection()` -> `beginCapture()`, with a location-only
+      fallback if recording setup fails after the type was promoted
+- [x] `ScreenRecordingController`'s class doc and `acquireProjection()`'s
+      doc corrected to match, including both real diagnostic logs that
+      shaped the current order
+- [x] Brace/paren balance re-verified after this change:
+      `TripForegroundService.java` 188/188 braces, 853/853 parens;
+      `ScreenRecordingController.java` 74/74 braces, 294/294 parens
+- [ ] Driver confirms an ACTUAL PLAYABLE recording file is produced on
+      the next trip with recording enabled - not just "no crash," which
+      is the exact claim §9/§10 made that turned out to be insufficient
 - [ ] Driver sign-off.

@@ -32,14 +32,27 @@ import java.util.Locale;
  *   visibly (see its own startTracking() comment), not this class.
  * - CONFIRMED on a real device (2026-09-02, a real driver's diagnostic
  *   log): a single granted consent canNOT be reliably reused for a
- *   SECOND trip within the same still-alive process. Worse than just
- *   getMediaProjection() returning null (which acquireProjection()
- *   below already handled gracefully) -- Android can reject the
- *   mediaProjection foreground-service-type DECLARATION ITSELF when
- *   the process doesn't currently hold a live grant, which used to
- *   crash the whole foreground service before acquireProjection() was
- *   split out to run (and be allowed to fail cleanly) before that
- *   declaration is ever attempted. See acquireProjection()'s own doc.
+ *   SECOND trip within the same still-alive process -- Android can
+ *   reject the mediaProjection foreground-service-type DECLARATION
+ *   ITSELF (TripForegroundService.startForegroundWithRecording) when
+ *   the process doesn't currently hold what Android considers a live
+ *   grant. That call is wrapped in its own try/catch specifically so
+ *   this degrades to "no recording this trip" instead of crashing the
+ *   whole foreground service. See startForegroundWithRecording()'s own
+ *   doc (TripForegroundService.java) for the full mechanism.
+ * - CONFIRMED on a real device (2026-09-03, a SECOND real driver
+ *   diagnostic log, on a freshly granted first-use token): the order
+ *   matters the OTHER way too. getMediaProjection() must be called
+ *   AFTER the foreground service already declares the mediaProjection
+ *   type, not before -- calling it first is accepted by
+ *   getMediaProjection() itself (returns non-null, no exception) but
+ *   the resulting MediaProjection object is then rejected later, at
+ *   createVirtualDisplay() time, with "Media projections require a
+ *   foreground service of type ... MEDIA_PROJECTION". An earlier fix in
+ *   this same session had this backwards (acquireProjection() called
+ *   before the type was promoted) -- it stopped the crash but, as a
+ *   side effect nobody noticed until this second log, made recording
+ *   fail 100% of the time instead. See acquireProjection()'s own doc.
  * - Captures the ENTIRE device screen, not just this app -- there is no
  *   API to scope it narrower. See PRD ss1.3.
  * - A trip's recording is NOT one continuous file -- see rotateSegment()
@@ -199,36 +212,34 @@ class ScreenRecordingController {
     }
 
     /**
-     * CONFIRMED REAL BUG, closed by splitting start() into this method
-     * plus beginCapture() below: a real driver hit an uncaught
-     * SecurityException -- "Starting FGS with type mediaProjection ...
-     * requires permissions" -- thrown from TripForegroundService's own
-     * startForeground() call, BEFORE this class ever got a chance to
-     * call getMediaProjection() at all. Root cause, confirmed against
-     * the real crash log: this class's own class-doc "UNCONFIRMED...
-     * whether a single granted consent can be reused for a SECOND trip"
-     * note turned out to matter in a way the original start() design
-     * didn't anticipate -- a stale/already-consumed consent token
-     * doesn't just make getMediaProjection() return null (handled
-     * gracefully below); Android can reject the FOREGROUND SERVICE TYPE
-     * DECLARATION ITSELF if the calling process doesn't currently hold
-     * a live MediaProjection grant, independent of whatever this class
-     * does internally afterward. Since the app's own
-     * startForegroundWithRecording() call (which requests that type)
-     * used to run BEFORE this class ever attempted getMediaProjection(),
-     * a stale consent crashed the whole foreground service instead of
-     * just failing this one recording.
+     * Split from the original single-method start() into this plus
+     * beginCapture() below, across two real diagnostic-log-driven fixes:
      *
-     * Fix: acquire the projection FIRST (this method, callable while
-     * the service is still only in its plain location-type foreground
-     * state -- getMediaProjection() itself has no foreground-service-
-     * type precondition). The caller only promotes to the mediaProjection
-     * type (see TripForegroundService.startForegroundWithRecording)
-     * AFTER this succeeds, then calls beginCapture() to actually start
-     * recording -- matching Android's own documented order:
-     * getMediaProjection() -> startForeground(..., MEDIA_PROJECTION) ->
-     * createVirtualDisplay(). Returns false (setting lastFailureReason)
-     * on the toggle being off, no consent held, or acquisition failing --
+     * 1. (2026-09-02) A real driver hit an uncaught SecurityException --
+     *    "Starting FGS with type mediaProjection ... requires
+     *    permissions" -- thrown from TripForegroundService's own
+     *    startForeground() call. A stale/already-consumed consent token
+     *    can make Android reject that FOREGROUND SERVICE TYPE
+     *    DECLARATION itself, and that call used to be unguarded, so it
+     *    crashed the whole foreground service.
+     * 2. (2026-09-03) A SECOND real diagnostic log, on a freshly granted
+     *    consent token, showed recording failing on literally the first
+     *    attempt. Root cause: this method (acquireProjection ->
+     *    getMediaProjection()) was being called BEFORE
+     *    startForegroundWithRecording() promoted the foreground-service
+     *    type -- the opposite of what Android actually requires.
+     *    getMediaProjection() itself doesn't reject that (returns
+     *    non-null, no exception here), but the resulting MediaProjection
+     *    object is then rejected later, when beginCapture() actually
+     *    tries to use it via createVirtualDisplay().
+     *
+     * Current (corrected) order, matching Android's real requirement:
+     * TripForegroundService.startForegroundWithRecording() (the type
+     * declaration, now wrapped in its own try/catch so fix #1 still
+     * holds) runs FIRST; only if that succeeds does the caller call
+     * THIS method; only if this succeeds does the caller call
+     * beginCapture(). Returns false (setting lastFailureReason) on the
+     * toggle being off, no consent held, or acquisition failing --
      * never throws.
      */
     boolean acquireProjection(Service service) {

@@ -500,6 +500,13 @@ public class TripHistoryActivity extends AppCompatActivity {
             body.append("Mode: ").append("DASHER".equals(tripMode) ? "Dasher Delivery" : "General Driving").append("\n\n");
 
             JSONObject offerSnapshot = summary.optJSONObject("offer_score_snapshot");
+            // Hoisted above offerSnapshot's own block, and above its usual
+            // "Where The Time Went" section below (driver backlog #8,
+            // docs/driver_backlog_2026_09_03/PRD.md), so the "Deadhead"
+            // line right below can show a time alongside the existing km
+            // figure, using the same JSONObject the phase breakdown itself
+            // reads later -- fetched once, not twice.
+            JSONObject phaseBreakdown = summary.optJSONObject("phase_breakdown");
             if (offerSnapshot != null) {
                 body.append("--- Original Offer Assessment ---\n");
                 body.append(offerSnapshot.optString("verdict_sentence", "")).append("\n\n");
@@ -507,7 +514,19 @@ public class TripHistoryActivity extends AppCompatActivity {
                         offerSnapshot.optDouble("final_score", 0), offerSnapshot.optString("label", "")));
                 body.append(String.format("$/km: $%.2f   $/hr: $%.2f\n",
                         offerSnapshot.optDouble("base_rate_per_km", 0), offerSnapshot.optDouble("hourly_rate", 0)));
-                body.append(String.format("Deadhead: %.1f km\n", offerSnapshot.optDouble("deadhead_km", 0)));
+                // Deadhead TIME added alongside the existing km figure
+                // (driver backlog #8). Reuses phase_breakdown's own
+                // "driving_to_pickup_seconds" -- for the single/first-job
+                // scope phase_breakdown already documents (see its own
+                // Python-side comment), driving-to-pickup time IS the
+                // deadhead leg's time, not a separately-tracked value; not
+                // shown for a job phase_breakdown couldn't capture (no
+                // pickup this trip, or an older trip predating it).
+                String deadheadTimeSuffix = (phaseBreakdown != null
+                        && !phaseBreakdown.isNull("driving_to_pickup_seconds"))
+                        ? " (" + formatMinutesSeconds(phaseBreakdown.optDouble("driving_to_pickup_seconds", 0)) + ")"
+                        : "";
+                body.append(String.format("Deadhead: %.1f km%s\n", offerSnapshot.optDouble("deadhead_km", 0), deadheadTimeSuffix));
                 body.append(String.format("Pickup wait: %.0f min\n", offerSnapshot.optDouble("restaurant_wait_minutes", 0)));
                 body.append("Traffic: ").append(offerSnapshot.optString("traffic_risk", "")).append("\n");
                 body.append("Weather: ").append(offerSnapshot.optString("weather", "")).append("\n\n");
@@ -524,8 +543,9 @@ public class TripHistoryActivity extends AppCompatActivity {
             // actually go for THIS delivery, not just a learned average.
             // Any phase not captured (no walking detected, no pickup this
             // trip, or an older trip from before this existed) is simply
-            // omitted rather than guessed at.
-            JSONObject phaseBreakdown = summary.optJSONObject("phase_breakdown");
+            // omitted rather than guessed at. (phaseBreakdown itself is
+            // fetched above, before offerSnapshot's own block -- see that
+            // declaration's comment.)
             if (phaseBreakdown != null && phaseBreakdown.length() > 0) {
                 body.append("--- Where The Time Went ---\n");
                 if (!phaseBreakdown.isNull("driving_to_pickup_seconds")) {
@@ -533,8 +553,16 @@ public class TripHistoryActivity extends AppCompatActivity {
                             formatMinutesSeconds(phaseBreakdown.optDouble("driving_to_pickup_seconds", 0))));
                 }
                 if (!phaseBreakdown.isNull("wait_at_restaurant_seconds")) {
-                    body.append(String.format("Waiting at restaurant: %s\n",
-                            formatMinutesSeconds(phaseBreakdown.optDouble("wait_at_restaurant_seconds", 0))));
+                    // Wait-time RATING added alongside the duration (driver
+                    // backlog #8) -- feedback_merchant_wait was already
+                    // returned in this same summary JSON
+                    // (drive_monitor.py's get_trip_summary), just never
+                    // surfaced in this view before.
+                    String waitRating = summary.optString("feedback_merchant_wait", "");
+                    String waitRatingSuffix = waitRating.isEmpty() ? "" : " (rated: " + waitRating + ")";
+                    body.append(String.format("Waiting at restaurant: %s%s\n",
+                            formatMinutesSeconds(phaseBreakdown.optDouble("wait_at_restaurant_seconds", 0)),
+                            waitRatingSuffix));
                 }
                 if (!phaseBreakdown.isNull("driving_to_dropoff_seconds")) {
                     body.append(String.format("Driving to dropoff: %s\n",

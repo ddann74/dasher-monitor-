@@ -241,23 +241,55 @@ public class TripForegroundService extends Service {
 
     /**
      * The one place BOTH declared types are actually requested together.
-     * CONFIRMED REAL BUG, fixed in startTracking(): this must only be
-     * called AFTER ScreenRecordingController.acquireProjection() has
-     * already succeeded, never before -- a real driver's diagnostic log
-     * showed Android rejecting this exact type declaration when the
-     * process didn't yet hold a live MediaProjection grant (a stale/
-     * already-consumed consent token), crashing the whole foreground
-     * service. See ScreenRecordingController.acquireProjection's own
-     * doc for the full mechanism. See startForegroundLocationOnly()'s
-     * own doc for why the routine/idle calls must NOT request this type.
+     *
+     * REVERSED (2026-09-03, docs/screen_recording/PRD.md ss13) from the
+     * order this method's doc used to prescribe. A real driver's THIRD
+     * diagnostic log on this exact subsystem showed recording failing on
+     * every single attempt -- including the very first, on a freshly
+     * granted, never-before-used consent token, right after a fresh
+     * install -- with `beginCapture()`'s createVirtualDisplay() throwing
+     * "Media projections require a foreground service of type
+     * ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION" even though
+     * this method (called first, per the PREVIOUS fix's order) had
+     * already run without throwing. That's Android's own documented
+     * requirement for API 34+: startForeground(..., MEDIA_PROJECTION)
+     * MUST be called BEFORE MediaProjectionManager#getMediaProjection(),
+     * not after -- a MediaProjection object obtained before its
+     * foreground service type is live is accepted by getMediaProjection()
+     * itself but rejected later at actual use (createVirtualDisplay()).
+     * The PREVIOUS fix (calling acquireProjection() first) traded a
+     * crash for a 100%-of-the-time silent failure -- it never once
+     * produced a working recording, it just failed without crashing.
+     *
+     * This method is now called FIRST, wrapped in its own try/catch
+     * (NEW -- the original, pre-fix crash this whole chain started from
+     * was this exact call throwing SecurityException UNCAUGHT), so a
+     * still-genuinely-real failure mode -- a stale/already-consumed
+     * consent token from an earlier trip in this same process --
+     * degrades to "no recording this trip" instead of either crashing
+     * (the original bug) or silently never working at all (the previous
+     * fix's actual, unnoticed effect). See startTracking()'s call site
+     * for the full ordering: this -> acquireProjection() -> beginCapture().
+     * See startForegroundLocationOnly()'s own doc for why the routine/
+     * idle calls must NOT request this type.
+     *
+     * Returns false (never throws) if Android rejects the type
+     * declaration itself.
      */
-    private void startForegroundWithRecording(Notification notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+    private boolean startForegroundWithRecording(Notification notification) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification);
+            return true; // foreground service types don't exist below Q -- nothing to reject
+        }
+        try {
             startForeground(NOTIFICATION_ID, notification,
                     android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
                             | android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
-        } else {
-            startForeground(NOTIFICATION_ID, notification);
+            return true;
+        } catch (SecurityException e) {
+            logDiagnostic("SCREEN_RECORDING", "Android rejected the mediaProjection foreground-service "
+                    + "type declaration (stale/invalid consent token?): " + e.getMessage());
+            return false;
         }
     }
 
@@ -381,26 +413,26 @@ public class TripForegroundService extends Service {
 
         // Opt-in screen recording (docs/screen_recording/PRD.md) - off
         // unless the driver both enabled the Setup toggle AND granted the
-        // MediaProjection consent dialog. CONFIRMED REAL BUG, fixed here
-        // (a real driver's diagnostic log): acquiring the projection
-        // MUST happen before promoting to the mediaProjection foreground
-        // service type, not after -- a stale/already-consumed consent
-        // token can make Android reject the type declaration itself,
-        // which used to crash the whole service since the type was
-        // requested unconditionally before this class got a chance to
-        // fail gracefully. See ScreenRecordingController.acquireProjection's
-        // own doc.
+        // MediaProjection consent dialog.
+        //
+        // REVERSED ORDER (2026-09-03, ss13) from an earlier fix this same
+        // session: a real driver's THIRD diagnostic log on this subsystem
+        // showed recording failing on literally every attempt -- including
+        // the very first, on a freshly granted consent token -- under the
+        // previous "acquire projection, then promote the type" order.
+        // Android's real requirement (confirmed by that evidence) is the
+        // opposite: startForegroundWithRecording() (the type declaration)
+        // must run BEFORE acquireProjection() (getMediaProjection()), or
+        // the resulting MediaProjection object is accepted by
+        // getMediaProjection() itself but silently rejected later, when
+        // beginCapture() actually tries to use it. See
+        // startForegroundWithRecording()'s own doc for the full mechanism.
+        //
+        // Pre-checking consent BEFORE attempting the type promotion at
+        // all -- no point declaring a type this trip has no chance of
+        // using.
         if (ScreenRecordingController.isEnabled(this)) {
-            boolean acquired = screenRecordingController.acquireProjection(this);
-            boolean started = false;
-            if (acquired) {
-                startForegroundWithRecording(buildNotificationForMode("GENERAL"));
-                started = screenRecordingController.beginCapture(this);
-            }
-            isScreenRecordingActive = started;
-            if (started) {
-                logDiagnostic("SCREEN_RECORDING", "Started recording for this trip");
-            } else if (!ScreenRecordingController.hasPendingConsent()) {
+            if (!ScreenRecordingController.hasPendingConsent()) {
                 // The most likely real cause: the process restarted since
                 // consent was last granted (a watchdog-recovered kill, a
                 // crash, a manual reopen) - Android does not allow that
@@ -409,21 +441,48 @@ public class TripForegroundService extends Service {
                 // (the same alert channel used for a revoked permission),
                 // not left as a silent gap in coverage the driver only
                 // discovers after the fact.
+                isScreenRecordingActive = false;
                 logDiagnostic("SCREEN_RECORDING", "Enabled, but no consent held (process likely "
                         + "restarted since it was last granted) - this trip will not be recorded");
                 raisePermissionRevokedAlert("Screen Recording",
                         "Re-grant screen recording consent in Setup - this trip is not being recorded");
             } else {
-                // Was "see the preceding ERROR-level Android log" -- WRONG
-                // for two of ScreenRecordingController's own failure paths,
-                // which never logged anywhere at all (found auditing this
-                // for "does anything fail silently?"). lastFailureReason()
-                // is now set on every failure path, not just the ones that
-                // throw, and written directly into THIS app's own visible
-                // diagnostic log instead of only logcat, which a driver has
-                // no way to read without a computer and ADB.
-                logDiagnostic("SCREEN_RECORDING", "Enabled and consent held, but starting the "
-                        + "recorder failed: " + screenRecordingController.lastFailureReason());
+                boolean typePromoted = startForegroundWithRecording(buildNotificationForMode("GENERAL"));
+                boolean started = false;
+                if (typePromoted) {
+                    boolean acquired = screenRecordingController.acquireProjection(this);
+                    started = acquired && screenRecordingController.beginCapture(this);
+                    if (!started) {
+                        // Type was promoted but recording still didn't
+                        // actually start -- demote back to location-only
+                        // so the service's declared type matches reality
+                        // for the rest of this trip rather than staying
+                        // "typed" for a capability that never engaged.
+                        startForegroundLocationOnly(buildNotificationForMode("GENERAL"));
+                    }
+                }
+                isScreenRecordingActive = started;
+                if (started) {
+                    logDiagnostic("SCREEN_RECORDING", "Started recording for this trip");
+                } else if (!typePromoted) {
+                    // Logged inside startForegroundWithRecording() itself
+                    // (it has the actual SecurityException message); this
+                    // just raises the same loud alert used for every other
+                    // revoked-permission case, so it's not silent.
+                    raisePermissionRevokedAlert("Screen Recording",
+                            "Re-grant screen recording consent in Setup - this trip is not being recorded");
+                } else {
+                    // Was "see the preceding ERROR-level Android log" -- WRONG
+                    // for two of ScreenRecordingController's own failure paths,
+                    // which never logged anywhere at all (found auditing this
+                    // for "does anything fail silently?"). lastFailureReason()
+                    // is now set on every failure path, not just the ones that
+                    // throw, and written directly into THIS app's own visible
+                    // diagnostic log instead of only logcat, which a driver has
+                    // no way to read without a computer and ADB.
+                    logDiagnostic("SCREEN_RECORDING", "Enabled and consent held, but starting the "
+                            + "recorder failed: " + screenRecordingController.lastFailureReason());
+                }
             }
         }
     }
