@@ -1,0 +1,48 @@
+# Progress log — driver backlog triage (2026-09-03)
+
+## Triage (2026-09-03)
+
+Driver sent 36 items in one raw message - bug reports, feature
+requests, and plain questions, mixed together, no prioritization, no
+numbering. Rather than guess at what was already built versus
+genuinely new, spawned a general-purpose agent to investigate each item
+against the real code first: check `docs/<topic>/PRD.md` Status headers
+for existing coverage, spot-check the actual Java/Python behind any
+"IMPLEMENTED" claim rather than trust the doc (this repo has had stale
+PRD status headers before), and classify each item.
+
+Result: 15 items already answered/implemented (no new work - listed in
+PRD §1 with file:line citations), 3 duplicates (PRD §2), 3 items with a
+genuine open question blocking further work (PRD §3 - one incomplete
+sentence in the driver's own message, one item with two plausible but
+different meanings, one unnamed "the report"), 6 real bugs with no
+existing tracking or blocked tracking (PRD §4), and 12 genuinely new
+feature requests with no existing design (PRD §5).
+
+Wrote this as a full PRD (`PRD.md`) rather than just relaying the
+triage in chat, per the driver's own request, including:
+- A recommended priority order (§6) - my own judgment call, disclosed
+  as such, not driver-specified.
+- A premortem (§7) written for the shape of THIS backlog specifically
+  (many independent items across many subsystems, worked one at a time
+  over multiple sessions) rather than reusing a single-feature PRD's
+  premortem shape - flags schema-drift risk between related items
+  (P1), unverified citations the "small" size estimates lean on (P2),
+  scope-creep risk on the two large items (P3), the specific danger of
+  silently resolving §3's open questions by guessing instead of asking
+  (P4), and the accumulating unverified-on-device surface area from
+  building this many UI-touching items without a real device in this
+  environment (P5).
+- A `RALPH_PROMPT.md` adapted from this repo's existing per-feature
+  ralph-loop convention, but for a multi-item checklist: follows §6's
+  priority order rather than top-to-bottom, requires re-reading sibling
+  items before starting anything in P1's schema-drift group, requires
+  spot-checking a cited "already exists" function before building on
+  top of it (per P2), and explicitly forbids resolving §3's open
+  questions by assumption (per P4) - stronger language than this
+  repo's usual "use the PRD's own stated recommendation" default,
+  because guessing wrong on #4/#17/#26 means building the wrong thing
+  entirely, not picking a defensible option among equivalent ones.
+
+No code touched. This PRD's own §9 checklist is the tracking mechanism
+for the ralph loop's eventual work through §4/§5 - nothing to check yet.
