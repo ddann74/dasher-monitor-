@@ -276,12 +276,16 @@ analysis plus new UI.
       filtered client-side from the same already-fetched `trips` array
       (`trip.mode` was already returned by `get_trip_history()`, just
       never used to filter). No Python change needed.
-- [ ] **#14 - surface the traffic ratio as a reported metric.** SMALL.
-      `_live_traffic_ratio`/`_get_traffic_risk`
-      (`drive_monitor.py:690-767`) already compute this internally and
-      feed it into the score as a binary high/low-risk flag, but the raw
-      ratio itself is never exposed to the driver anywhere. Expose the
-      existing computed value; no new calculation needed.
+- [x] **#14 - surface the traffic ratio as a reported metric.** FIXED
+      (2026-09-03): `_get_traffic_risk()` now returns the raw live-traffic
+      delay ratio as a third value (only when its source is actually
+      "live" - the zone/personal/generic sources are binary flags with
+      no real ratio behind them, so `None` for those rather than a
+      fabricated number). Added to `calculate()`'s returned dict as
+      `traffic_ratio`, shown in `TripHistoryActivity` as "(X% of
+      typical)" next to the existing High/Low label. Verified with a
+      real, runnable Python test covering all three cases: no live data,
+      fresh live data, and stale live data falling back correctly.
 - [ ] **#17b - "navigate home" with a pre-determined/saved route** (the
       "genuinely new feature" reading of #17 - see §3). If this is what
       the driver meant: LARGE, no existing infrastructure at all (no

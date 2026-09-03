@@ -582,7 +582,18 @@ public class TripHistoryActivity extends AppCompatActivity {
                         : "";
                 body.append(String.format("Deadhead: %.1f km%s\n", offerSnapshot.optDouble("deadhead_km", 0), deadheadTimeSuffix));
                 body.append(String.format("Pickup wait: %.0f min\n", offerSnapshot.optDouble("restaurant_wait_minutes", 0)));
-                body.append("Traffic: ").append(offerSnapshot.optString("traffic_risk", "")).append("\n");
+                // Raw ratio added alongside the existing High/Low label
+                // (driver backlog #14) -- only ever present when
+                // traffic_risk_source was "live" (a real Google Maps
+                // Distance Matrix result), since that's the only source
+                // with an actual ratio behind it; the zone/personal/
+                // generic sources are binary flags with nothing numeric
+                // to show, so this is correctly omitted for those rather
+                // than showing a fabricated number.
+                String trafficRatioSuffix = offerSnapshot.isNull("traffic_ratio") ? ""
+                        : String.format(" (%.0f%% of typical)", offerSnapshot.optDouble("traffic_ratio", 1.0) * 100.0);
+                body.append("Traffic: ").append(offerSnapshot.optString("traffic_risk", ""))
+                        .append(trafficRatioSuffix).append("\n");
                 body.append("Weather: ").append(offerSnapshot.optString("weather", "")).append("\n\n");
             }
 

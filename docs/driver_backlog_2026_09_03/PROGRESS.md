@@ -180,3 +180,37 @@ braces, 677/677 parens. `drive_monitor.py` re-compiled cleanly
 
 PRD §5 boxes for #6 and #9 checked. Next per §6: #14 (surface traffic
 ratio), then #2 (per-offer omit/include toggle).
+
+## #14 implemented (2026-09-03): surface the traffic ratio
+
+`_get_traffic_risk()` (`drive_monitor.py`) previously returned only
+`(is_high_risk, source)` - a binary flag plus which of four fallback
+tiers produced it (live/zone/personal/generic). Added the raw ratio as
+a third return value, but ONLY populated when `source == "live"`: the
+other three tiers (`_get_traffic_risk_by_zone`, the personal-history
+proxy, the generic guess) are binary risk flags from entirely different
+methods with no underlying ratio - returning a fabricated number for
+those would misrepresent them as more precise than they are. Updated
+the single call site (`calculate()`) and added `traffic_ratio` to its
+returned dict, rounded to 2 decimals.
+
+`TripHistoryActivity`'s existing "Traffic: [label]" line now appends
+"(X% of typical)" when `traffic_ratio` is present, omitted entirely
+(not shown as "0%" or similar) when it's `null` - confirmed
+`JSONObject.isNull()` correctly treats a JSON `null` value the same as
+a missing key here, matching this file's other nullable-field patterns.
+
+**Verification**: real, runnable Python test
+(`/tmp/.../test_traffic_ratio.py`) covering all three real code paths:
+no live traffic ever recorded (ratio `None`, falls back to
+personal/generic), fresh live traffic recorded (ratio present, rounded,
+source `"live"`), and STALE live traffic (older than
+`LIVE_TRAFFIC_FRESHNESS_SECONDS`) correctly falling back and reporting
+`None` again rather than a stale number. All three assertions passed.
+Confirmed no other call site of `_get_traffic_risk()` exists (single
+caller, already updated for the new 3-tuple). `drive_monitor.py`
+recompiles cleanly; `TripHistoryActivity.java` brace/paren balance:
+103/103 braces, 684/684 parens.
+
+PRD §5 box for #14 checked. Next per §6: #2 (per-offer omit/include
+toggle).
