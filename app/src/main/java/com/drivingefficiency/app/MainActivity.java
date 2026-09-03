@@ -700,12 +700,16 @@ public class MainActivity extends AppCompatActivity {
             String parkingLabel = "Parking";
             String pendingParkingRestaurant = null;
             double pendingParkingGapSeconds = 0;
+            // -1 = no auto-labeled row to upgrade (Python's "no id" sentinel --
+            // see record_parking_difficulty_feedback's feedback_id docstring).
+            int pendingParkingFeedbackId = -1;
             try {
                 String gapJson = engine.callAttr("get_last_parking_gap_for_feedback").toString();
                 if (!"null".equals(gapJson)) {
                     JSONObject gapObj = new JSONObject(gapJson);
                     pendingParkingRestaurant = gapObj.optString("restaurant_name", null);
                     pendingParkingGapSeconds = gapObj.optDouble("gap_seconds", 0);
+                    pendingParkingFeedbackId = gapObj.optInt("feedback_id", -1);
                     parkingLabel = String.format("Parking (took %.0fs to get moving)", pendingParkingGapSeconds);
                     // GAP 1b (diagnostic-coverage pass): confirms the
                     // feedback dialog is being shown WITH real measured
@@ -721,6 +725,7 @@ public class MainActivity extends AppCompatActivity {
             }
             final String finalPendingParkingRestaurant = pendingParkingRestaurant;
             final double finalPendingParkingGapSeconds = pendingParkingGapSeconds;
+            final int finalPendingParkingFeedbackId = pendingParkingFeedbackId;
 
             layout.addView(buildFeedbackCategoryRow(parkingLabel,
                     new String[]{"Easy", "Okay", "Hard"}, parkingSelected));
@@ -763,7 +768,8 @@ public class MainActivity extends AppCompatActivity {
                                 String difficulty = "Easy".equals(parkingSelected[0]) ? "easy"
                                         : "Hard".equals(parkingSelected[0]) ? "difficult" : "normal";
                                 engine.callAttr("record_parking_difficulty_feedback",
-                                        finalPendingParkingRestaurant, finalPendingParkingGapSeconds, difficulty);
+                                        finalPendingParkingRestaurant, finalPendingParkingGapSeconds, difficulty,
+                                        finalPendingParkingFeedbackId);
                             }
                             engine.callAttr("clear_last_parking_gap_for_feedback");
 

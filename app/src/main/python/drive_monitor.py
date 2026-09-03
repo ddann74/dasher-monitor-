@@ -90,6 +90,24 @@ WALKING_PATTERN_CONSECUTIVE_READINGS = 2
 WALKING_RECENTLY_PARKED_WINDOW_SECONDS = 5 * 60
 PARK_TO_WALK_GAP_MIN_SAMPLES_TO_LEARN = 10
 
+# Auto-labeled parking-difficulty samples, written the instant a
+# park-to-walk gap is measured (see _record_park_to_walk_gap_sample),
+# instead of only ever existing when the driver manually answers the
+# post-trip feedback dialog. That manual path produced at most ONE
+# sample per trip (only the LAST stop's gap survives to be shown --
+# see get_last_parking_gap_for_feedback), and only if the driver
+# bothered to tap through instead of "Skip" -- real per-restaurant
+# data was accumulating at well under one sample per trip, i.e. months
+# to reach PARKING_DIFFICULTY_MIN_SAMPLES for any one restaurant. A raw
+# duration alone can't tell a genuinely tight park from a restaurant
+# that's just naturally far from the door, so this is a cheap first
+# guess, not a replacement for a real answer -- see
+# record_parking_difficulty_feedback, which upgrades the auto row in
+# place rather than double-counting the same stop.
+PARKING_AUTO_LABEL_DEFAULT_BASELINE_SECONDS = 45
+PARKING_AUTO_LABEL_EASY_RATIO = 0.6
+PARKING_AUTO_LABEL_DIFFICULT_RATIO = 1.5
+
 # Conservative fallback used only when no real countdown was readable
 # from the offer screen (see OfferScreenParser.extract_countdown_seconds)
 # -- deliberately generous so a genuinely still-pending offer doesn't get
@@ -541,6 +559,19 @@ class Database:
         # calculate "average $/hr of recent accepted offers" at all.
         if "hourly_rate" not in existing_columns:
             self.conn.execute("ALTER TABLE offer_outcomes ADD COLUMN hourly_rate REAL")
+            self.conn.commit()
+
+        # Migration for databases that predate auto-labeled parking
+        # samples (see PARKING_AUTO_LABEL_* above) -- every row that
+        # already existed was, by definition, a driver's own manual
+        # answer (the auto path didn't exist yet), so it defaults to
+        # 'manual' rather than being mistaken for a low-confidence guess.
+        parking_feedback_columns = [
+            row["name"] for row in self.conn.execute("PRAGMA table_info(parking_difficulty_feedback)")
+        ]
+        if "source" not in parking_feedback_columns:
+            self.conn.execute(
+                "ALTER TABLE parking_difficulty_feedback ADD COLUMN source TEXT DEFAULT 'manual'")
             self.conn.commit()
 
         # Migration for databases that already existed before phase-timing
@@ -2086,6 +2117,7 @@ class TripManager:
         self._last_notification_skip_log = None
         self._last_gap_restaurant_name = None
         self._last_gap_seconds = None
+        self._last_gap_feedback_row_id = None
 
         # Dual-mode support: DASHER mode (Dasher app active / delivery in
         # progress) vs GENERAL mode (plain driving-efficiency tracking).
@@ -2928,7 +2960,16 @@ class TripManager:
         """
         if self._last_gap_restaurant_name is None:
             return None
-        return {"restaurant_name": self._last_gap_restaurant_name, "gap_seconds": self._last_gap_seconds}
+        return {
+            "restaurant_name": self._last_gap_restaurant_name,
+            "gap_seconds": self._last_gap_seconds,
+            # id of the auto-labeled row already written for this same
+            # stop (see _record_park_to_walk_gap_sample) -- passed back
+            # through record_parking_difficulty_feedback so a manual
+            # answer UPGRADES that row instead of adding a second one for
+            # the same physical park event.
+            "feedback_id": self._last_gap_feedback_row_id,
+        }
 
     def clear_last_parking_gap_for_feedback(self):
         """
@@ -2939,6 +2980,7 @@ class TripManager:
         """
         self._last_gap_restaurant_name = None
         self._last_gap_seconds = None
+        self._last_gap_feedback_row_id = None
 
     def _learned_walking_speed_threshold_kmh(self):
         """
@@ -3002,6 +3044,33 @@ class TripManager:
             return row["avg_gap_seconds"] * 2.0, row["sample_count"], True
         return WALKING_RECENTLY_PARKED_WINDOW_SECONDS, row["sample_count"] if row else 0, False
 
+    def _auto_parking_difficulty_label(self, gap_seconds):
+        """
+        Cheap first-pass 'easy'/'normal'/'difficult' label for a raw
+        park-to-walk duration -- see PARKING_AUTO_LABEL_* above for why
+        this exists. Same fixed-default-then-learned-baseline shape as
+        _learned_recently_parked_window_seconds just above: uses the same
+        global park_to_walk_gap_history average once enough real gaps
+        exist, a fixed guess before that. Global, not per-restaurant --
+        no per-restaurant average exists to draw from (park_to_walk_gap_
+        history is a single learned-average row, same table the walking-
+        pace window above already trusts), but the RATING this feeds
+        (get_parking_difficulty_rating) still gates per-restaurant, which
+        is what actually needs to be meaningful.
+        """
+        row = self.db.conn.execute(
+            "SELECT avg_gap_seconds, sample_count FROM park_to_walk_gap_history WHERE id = 1"
+        ).fetchone()
+        if row and row["sample_count"] and row["sample_count"] >= PARK_TO_WALK_GAP_MIN_SAMPLES_TO_LEARN:
+            baseline = row["avg_gap_seconds"]
+        else:
+            baseline = PARKING_AUTO_LABEL_DEFAULT_BASELINE_SECONDS
+        if gap_seconds <= baseline * PARKING_AUTO_LABEL_EASY_RATIO:
+            return "easy"
+        if gap_seconds >= baseline * PARKING_AUTO_LABEL_DIFFICULT_RATIO:
+            return "difficult"
+        return "normal"
+
     def _record_park_to_walk_gap_sample(self, gap_seconds, restaurant_name=None):
         """
         Records the real time elapsed between a genuine park being
@@ -3029,6 +3098,21 @@ class TripManager:
         # gets confirmed/corrected by the user afterward, per restaurant.
         self._last_gap_restaurant_name = restaurant_name
         self._last_gap_seconds = gap_seconds
+        # Immediately persist an auto-labeled sample for THIS stop -- see
+        # PARKING_AUTO_LABEL_* above. Fires here, once per park event, so
+        # every stop of a multi-stop trip gets its own row, not just the
+        # last one (the only one the trip-end feedback dialog ever sees).
+        # Skipped when there's no restaurant name to attach it to (nothing
+        # for get_parking_difficulty_rating to ever group it under).
+        self._last_gap_feedback_row_id = None
+        if restaurant_name is not None:
+            auto_difficulty = self._auto_parking_difficulty_label(gap_seconds)
+            cursor = self.db.conn.execute("""
+                INSERT INTO parking_difficulty_feedback (restaurant_name, gap_seconds, difficulty, timestamp, source)
+                VALUES (?, ?, ?, ?, 'auto')
+            """, (restaurant_name, gap_seconds, auto_difficulty, time.time()))
+            self.db.conn.commit()
+            self._last_gap_feedback_row_id = cursor.lastrowid
         # Consumed by DriveMonitorEngine.on_gps_update to log this --
         # TripManager has no direct access to log_diagnostic itself.
         # Previously zero trace of this learning mechanism ever running.
@@ -3656,16 +3740,34 @@ class DriveMonitorEngine:
         # If expiration hasn't passed yet, leave it in place -- still
         # genuinely pending, not yet safe to assume anything happened to it.
 
-    def record_parking_difficulty_feedback(self, restaurant_name, gap_seconds, difficulty):
+    def record_parking_difficulty_feedback(self, restaurant_name, gap_seconds, difficulty, feedback_id=None):
         """
         Confirms or corrects what a raw park-to-walk duration actually
         meant -- a long gap alone can't distinguish a genuinely difficult
         park from an easy one that's just naturally far from the door.
         difficulty: 'easy', 'normal', or 'difficult'.
+
+        feedback_id, when given (and >= 0 -- Java passes -1 as its "no id"
+        sentinel, see MainActivity's showFeedbackDialog), is the id of the
+        auto-labeled row already written for this SAME stop (see
+        _record_park_to_walk_gap_sample). Upgrades that row to the
+        driver's real answer in place instead of inserting a second row
+        for the same physical parking event, which would double-count it
+        in get_parking_difficulty_rating's average. Falls back to a plain
+        insert if that row is missing (an older client, or it somehow
+        never got auto-recorded) so a manual answer is never dropped.
         """
+        if feedback_id is not None and feedback_id >= 0:
+            cursor = self.db.conn.execute(
+                "UPDATE parking_difficulty_feedback SET difficulty = ?, source = 'manual' WHERE id = ?",
+                (difficulty, feedback_id),
+            )
+            self.db.conn.commit()
+            if cursor.rowcount > 0:
+                return
         self.db.conn.execute("""
-            INSERT INTO parking_difficulty_feedback (restaurant_name, gap_seconds, difficulty, timestamp)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO parking_difficulty_feedback (restaurant_name, gap_seconds, difficulty, timestamp, source)
+            VALUES (?, ?, ?, ?, 'manual')
         """, (restaurant_name, gap_seconds, difficulty, time.time()))
         self.db.conn.commit()
 
@@ -3851,11 +3953,14 @@ class DriveMonitorEngine:
         gated on PARKING_DIFFICULTY_MIN_SAMPLES confirmed samples for
         THIS specific restaurant -- same mapping pattern as personal
         calibration's overall_rating_map: easy=0, normal=50, difficult=100,
-        averaged across every confirmation given for this location.
+        averaged across every sample recorded for this location (both
+        auto-labeled -- see PARKING_AUTO_LABEL_* -- and driver-confirmed;
+        manual_sample_count/auto_sample_count below disclose the split
+        rather than presenting a mostly-guessed rating as fully confirmed).
         """
         difficulty_map = {"easy": 0.0, "normal": 50.0, "difficult": 100.0}
         rows = self.db.conn.execute(
-            "SELECT difficulty FROM parking_difficulty_feedback WHERE restaurant_name = ?",
+            "SELECT difficulty, source FROM parking_difficulty_feedback WHERE restaurant_name = ?",
             (restaurant_name,),
         ).fetchall()
         scores = [difficulty_map[r["difficulty"]] for r in rows if r["difficulty"] in difficulty_map]
@@ -3866,9 +3971,12 @@ class DriveMonitorEngine:
             })
         avg_score = sum(scores) / len(scores)
         label = "Easy" if avg_score < 33 else "Difficult" if avg_score > 66 else "Normal"
+        manual_count = sum(1 for r in rows if r["source"] == "manual")
         return json.dumps({
             "has_rating": True, "sample_count": len(scores),
             "avg_score": round(avg_score, 1), "label": label,
+            "manual_sample_count": manual_count,
+            "auto_sample_count": len(scores) - manual_count,
         })
 
     def get_canned_replies_json(self):
