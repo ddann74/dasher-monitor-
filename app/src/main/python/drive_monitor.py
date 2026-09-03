@@ -1297,6 +1297,21 @@ def haversine_meters(lat1, lon1, lat2, lon2):
     return 2 * R * math.asin(math.sqrt(a))
 
 
+def _sample_stdev(values):
+    """
+    Sample standard deviation (n-1 denominator) -- shared by
+    get_restaurant_visit_history and get_address_book's per-restaurant
+    Smart Score summary, both always a bounded sample of real visits,
+    never "all visits that will ever happen". None below 2 values -- a
+    stdev of a single point isn't a meaningful number, not "0".
+    """
+    if len(values) < 2:
+        return None
+    mean = sum(values) / len(values)
+    variance = sum((v - mean) ** 2 for v in values) / (len(values) - 1)
+    return variance ** 0.5
+
+
 # ------------------------------------------------------------------------- #
 # Message Intelligence
 # ------------------------------------------------------------------------- #
@@ -4586,6 +4601,20 @@ class DriveMonitorEngine:
         browsable view of its own until now. Restaurant-specific deadhead
         samples are joined in from offer_distance_accuracy for a fuller
         picture of what's actually been learned about each location.
+
+        Driver backlog #26 follow-up (2026-09-03, docs/driver_backlog_
+        2026_09_03/PRD.md): driver asked for avg $/km, avg $/hr, and avg
+        Smart Score (with standard deviation) per restaurant, added below
+        from offer_outcomes. Deliberately scoped to ANY outcome (accepted,
+        declined, timed out), not accepted-only -- matching
+        get_restaurant_visit_history's already-shipped, driver-facing
+        definition of "visit" for this exact restaurant grouping (see
+        that method's own docstring), rather than inventing a second,
+        differently-scoped meaning of "restaurant average" in the same
+        app. $/km and $/hr use the same offer_outcomes.payout/
+        distance_km/hourly_rate fields the Rejected Offers Report's own
+        rate_comparison already reads, with the same exclusion rules
+        (missing payout, zero/missing distance, missing hourly_rate).
         """
         wait_rows = self.db.conn.execute("""
             SELECT restaurant_name, avg_wait_minutes, sample_count
@@ -4599,6 +4628,18 @@ class DriveMonitorEngine:
                 FROM offer_distance_accuracy WHERE restaurant_name = ?
             """, (row["restaurant_name"],)).fetchone()
             parking = json.loads(self.get_parking_difficulty_rating(row["restaurant_name"]))
+
+            outcome_rows = self.db.conn.execute("""
+                SELECT payout, distance_km, hourly_rate, smart_score
+                FROM offer_outcomes WHERE restaurant_name = ? AND is_test_data = 0
+            """, (row["restaurant_name"],)).fetchall()
+            rate_values = [o["payout"] / o["distance_km"] for o in outcome_rows
+                           if o["payout"] is not None and o["distance_km"] is not None and o["distance_km"] > 0]
+            hourly_values = [o["hourly_rate"] for o in outcome_rows if o["hourly_rate"] is not None]
+            score_values = [o["smart_score"] for o in outcome_rows if o["smart_score"] is not None]
+            avg_score = sum(score_values) / len(score_values) if score_values else None
+            stdev_score = _sample_stdev(score_values)
+
             entries.append({
                 "restaurant_name": row["restaurant_name"],
                 "avg_wait_minutes": round(row["avg_wait_minutes"], 1),
@@ -4607,6 +4648,13 @@ class DriveMonitorEngine:
                 "deadhead_samples": deadhead_row["cnt"],
                 "parking_difficulty": parking.get("label") if parking.get("has_rating") else None,
                 "parking_difficulty_samples": parking.get("sample_count", 0),
+                "avg_dollar_per_km": round(sum(rate_values) / len(rate_values), 2) if rate_values else None,
+                "dollar_per_km_samples": len(rate_values),
+                "avg_dollar_per_hr": round(sum(hourly_values) / len(hourly_values), 2) if hourly_values else None,
+                "dollar_per_hr_samples": len(hourly_values),
+                "avg_smart_score": round(avg_score, 1) if avg_score is not None else None,
+                "stdev_smart_score": round(stdev_score, 1) if stdev_score is not None else None,
+                "smart_score_samples": len(score_values),
             })
         return json.dumps({"entries": entries})
 
@@ -4652,15 +4700,7 @@ class DriveMonitorEngine:
 
         scores = [v["smart_score"] for v in visits if v["smart_score"] is not None]
         avg_score = sum(scores) / len(scores) if scores else None
-        # Sample standard deviation (n-1) -- the standard convention for
-        # a sample rather than a full population, which this always is
-        # (a fixed limit of the most recent visits, never "all visits
-        # that will ever happen"). None below 2 scores -- a stdev of a
-        # single point isn't a meaningful number, not "0".
-        stdev_score = None
-        if len(scores) >= 2:
-            variance = sum((s - avg_score) ** 2 for s in scores) / (len(scores) - 1)
-            stdev_score = variance ** 0.5
+        stdev_score = _sample_stdev(scores)
 
         return json.dumps({
             "restaurant_name": restaurant_name,
@@ -4717,14 +4757,54 @@ class DriveMonitorEngine:
             except (ValueError, TypeError):
                 offer_score_snapshot = None
 
+        # Driver backlog #26 follow-up (2026-09-03, docs/driver_backlog_
+        # 2026_09_03/PRD.md): driver said some "where the time went"
+        # numbers don't look accurate and asked to see full detail.
+        # job_count tells the UI whether this trip had 2+ stacked orders --
+        # docs/deadhead_stacked_order_baseline/PRD.md Part 2B already
+        # documents a REAL, confirmed-from-code (not yet device-confirmed)
+        # bug for that case: pickup_arrival_ts/pickup_departure_ts get
+        # overwritten by each new pickup (last-wins, no IS NULL guard),
+        # while dropoff_arrival_ts/walking_confirmed_ts only ever capture
+        # the FIRST dropoff (first-wins) -- so a stacked trip's
+        # phase_breakdown below can mix timestamps from genuinely
+        # different jobs. That linkage fix is explicitly BLOCKED on real
+        # evidence (a stacked-order dropoff screenshot), not guessed at
+        # here -- job_count lets the UI warn rather than silently present
+        # a possibly-wrong number as if it were reliable.
+        job_count_row = self.db.conn.execute(
+            "SELECT COUNT(*) AS cnt FROM offer_distance_accuracy WHERE trip_id = ?",
+            (trip_id,),
+        ).fetchone()
+        job_count = job_count_row["cnt"] if job_count_row else 0
+
+        # Raw phase clock-times, alongside the derived durations below --
+        # the "full detail" the driver asked to see, so an inaccurate
+        # duration can actually be diagnosed (e.g. "wait was 45 min" is
+        # hard to sanity-check; "arrived 2:03pm, left 2:48pm" isn't).
+        # Only real, captured timestamps are included -- never a guessed
+        # or interpolated one.
+        phase_timestamps = {}
+        for key, value in (
+            ("trip_start_ts", row["start_time"]),
+            ("pickup_arrival_ts", row["pickup_arrival_ts"]),
+            ("pickup_departure_ts", row["pickup_departure_ts"]),
+            ("dropoff_arrival_ts", row["dropoff_arrival_ts"]),
+            ("walking_confirmed_ts", row["walking_confirmed_ts"]),
+            ("trip_end_ts", row["end_time"]),
+        ):
+            if value:
+                phase_timestamps[key] = value
+
         # Phase-by-phase timing breakdown -- "where did the time go" for
         # THIS specific delivery, not just a learned average. Simplified,
         # single-primary-flow scope: only the first pickup and first
         # dropoff, same honest limitation as the underlying capture
-        # points for a multi-stop batch. Any phase whose timestamps
-        # weren't both captured (e.g. no walking ever detected, or an
-        # older trip from before this was added) is simply omitted
-        # rather than guessed at.
+        # points for a multi-stop batch (see job_count/phase_timestamps
+        # above for the full-detail, stacked-order-aware view). Any phase
+        # whose timestamps weren't both captured (e.g. no walking ever
+        # detected, or an older trip from before this was added) is
+        # simply omitted rather than guessed at.
         phase_breakdown = {}
         if row["start_time"] and row["pickup_arrival_ts"]:
             phase_breakdown["driving_to_pickup_seconds"] = row["pickup_arrival_ts"] - row["start_time"]
@@ -4770,6 +4850,8 @@ class DriveMonitorEngine:
             "offer_score_snapshot": offer_score_snapshot,
             "pickup_address": row["pickup_address"],
             "phase_breakdown": phase_breakdown,
+            "phase_timestamps": phase_timestamps,
+            "job_count": job_count,
             "deadline_comparison": deadline_comparison,
             "feedback_rating": feedback_row["rating"] if feedback_row else None,
             "feedback_notes": feedback_row["notes"] if feedback_row else None,

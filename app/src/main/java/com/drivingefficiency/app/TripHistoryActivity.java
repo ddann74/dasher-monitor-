@@ -259,6 +259,32 @@ public class TripHistoryActivity extends AppCompatActivity {
                                 entry.optString("parking_difficulty", ""), entry.optInt("parking_difficulty_samples", 0),
                                 entry.optInt("parking_difficulty_samples", 0) == 1 ? "" : "s"));
                     }
+                    // Driver backlog #26 follow-up (2026-09-03, docs/
+                    // driver_backlog_2026_09_03/PRD.md): avg $/km, avg
+                    // $/hr, avg Smart Score + standard deviation per
+                    // restaurant. Each omitted (not shown as 0/n-a)
+                    // when this restaurant has no offer_outcomes rows
+                    // with that specific value yet -- same "omit rather
+                    // than guess" rule as every other field on this
+                    // screen.
+                    if (!entry.isNull("avg_dollar_per_km")) {
+                        body.append(String.format("   Avg rate: $%.2f/km (%d offer%s)\n",
+                                entry.optDouble("avg_dollar_per_km", 0), entry.optInt("dollar_per_km_samples", 0),
+                                entry.optInt("dollar_per_km_samples", 0) == 1 ? "" : "s"));
+                    }
+                    if (!entry.isNull("avg_dollar_per_hr")) {
+                        body.append(String.format("   Avg rate: $%.2f/hr (%d offer%s)\n",
+                                entry.optDouble("avg_dollar_per_hr", 0), entry.optInt("dollar_per_hr_samples", 0),
+                                entry.optInt("dollar_per_hr_samples", 0) == 1 ? "" : "s"));
+                    }
+                    if (!entry.isNull("avg_smart_score")) {
+                        String stdevSuffix = entry.isNull("stdev_smart_score") ? ""
+                                : String.format(" (sd %.1f)", entry.optDouble("stdev_smart_score", 0));
+                        body.append(String.format("   Avg Smart Score: %.1f%s (%d offer%s)\n",
+                                entry.optDouble("avg_smart_score", 0), stdevSuffix,
+                                entry.optInt("smart_score_samples", 0),
+                                entry.optInt("smart_score_samples", 0) == 1 ? "" : "s"));
+                    }
                     body.append("\n");
                 }
 
@@ -799,6 +825,24 @@ public class TripHistoryActivity extends AppCompatActivity {
             // declaration's comment.)
             if (phaseBreakdown != null && phaseBreakdown.length() > 0) {
                 body.append("--- Where The Time Went ---\n");
+                // Driver backlog #26 follow-up (2026-09-03, docs/driver_
+                // backlog_2026_09_03/PRD.md): driver said some of these
+                // numbers don't look accurate. A real, already-documented
+                // reason this can happen for a stacked/batch order (2+
+                // jobs in one trip) is a known limitation, not fixed here:
+                // docs/deadhead_stacked_order_baseline/PRD.md Part 2B --
+                // pickup/dropoff phase timestamps can mix data from
+                // different jobs for that case, and the real fix is
+                // explicitly blocked pending a real stacked-order dropoff
+                // screenshot. job_count (from the same summary JSON) lets
+                // this screen warn honestly rather than presenting a
+                // possibly-mixed number as if it were reliable.
+                int jobCount = summary.optInt("job_count", 0);
+                if (jobCount > 1) {
+                    body.append("⚠️ This trip had ").append(jobCount)
+                            .append(" stacked orders -- the breakdown below may mix timestamps "
+                                    + "from different jobs (known limitation, not yet fixed).\n");
+                }
                 if (!phaseBreakdown.isNull("driving_to_pickup_seconds")) {
                     body.append(String.format("Driving to pickup: %s\n",
                             formatMinutesSeconds(phaseBreakdown.optDouble("driving_to_pickup_seconds", 0))));
@@ -828,6 +872,36 @@ public class TripHistoryActivity extends AppCompatActivity {
                             formatMinutesSeconds(phaseBreakdown.optDouble("completing_dropoff_seconds", 0))));
                 }
                 body.append("\n");
+
+                // Raw clock times behind the durations above (driver
+                // backlog #26 follow-up) -- lets an inaccurate-looking
+                // duration actually be diagnosed ("wait was 45 min" is
+                // hard to sanity-check; "arrived 2:03pm, left 2:48pm"
+                // isn't). Only real, captured timestamps are shown -- a
+                // key simply isn't present in phase_timestamps if that
+                // moment was never captured (see Python-side comment).
+                JSONObject phaseTimestamps = summary.optJSONObject("phase_timestamps");
+                if (phaseTimestamps != null && phaseTimestamps.length() > 0) {
+                    java.text.SimpleDateFormat clockFormat =
+                            new java.text.SimpleDateFormat("h:mm:ss a", java.util.Locale.getDefault());
+                    body.append("Full time detail:\n");
+                    String[][] clockLabels = {
+                            {"trip_start_ts", "Trip started"},
+                            {"pickup_arrival_ts", "Arrived at pickup"},
+                            {"pickup_departure_ts", "Left pickup"},
+                            {"dropoff_arrival_ts", "Arrived at dropoff"},
+                            {"walking_confirmed_ts", "Walking confirmed"},
+                            {"trip_end_ts", "Trip ended"},
+                    };
+                    for (String[] entry : clockLabels) {
+                        if (!phaseTimestamps.isNull(entry[0])) {
+                            long tsMs = (long) (phaseTimestamps.optDouble(entry[0], 0) * 1000);
+                            body.append("   ").append(entry[1]).append(": ")
+                                    .append(clockFormat.format(new java.util.Date(tsMs))).append("\n");
+                        }
+                    }
+                    body.append("\n");
+                }
 
                 // Same phases as a share of this trip's total elapsed time
                 // (end_time - start_time) -- shows which phase actually ate

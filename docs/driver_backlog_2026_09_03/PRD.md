@@ -339,13 +339,12 @@ analysis plus new UI.
       corrected here rather than duplicating working code. Distinct from
       #6, which is the historical accepted-vs-declined comparison, not
       the live per-offer badge.
-- [ ] **#26 - improve report formatting for readability.** SIZE
-      DEPENDS ON THE OPEN QUESTION IN §3 (which report). Some formatting
-      infrastructure already exists (`_format_table`,
-      `drive_monitor.py:4162`, used by `export_full_report`) - this
-      isn't starting from zero for at least the diagnostic-export case.
-      **Blocked on the driver naming which specific report/screen
-      before sizing.**
+- [x] **#26 - improve report formatting for readability.** RESOLVED
+      (2026-09-03) - driver named Trip History and Address Book, plus a
+      real accuracy concern ("some don't look accurate") on the "Where
+      The Time Went" breakdown, and asked for more Address Book detail
+      (avg $/km, avg $/hr, avg Smart Score + standard deviation). See §16
+      for the full writeup.
 - [ ] **#29 - screen-recording-based tutorial/walkthrough to learn how
       the app works.** MEDIUM-LARGE, no existing infrastructure at all -
       no onboarding/tutorial/walkthrough system exists anywhere in this
@@ -634,5 +633,148 @@ pure-Python logic, code review plus brace/paren balance for Java.
       re-announcing every 30s until tapped; approaching a dropoff within
       50m (not 500m) triggers the instruction read; the overlay's tap
       target correctly stops the repeat both times
+- [ ] Driver sign-off.
+
+## 12. #17 resolved (2026-09-03) - see §3/§4/§5's own inline updates
+
+Driver confirmed reading (b) - see §3's struck-through entry for the
+full writeup. No separate section here; the resolution is documented
+directly at each place #17 was originally tracked, per this PRD's own
+convention for the other two open questions.
+
+## 13. #26 resolved (2026-09-03): Trip History time-detail + Address Book rate/score stats
+
+Driver named both remaining screens (Trip History, Address Book) and,
+while answering, raised a real accuracy concern: "I want to see all
+details of where the time went as some don't look accurate." Asked a
+direct follow-up (not guessed) - was this on stacked/batch-order trips
+(where a known, already-documented bug exists,
+`docs/deadhead_stacked_order_baseline/PRD.md` Part 2B) or single-order
+trips (which would need fresh root-causing)? Driver answered "both /
+not sure."
+
+### 13.1 Design decision: give full detail rather than guess at a fix
+
+Given "both/not sure," guessing which specific number is wrong (and for
+which reason) would risk exactly what this PRD's own P4 premortem
+warns against - building the wrong thing. Instead, implemented the
+literal ask ("I want to see all details") in a way that also serves as
+the diagnostic tool needed to eventually pin down which case is real:
+
+1. **Raw phase clock-times added alongside the existing durations.**
+   `_build_trip_summary_dict` now also returns `phase_timestamps`
+   (trip start, pickup arrival/departure, dropoff arrival, walking
+   confirmed, trip end - each included only if actually captured, same
+   "omit rather than guess" rule the existing `phase_breakdown` already
+   follows). `TripHistoryActivity` shows these as real clock times
+   ("Arrived at pickup: 2:03:14 PM") under a new "Full time detail"
+   block, so a duration that looks wrong can actually be checked against
+   the two real moments it's computed from, instead of being taken on
+   faith.
+2. **Stacked-order trips are now flagged, not silently trusted.** New
+   `job_count` (count of `offer_distance_accuracy` rows for the trip -
+   already one-row-per-job since Part 2A of the deadhead PRD) is
+   returned alongside `phase_timestamps`. When `job_count > 1`, the
+   "Where The Time Went" section now shows an explicit warning that the
+   breakdown may mix timestamps from different jobs, linking the
+   already-known Part 2B limitation directly to the trip it actually
+   affects, rather than leaving every driver to independently rediscover
+   this from a PRD file. This directly serves both halves of "both/not
+   sure": for a flagged (stacked) trip, the driver now knows why a
+   number might be off; for an unflagged (single-order) trip, a real
+   accuracy problem can now be pinpointed by looking at the actual raw
+   times side by side with the driver's own memory of the delivery -
+   which is real evidence this PRD's own discipline requires before
+   attempting a fix.
+
+**Not attempted here, and explicitly not guessed at**: fixing the
+underlying Part 2B stacked-order linkage bug itself. That remains
+blocked on the same real evidence `docs/deadhead_stacked_order_
+baseline/PRD.md` §7.6.3 already asks for (a real stacked-order dropoff
+screenshot) - this pass makes the problem visible and diagnosable, not
+solved.
+
+### 13.2 Address Book: avg $/km, avg $/hr, avg Smart Score + stdev
+
+Driver asked for these three specifically. Added to `get_address_book()`
+per restaurant, reading from `offer_outcomes` (the same table
+`get_restaurant_visit_history` and the Rejected Offers Report's own
+`rate_comparison` already use):
+
+- **Scope decision, disclosed rather than assumed**: all three new
+  fields are computed across ANY offer outcome (accepted, declined,
+  timed out), not accepted-only - matching `get_restaurant_visit_history`'s
+  own already-shipped definition of "visit" for this exact restaurant
+  grouping, rather than inventing a second, differently-scoped meaning
+  of "restaurant average" elsewhere in the same screen. (The existing
+  wait-time/deadhead fields on this same screen stay accepted-only, since
+  those can only ever be measured for a completed delivery - a real,
+  structural difference, not an inconsistency.)
+- $/km and $/hr reuse the same exclusion rules the Rejected Offers
+  Report's `rate_comparison` already established: missing payout,
+  zero/missing distance (would divide by zero), missing hourly_rate -
+  each metric's sample count is independent, so a restaurant with a
+  zero-distance outlier row still gets a correct $/hr and Smart Score
+  average, just an excluded $/km one.
+- New shared `_sample_stdev()` helper (module-level, next to
+  `haversine_meters`) - `get_restaurant_visit_history`'s existing inline
+  stdev calculation was refactored to use it too, rather than having two
+  copies of the same formula in the same file.
+
+### 13.3 Verification
+
+Same disclosed limitation as every Java-side change in this repo - no
+Android SDK/emulator/device, code review plus brace/paren balance for
+Java; real, runnable Python tests for the pure-Python logic.
+
+- `drive_monitor.py` recompiles cleanly.
+- `TripHistoryActivity.java` brace/paren balance: 144/144 braces,
+  921/921 parens.
+- Real Python test (`test_address_book_rates_and_time_detail.py`, 3
+  cases, all passed): known $/km/$/hr/Smart-Score averages computed
+  correctly with a zero-distance row correctly excluded from $/km only
+  (not the other two metrics) and a test-data row excluded from all
+  three; a restaurant with zero `offer_outcomes` rows returns `None`
+  fields rather than crashing or fabricating a number;
+  `get_restaurant_visit_history` re-verified unaffected by the
+  `_sample_stdev` refactor.
+- Real Python test (`test_trip_summary_job_count_phase_timestamps.py`,
+  3 cases, all passed): a single-order trip returns `job_count: 1` and
+  all 6 raw phase timestamps; a synthetic 2-job trip returns
+  `job_count: 2`; an older trip with no phase capture points returns
+  only `trip_start_ts`/`trip_end_ts` (not fabricated intermediate
+  values) and `job_count: 0`.
+- Re-ran every existing scratchpad test touching the changed functions
+  (`test_restaurant_visit_history.py`, `test_feedback_dialog_phase_
+  timings.py`, `test_rate_comparison.py`, `test_hotspot_or_home.py`,
+  and the full existing suite) - no regressions. One pre-existing,
+  already-stale scratch test
+  (`test_dropoff_instruction_wiring.py`, calling `_check_
+  approach_instruction`'s OLD pre-#4-fix signature) fails, but that
+  predates this pass entirely (the #4 fix's own real test,
+  `test_instruction_read_radius.py`, already covers the current
+  signature and passes) - not a regression from this change.
+
+## 14. Success criteria for §13
+
+- [x] Driver named both screens (Trip History, Address Book) and
+      clarified the accuracy concern applies to both stacked and
+      single-order trips ("both/not sure")
+- [x] Raw phase clock-times (`phase_timestamps`) added, shown as a new
+      "Full time detail" block in Trip History
+- [x] Stacked-order trips (`job_count > 1`) now show an explicit warning
+      linking to the known, already-documented Part 2B limitation
+      instead of silently presenting a possibly-mixed number
+- [x] Address Book: avg $/km, avg $/hr, avg Smart Score + stdev added
+      per restaurant, with disclosed scope decision (any outcome, not
+      accepted-only) and reused exclusion rules
+- [x] Shared `_sample_stdev()` helper extracted, `get_restaurant_visit_
+      history` refactored to use it (no duplicate formula)
+- [x] Real Python tests written and run for both changes - no
+      regressions in the existing suite
+- [ ] Driver confirms in real use: the new "Full time detail" block
+      helps identify which specific number(s) looked wrong (this is the
+      real next step toward actually fixing whatever's inaccurate, not
+      the fix itself)
 - [ ] Driver sign-off.
 
