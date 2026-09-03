@@ -426,3 +426,74 @@ Remaining PRD §12 boxes: driver confirmation (a >5-minute trip with
 recording on produces multiple playable files; a real or forced crash
 mid-trip leaves only the current segment missing, not the whole trip)
 and driver sign-off.
+
+## §13 fix (2026-09-03): recording never actually started since §9's own fix - self-correcting course
+
+A third real diagnostic log (`dasher_monitor_full_history17.txt`),
+covering a fresh install/rebuild, showed recording failing on its one
+genuine attempt (consent actually held) - and that was the very FIRST
+attempt, on a token granted moments earlier, never previously used.
+Grepped the whole multi-day log for "Started recording" - zero matches.
+§9's fix, which stopped a real crash, had silently broken recording
+entirely as a side effect nobody caught, because the new failure mode
+degrades gracefully (logged, not crashed) and §9/§10's own verification
+only checked "does it still crash," never "does it actually record" -
+there being no device here to check the latter directly either way.
+
+**Root cause**: §9 reordered `acquireProjection()` (`getMediaProjection()`)
+to run BEFORE `startForegroundWithRecording()` (the foreground-service
+type declaration), on the documented assumption that
+`getMediaProjection()` has no foreground-service-type precondition.
+This new log disproves that: `getMediaProjection()` accepted the call
+without complaint (no exception from `acquireProjection()`, which has
+its own distinct failure-reason text), but the resulting `MediaProjection`
+object was rejected LATER, at `beginCapture()`'s `createVirtualDisplay()`
+call, with "Media projections require a foreground service of type
+ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION" - exactly matching
+the log. Android's real requirement (API 34+) is the type declaration
+BEFORE `getMediaProjection()`, not after - the opposite of §9's order.
+
+**Fix**: reversed the order in `TripForegroundService.startTracking()`
+back to type-declaration-first, but NOT a plain revert to pre-§9 code
+(which would reintroduce the original crash). `startForegroundWithRecording()`
+itself changed from `void` to `boolean`, wrapped in its own
+`try/catch (SecurityException)` - so a stale/rejected consent token is
+now caught right where the original crash happened, independent of call
+order. Recording setup now runs: type declaration (fallible) ->
+`acquireProjection()` -> `beginCapture()`, with a fallback to
+`startForegroundLocationOnly()` if anything after the type declaration
+fails, so the service doesn't stay mismatched-typed for a trip that
+isn't actually recording. Both `ScreenRecordingController`'s class doc
+and `acquireProjection()`'s own doc rewritten to describe the corrected
+order and cite both real diagnostic logs that shaped it, rather than
+leaving the previous (now-wrong) reasoning in place as if it still held.
+
+**Self-caught cleanup during the edit**: the first pass of this change
+left a dead, unused duplicate of the old `startForegroundWithRecording()`
+body sitting right below the new one (a copy-paste artifact from
+rewriting the method in place) - caught on re-read before verifying
+brace/paren balance, removed.
+
+**Honest framing, disclosed directly in PRD §13.4**: this is the THIRD
+real-diagnostic-log-driven iteration on this exact subsystem this
+session, and the second time a "fix" here has needed correcting by a
+subsequent real log. No Android SDK/emulator/device exists in this
+environment at any point across all three passes - every conclusion is
+inferred from real exception text and log sequencing, not from running
+the code. Going forward, "doesn't crash" and "actually produces a
+playable recording" are treated as two separate claims needing separate
+confirmation, not one - the gap between them is exactly what caused
+this regression to go unnoticed.
+
+**Verification**: same disclosed limitation as the rest of this PRD -
+code review plus static checks. Brace/paren balance:
+`TripForegroundService.java` 188/188 braces, 853/853 parens;
+`ScreenRecordingController.java` 74/74 braces, 294/294 parens. Confirmed
+the single call site of `startForegroundWithRecording()` uses its new
+boolean return correctly; confirmed no other caller of the old `void`
+signature exists anywhere in the codebase.
+
+Remaining PRD §14 boxes: driver confirms an ACTUAL PLAYABLE recording
+file is produced on the next trip with recording enabled (not just "no
+crash," which is the exact insufficient claim §9/§10 made), and driver
+sign-off.
