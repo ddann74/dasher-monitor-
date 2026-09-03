@@ -629,4 +629,77 @@ public final class OverlayHelper {
             navigationIconView = null;
         }
     }
+
+    private static View hotspotOrHomeIconView;
+
+    /**
+     * docs/hotspot_or_home_routing/PRD.md -- same "shown once trip goes
+     * idle, tap to navigate, stays until tapped" shape as
+     * showReturnToSweetSpotIcon, but a SEPARATE overlay slot (own static
+     * view field) so the two never collide, and Java decides which of
+     * the two to call rather than this class deciding. Visually distinct
+     * per destination -- a house emoji for "home" would be actively
+     * misleading for a hotspot suggestion, so "hotspot" gets the same
+     * fire emoji already used for this exact concept in the Address Book
+     * text (driver backlog #5).
+     */
+    public static void showHotspotOrHomeIcon(Context context, String destination, Runnable onTapAction) {
+        if (!hasPermission(context)) {
+            return;
+        }
+        Context appContext = context.getApplicationContext();
+        WindowManager windowManager =
+                (WindowManager) appContext.getSystemService(Context.WINDOW_SERVICE);
+        if (windowManager == null) {
+            return;
+        }
+        clearHotspotOrHomeIcon(context);
+
+        TextView icon = new TextView(appContext);
+        icon.setText("home".equals(destination) ? "🏠" : "🔥"); // house vs. fire
+        icon.setTextSize(20f);
+        icon.setGravity(Gravity.CENTER);
+
+        GradientDrawable shape = new GradientDrawable();
+        shape.setShape(GradientDrawable.OVAL);
+        shape.setColor(Color.parseColor("#E6EF6C00")); // distinct orange -- not the sweet-spot green or RoadWarrior blue
+        icon.setBackground(shape);
+        icon.setOnClickListener(v -> onTapAction.run());
+
+        int sizePx = (int) (48 * appContext.getResources().getDisplayMetrics().density);
+
+        int overlayType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                : WindowManager.LayoutParams.TYPE_PHONE;
+
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                sizePx, sizePx, overlayType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT);
+        // Own corner (BOTTOM|START) -- showReturnToSweetSpotIcon already
+        // occupies BOTTOM|END at this same y-offset, and the two are
+        // mutually exclusive per trigger anyway (see TripForegroundService's
+        // call site), but keeping distinct positions avoids any visual
+        // overlap if that ever changes.
+        params.gravity = Gravity.BOTTOM | Gravity.START;
+        params.x = 24;
+        params.y = 220;
+
+        windowManager.addView(icon, params);
+        hotspotOrHomeIconView = icon;
+    }
+
+    public static void clearHotspotOrHomeIcon(Context context) {
+        Context appContext = context.getApplicationContext();
+        WindowManager windowManager =
+                (WindowManager) appContext.getSystemService(Context.WINDOW_SERVICE);
+        if (windowManager != null && hotspotOrHomeIconView != null) {
+            try {
+                windowManager.removeView(hotspotOrHomeIconView);
+            } catch (IllegalArgumentException ignored) {
+                // View was already removed.
+            }
+            hotspotOrHomeIconView = null;
+        }
+    }
 }

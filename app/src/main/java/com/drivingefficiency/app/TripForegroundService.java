@@ -1266,24 +1266,56 @@ public class TripForegroundService extends Service {
                 // other state change, and not per-stop within a batch.
                 if ("TRIP_ACTIVE".equals(lastKnownTripState) && "IDLE".equals(tripState)
                         && TripForegroundService.hasValidLocation) {
-                    try {
-                        JSONObject check = new JSONObject(engine.callAttr("check_show_return_to_sweet_spot",
-                                TripForegroundService.lastKnownLat, TripForegroundService.lastKnownLon).toString());
-                        if (check.optBoolean("should_show", false)) {
-                            double sweetSpotLat = check.optDouble("lat", 0);
-                            double sweetSpotLon = check.optDouble("lon", 0);
-                            // Waze specifically, not RoadWarrior -- per
-                            // explicit request, RoadWarrior stays
-                            // exclusively for pinpointing the actual
-                            // delivery address.
-                            OverlayHelper.showReturnToSweetSpotIcon(this, () ->
-                                    NavigationHelper.openAddressWithWaze(this, sweetSpotLat, sweetSpotLon));
-                            logDiagnostic("SWEET_SPOT", "Showing return-to-sweet-spot icon -- "
-                                    + check.optDouble("distance_km", 0) + " km from usual pickup zone");
+                    // docs/hotspot_or_home_routing/PRD.md: once the driver
+                    // has configured BOTH a home address and a rate
+                    // threshold, this SAME trigger moment uses the new
+                    // combined hotspot-or-home decision instead of the
+                    // plain sweet-spot-only suggestion below. Until then,
+                    // the original check runs completely unchanged -- a
+                    // driver who never sets this up sees zero behavior
+                    // change.
+                    if (ShiftRoutingPrefs.isConfigured(this)) {
+                        try {
+                            double[] home = ShiftRoutingPrefs.getHomeLatLon(this);
+                            JSONObject check = new JSONObject(engine.callAttr(
+                                    "check_show_hotspot_or_home_suggestion",
+                                    TripForegroundService.lastKnownLat, TripForegroundService.lastKnownLon,
+                                    home[0], home[1], ShiftRoutingPrefs.getThreshold(this)).toString());
+                            if (check.optBoolean("should_show", false)) {
+                                String destination = check.optString("destination", "hotspot");
+                                double targetLat = check.optDouble("lat", 0);
+                                double targetLon = check.optDouble("lon", 0);
+                                OverlayHelper.showHotspotOrHomeIcon(this, destination, () ->
+                                        NavigationHelper.openAddressWithWaze(this, targetLat, targetLon));
+                                logDiagnostic("SHIFT_ROUTING", "Showing " + destination + " suggestion -- "
+                                        + "rate $" + check.optDouble("rate", 0) + "/hr vs threshold $"
+                                        + check.optDouble("threshold", 0) + "/hr, "
+                                        + check.optDouble("distance_km", 0) + " km away");
+                            }
+                        } catch (JSONException | RuntimeException e) {
+                            logDiagnostic("ERROR", "check_show_hotspot_or_home_suggestion exception: "
+                                    + android.util.Log.getStackTraceString(e));
                         }
-                    } catch (JSONException | RuntimeException e) {
-                        logDiagnostic("ERROR", "check_show_return_to_sweet_spot exception: "
-                                + android.util.Log.getStackTraceString(e));
+                    } else {
+                        try {
+                            JSONObject check = new JSONObject(engine.callAttr("check_show_return_to_sweet_spot",
+                                    TripForegroundService.lastKnownLat, TripForegroundService.lastKnownLon).toString());
+                            if (check.optBoolean("should_show", false)) {
+                                double sweetSpotLat = check.optDouble("lat", 0);
+                                double sweetSpotLon = check.optDouble("lon", 0);
+                                // Waze specifically, not RoadWarrior -- per
+                                // explicit request, RoadWarrior stays
+                                // exclusively for pinpointing the actual
+                                // delivery address.
+                                OverlayHelper.showReturnToSweetSpotIcon(this, () ->
+                                        NavigationHelper.openAddressWithWaze(this, sweetSpotLat, sweetSpotLon));
+                                logDiagnostic("SWEET_SPOT", "Showing return-to-sweet-spot icon -- "
+                                        + check.optDouble("distance_km", 0) + " km from usual pickup zone");
+                            }
+                        } catch (JSONException | RuntimeException e) {
+                            logDiagnostic("ERROR", "check_show_return_to_sweet_spot exception: "
+                                    + android.util.Log.getStackTraceString(e));
+                        }
                     }
                 }
 

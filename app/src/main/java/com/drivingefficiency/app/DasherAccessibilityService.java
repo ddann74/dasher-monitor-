@@ -79,6 +79,7 @@ public class DasherAccessibilityService extends AccessibilityService {
     private double lastSeenDistanceKm = -1;
     private double lastSeenSmartScore = -1;
     private String lastSeenComponentsJson = null;
+    private double lastSeenHourlyRate = -1;
 
     // Grace period before committing a timeout -- Android doesn't
     // strictly guarantee that a TYPE_VIEW_CLICKED event for a tap always
@@ -380,7 +381,8 @@ public class DasherAccessibilityService extends AccessibilityService {
         }
         try {
             engine.callAttr("record_offer_outcome", lastSeenRestaurantName, lastSeenPayout,
-                    lastSeenDistanceKm, lastSeenSmartScore, accepted, lastSeenComponentsJson);
+                    lastSeenDistanceKm, lastSeenSmartScore, accepted, lastSeenComponentsJson,
+                    false, lastSeenHourlyRate >= 0 ? (Double) lastSeenHourlyRate : null);
             logDiagnostic("OUTCOME", (accepted ? "Accepted: " : "Declined: ") + lastSeenRestaurantName
                     + " (score " + Math.round(lastSeenSmartScore) + ")");
             engine.callAttr("clear_pending_offer_recovery");
@@ -839,13 +841,15 @@ public class DasherAccessibilityService extends AccessibilityService {
                     final double snapshotDistanceKm = lastSeenDistanceKm;
                     final double snapshotSmartScore = lastSeenSmartScore;
                     final String snapshotComponentsJson = lastSeenComponentsJson;
+                    final Double snapshotHourlyRate = lastSeenHourlyRate >= 0 ? (Double) lastSeenHourlyRate : null;
                     if (pendingTimeoutRunnable != null) {
                         timeoutHandler.removeCallbacks(pendingTimeoutRunnable);
                     }
                     pendingTimeoutRunnable = () -> {
                         try {
                             engine.callAttr("record_offer_timeout", snapshotRestaurantName,
-                                    snapshotPayout, snapshotDistanceKm, snapshotSmartScore, snapshotComponentsJson);
+                                    snapshotPayout, snapshotDistanceKm, snapshotSmartScore, snapshotComponentsJson,
+                                    false, snapshotHourlyRate);
                             logDiagnostic("OUTCOME", "Timed out (no tap detected): " + snapshotRestaurantName);
                             engine.callAttr("clear_pending_offer_recovery");
                         } catch (RuntimeException e) { // covers PyException too
@@ -957,6 +961,12 @@ public class DasherAccessibilityService extends AccessibilityService {
                 lastSeenSmartScore = finalScore;
                 JSONObject componentsObj = score.optJSONObject("components");
                 lastSeenComponentsJson = componentsObj != null ? componentsObj.toString() : null;
+                // docs/hotspot_or_home_routing/PRD.md -- the dollar $/hr
+                // figure (perHr, already computed above for the live
+                // badge), not the 0-100 sub-score already captured in
+                // lastSeenComponentsJson. Never persisted anywhere before
+                // this feature needed it.
+                lastSeenHourlyRate = perHr;
 
                 // CONFIRMED via a deliberate real test (two genuine
                 // declines, zero click events captured across the whole
