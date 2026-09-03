@@ -42,3 +42,26 @@ braces, 1004/1004 parens. XML re-validated well-formed. Re-ran the full
 existing scratchpad test suite - no regressions.
 
 PRD.md §4 boxes checked except driver confirmation/sign-off.
+
+## Self-caught bug fixed (2026-09-03): empty-state check never actually fired
+
+Driver asked a real follow-up question ("what if I don't work for
+several weeks") that prompted re-tracing the code rather than just
+answering from memory. Multi-week gaps themselves are handled
+correctly (each week is independent, a gap week contributes zero ROWS
+to an average, not zero-dollar rows, and the trend comparison is
+correctly withheld if a gap drops either half below the minimum sample
+count) - but tracing it surfaced a real, separate bug: `showPayTrend()`'s
+empty-state check was `weekly.length() == 0`, but `get_pay_trend()`
+always returns exactly 8 buckets regardless of whether any have data
+(empty weeks are included on purpose, so a gap shows as "no offers
+recorded" rather than silently vanishing) - meaning that check could
+never actually be true, even for a driver with zero offer history ever.
+Fixed: now checks whether every bucket's own `sample_count` is 0,
+rather than the array's length.
+
+**Verification**: brace/paren balance re-verified
+(`TripHistoryActivity.java`: 157/157 braces, 1011/1011 parens). No
+Python change needed - `get_pay_trend()`'s own behavior (always
+returning 8 buckets, empty ones included) was correct as designed; only
+the Java-side empty-state check was wrong.

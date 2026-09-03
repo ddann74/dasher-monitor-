@@ -676,7 +676,24 @@ public class TripHistoryActivity extends AppCompatActivity {
             try {
                 JSONObject result = new JSONObject(engine.callAttr("get_pay_trend").toString());
                 JSONArray weekly = result.optJSONArray("weekly");
-                if (weekly == null || weekly.length() == 0) {
+                // Self-caught bug: get_pay_trend() always returns exactly
+                // 8 weekly buckets (empty ones included, so a gap week
+                // shows "no offers recorded" rather than silently
+                // vanishing) -- so `weekly` is never actually null/empty,
+                // even for a driver with zero offer history ever. Checking
+                // array LENGTH here never caught that case; checking
+                // whether every bucket's own sample_count is 0 does.
+                boolean hasAnyData = false;
+                if (weekly != null) {
+                    for (int i = 0; i < weekly.length(); i++) {
+                        JSONObject w = weekly.optJSONObject(i);
+                        if (w != null && w.optInt("sample_count", 0) > 0) {
+                            hasAnyData = true;
+                            break;
+                        }
+                    }
+                }
+                if (!hasAnyData) {
                     new AlertDialog.Builder(this)
                             .setTitle("Pay Trend")
                             .setMessage("No offer history recorded yet.")
