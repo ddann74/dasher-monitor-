@@ -99,6 +99,15 @@ PARKING_DIFFICULTY_MIN_SAMPLES = 3
 PICKUP_SWEET_SPOT_GRID_DECIMALS = 2
 PICKUP_SWEET_SPOT_MIN_SAMPLES = 15
 
+# Driver backlog #5 (docs/driver_backlog_2026_09_03/PRD.md): "suggested
+# hotspot based on the last 5 deliveries" -- a genuinely different,
+# complementary signal from the all-history sweet spot above ("busiest
+# LATELY" vs. "busiest OVERALL"). A much smaller min-samples threshold
+# than the all-history version, deliberately -- the window itself is
+# capped at 5, so requiring 15 would make this permanently unusable.
+RECENT_HOTSPOT_WINDOW = 5
+RECENT_HOTSPOT_MIN_SAMPLES = 3
+
 # Reasonable starting default for "far enough from your usual hotspot to
 # plausibly be in unfamiliar territory" -- adjustable if 2km turns out
 # too sensitive or not sensitive enough in practice.
@@ -406,7 +415,8 @@ class Database:
             outcome TEXT DEFAULT 'accepted',
             timestamp INTEGER,
             components_json TEXT,
-            is_test_data INTEGER DEFAULT 0
+            is_test_data INTEGER DEFAULT 0,
+            omitted_from_calibration INTEGER DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS personal_calibration (
@@ -455,6 +465,19 @@ class Database:
                 UPDATE offer_outcomes SET is_test_data = 1
                 WHERE restaurant_name IN ('Test Accepted Place', 'Test Declined Place', 'Test Timed Out Place')
             """)
+            self.conn.commit()
+
+        # Driver backlog #2 (docs/driver_backlog_2026_09_03/PRD.md):
+        # "give me the option to omit or include each offer" from what
+        # recalculate_personal_calibration learns from. Deliberately a
+        # SEPARATE column from is_test_data, not a reuse of it -- that
+        # flag means something different (auto-set by Developer Testing,
+        # never driver-controlled) and conflating "this was test data"
+        # with "I chose to exclude this real offer" would misrepresent
+        # both. Same ALTER TABLE migration pattern as is_test_data above.
+        if "omitted_from_calibration" not in existing_columns:
+            self.conn.execute(
+                "ALTER TABLE offer_outcomes ADD COLUMN omitted_from_calibration INTEGER DEFAULT 0")
             self.conn.commit()
 
         # Migration for databases that already existed before phase-timing
@@ -1155,10 +1178,14 @@ class SmartScoreEngine:
         # an active decline, since the driver forfeits real earned pay
         # specifically to escape it. No new branch needed below: anything
         # in this filtered set that isn't "accepted" already maps to 0.0.
+        # omitted_from_calibration (driver backlog #2) honored here --
+        # the driver's own per-offer choice to exclude a real offer from
+        # what this function learns from, separate from is_test_data.
         outcome_rows = self.db.conn.execute("""
             SELECT outcome, components_json FROM offer_outcomes
             WHERE components_json IS NOT NULL
                 AND outcome IN ('accepted', 'declined', 'unassigned_long_wait') AND is_test_data = 0
+                AND omitted_from_calibration = 0
         """).fetchall()
         for row in outcome_rows:
             try:
@@ -3429,25 +3456,25 @@ class DriveMonitorEngine:
         """, (restaurant_name, lat, lon, time.time()))
         self.db.conn.commit()
 
-    def get_pickup_sweet_spot_zone(self):
+    def _best_zone_from_pickup_rows(self, rows, min_samples):
         """
-        Finds your real, most-frequent pickup zone -- reuses the same
-        ~1.1km grid rounding already proven in zone-based traffic-risk
-        learning, rather than a raw geographic average of all pickup
-        locations (which could suggest a nonsensical midpoint if your
-        real pickups are spread out and not actually clustered anywhere
-        in particular). Gated on PICKUP_SWEET_SPOT_MIN_SAMPLES -- with
-        less real history than that, there's genuinely not enough
-        evidence yet to suggest anywhere with any confidence.
+        Shared zone-grid-frequency logic behind get_pickup_sweet_spot_zone
+        (all-history) and get_recent_pickup_hotspot (last N only, driver
+        backlog #5, docs/driver_backlog_2026_09_03/PRD.md) -- factored out
+        so the two don't drift into subtly different logic over time.
+        Reuses the same ~1.1km grid rounding already proven in zone-based
+        traffic-risk learning, rather than a raw geographic average of all
+        pickup locations (which could suggest a nonsensical midpoint if
+        real pickups are spread out and not actually clustered anywhere in
+        particular). Gated on min_samples -- with less real history (or a
+        smaller window) than that, there's genuinely not enough evidence
+        yet to suggest anywhere with any confidence.
         """
-        rows = self.db.conn.execute(
-            "SELECT lat, lon FROM pickup_location_history"
-        ).fetchall()
-        if len(rows) < PICKUP_SWEET_SPOT_MIN_SAMPLES:
-            return json.dumps({
+        if len(rows) < min_samples:
+            return {
                 "has_suggestion": False, "sample_count": len(rows),
-                "min_required": PICKUP_SWEET_SPOT_MIN_SAMPLES,
-            })
+                "min_required": min_samples,
+            }
 
         zone_counts = {}
         zone_coords = {}
@@ -3466,12 +3493,34 @@ class DriveMonitorEngine:
         avg_lat = sum(c[0] for c in coords_in_zone) / len(coords_in_zone)
         avg_lon = sum(c[1] for c in coords_in_zone) / len(coords_in_zone)
 
-        return json.dumps({
+        return {
             "has_suggestion": True,
             "lat": round(avg_lat, 5), "lon": round(avg_lon, 5),
             "zone_sample_count": best_count, "total_sample_count": len(rows),
             "pct_of_total": round(100.0 * best_count / len(rows), 1),
-        })
+        }
+
+    def get_pickup_sweet_spot_zone(self):
+        """Finds your real, most-frequent pickup zone across ALL history -- see _best_zone_from_pickup_rows."""
+        rows = self.db.conn.execute(
+            "SELECT lat, lon FROM pickup_location_history"
+        ).fetchall()
+        return json.dumps(self._best_zone_from_pickup_rows(rows, PICKUP_SWEET_SPOT_MIN_SAMPLES))
+
+    def get_recent_pickup_hotspot(self):
+        """
+        Driver backlog #5: "suggested hotspot based on the last 5
+        deliveries...weighted geopositionally on the quantity of
+        offers." Same underlying logic as get_pickup_sweet_spot_zone,
+        restricted to the RECENT_HOTSPOT_WINDOW most recent pickups --
+        "where's been busiest LATELY," a genuinely different question
+        from that function's "busiest OVERALL."
+        """
+        rows = self.db.conn.execute(
+            "SELECT lat, lon FROM pickup_location_history ORDER BY timestamp DESC LIMIT ?",
+            (RECENT_HOTSPOT_WINDOW,),
+        ).fetchall()
+        return json.dumps(self._best_zone_from_pickup_rows(rows, RECENT_HOTSPOT_MIN_SAMPLES))
 
     def check_show_return_to_sweet_spot(self, lat, lon):
         """
@@ -4147,6 +4196,38 @@ class DriveMonitorEngine:
 
         return json.dumps({"entries": entries, "comparison": comparison, "rate_comparison": rate_comparison})
 
+    def get_calibration_offers_list(self, limit=100):
+        """
+        Driver backlog #2 (docs/driver_backlog_2026_09_03/PRD.md):
+        "give me the option to omit or include each offer" from what
+        recalculate_personal_calibration learns from. Lists every
+        real (is_test_data = 0) offer -- accepted, declined, timed out,
+        unassigned-long-wait, whatever outcome -- most recent first,
+        with its current omitted_from_calibration state, so the driver
+        can review and toggle each one.
+        """
+        rows = self.db.conn.execute("""
+            SELECT id, restaurant_name, payout, distance_km, outcome, timestamp, omitted_from_calibration
+            FROM offer_outcomes WHERE is_test_data = 0
+            ORDER BY timestamp DESC LIMIT ?
+        """, (limit,)).fetchall()
+        return json.dumps({"offers": [{
+            "id": row["id"],
+            "restaurant_name": row["restaurant_name"],
+            "payout": row["payout"],
+            "distance_km": row["distance_km"],
+            "outcome": row["outcome"],
+            "timestamp": row["timestamp"],
+            "omitted": bool(row["omitted_from_calibration"]),
+        } for row in rows]})
+
+    def set_offer_omitted_from_calibration(self, offer_id, omitted):
+        """Driver backlog #2 -- toggles one offer's omitted_from_calibration flag."""
+        self.db.conn.execute(
+            "UPDATE offer_outcomes SET omitted_from_calibration = ? WHERE id = ?",
+            (int(bool(omitted)), offer_id))
+        self.db.conn.commit()
+
     def export_trips_csv(self):
         """
         Returns CSV text (as a plain string -- Java writes it to an
@@ -4402,6 +4483,67 @@ class DriveMonitorEngine:
                 "parking_difficulty_samples": parking.get("sample_count", 0),
             })
         return json.dumps({"entries": entries})
+
+    RESTAURANT_VISIT_HISTORY_LIMIT = 10
+
+    def get_restaurant_visit_history(self, restaurant_name):
+        """
+        Driver backlog #7 (docs/driver_backlog_2026_09_03/PRD.md): "for
+        each restaurant populated, show a breakdown of the last 10
+        visits with dates times and ratings including average and
+        standard deviation."
+
+        HONEST GAP, found while implementing this (not assumed away):
+        driver-given trip ratings (trip_feedback.overall_rating/rating)
+        are keyed by trip_id, and `trips` has no restaurant_name or any
+        other reliable key back to a specific offer_outcomes row --
+        confirmed by reading SmartScoreEngine.calculate()'s own returned
+        dict, which doesn't include restaurant_name either, so even
+        `trips.offer_score_snapshot_json` can't be used to recover it.
+        There is currently no reliable way to join a driver's star
+        rating to "which restaurant was this visit for." A fragile
+        timestamp-proximity match was considered and rejected -- it
+        could silently attribute the wrong rating to the wrong
+        restaurant, worse than not showing one. Uses each visit's own
+        recorded Smart Score instead (always available, per offer,
+        genuinely tied to this restaurant) and labels it clearly as
+        that, not as "rating" -- see rating_note in the returned JSON.
+        """
+        rows = self.db.conn.execute("""
+            SELECT payout, distance_km, smart_score, outcome, timestamp
+            FROM offer_outcomes
+            WHERE restaurant_name = ? AND is_test_data = 0
+            ORDER BY timestamp DESC LIMIT ?
+        """, (restaurant_name, self.RESTAURANT_VISIT_HISTORY_LIMIT)).fetchall()
+
+        visits = [{
+            "payout": row["payout"],
+            "distance_km": row["distance_km"],
+            "smart_score": row["smart_score"],
+            "outcome": row["outcome"],
+            "timestamp": row["timestamp"],
+        } for row in rows]
+
+        scores = [v["smart_score"] for v in visits if v["smart_score"] is not None]
+        avg_score = sum(scores) / len(scores) if scores else None
+        # Sample standard deviation (n-1) -- the standard convention for
+        # a sample rather than a full population, which this always is
+        # (a fixed limit of the most recent visits, never "all visits
+        # that will ever happen"). None below 2 scores -- a stdev of a
+        # single point isn't a meaningful number, not "0".
+        stdev_score = None
+        if len(scores) >= 2:
+            variance = sum((s - avg_score) ** 2 for s in scores) / (len(scores) - 1)
+            stdev_score = variance ** 0.5
+
+        return json.dumps({
+            "restaurant_name": restaurant_name,
+            "visits": visits,
+            "avg_smart_score": round(avg_score, 1) if avg_score is not None else None,
+            "stdev_smart_score": round(stdev_score, 1) if stdev_score is not None else None,
+            "rating_note": "Driver ratings aren't currently linked to a specific "
+                            "restaurant -- shown here is each visit's own Smart Score instead.",
+        })
 
     def _build_trip_summary_dict(self, row):
         """Shared by get_last_trip_summary() and get_trip_summary_by_id()."""

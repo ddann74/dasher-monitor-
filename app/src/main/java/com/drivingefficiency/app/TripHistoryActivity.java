@@ -37,6 +37,7 @@ public class TripHistoryActivity extends AppCompatActivity {
         Button acceptanceStatsButton = findViewById(R.id.acceptanceStatsButton);
         Button personalCalibrationButton = findViewById(R.id.personalCalibrationButton);
         Button rejectedOffersReportButton = findViewById(R.id.rejectedOffersReportButton);
+        Button restaurantVisitHistoryButton = findViewById(R.id.restaurantVisitHistoryButton);
 
         viewSummaryButton.setOnClickListener(v -> showLastTripSummary());
         viewTripHistoryButton.setOnClickListener(v -> showTripHistory());
@@ -46,6 +47,7 @@ public class TripHistoryActivity extends AppCompatActivity {
         acceptanceStatsButton.setOnClickListener(v -> showAcceptanceStats());
         personalCalibrationButton.setOnClickListener(v -> showPersonalCalibration());
         rejectedOffersReportButton.setOnClickListener(v -> showRejectedOffersReport());
+        restaurantVisitHistoryButton.setOnClickListener(v -> showRestaurantChooserThenVisitHistory());
     }
 
     @Override
@@ -214,6 +216,30 @@ public class TripHistoryActivity extends AppCompatActivity {
                     // Not worth blocking the whole Address Book over this.
                 }
 
+                // Recency-windowed hotspot (driver backlog #5,
+                // docs/driver_backlog_2026_09_03/PRD.md) -- a genuinely
+                // different, complementary signal from the all-history
+                // sweet spot above ("busiest LATELY" vs. "busiest
+                // OVERALL"). Coordinates saved for the copy button below,
+                // added to the dialog only when a suggestion actually
+                // exists (nothing to copy otherwise).
+                final double[] recentHotspotCoords = {Double.NaN, Double.NaN};
+                try {
+                    JSONObject recentHotspot = new JSONObject(engine.callAttr("get_recent_pickup_hotspot").toString());
+                    if (recentHotspot.optBoolean("has_suggestion", false)) {
+                        recentHotspotCoords[0] = recentHotspot.optDouble("lat", 0);
+                        recentHotspotCoords[1] = recentHotspot.optDouble("lon", 0);
+                        body.append(String.format(
+                                "🔥 Recent hotspot (last %d pickups): %.5f, %.5f\n"
+                                + "(%d of your last %d pickups have come from this area)\n\n",
+                                recentHotspot.optInt("total_sample_count", 0),
+                                recentHotspotCoords[0], recentHotspotCoords[1],
+                                recentHotspot.optInt("zone_sample_count", 0), recentHotspot.optInt("total_sample_count", 0)));
+                    }
+                } catch (JSONException | RuntimeException e) {
+                    // Not worth blocking the whole Address Book over this.
+                }
+
                 for (int i = 0; i < entries.length(); i++) {
                     JSONObject entry = entries.optJSONObject(i);
                     if (entry == null) {
@@ -236,13 +262,116 @@ public class TripHistoryActivity extends AppCompatActivity {
                     body.append("\n");
                 }
 
-                new AlertDialog.Builder(this)
+                AlertDialog.Builder addressBookDialog = new AlertDialog.Builder(this)
                         .setTitle("Address Book")
+                        .setMessage(body.toString())
+                        .setPositiveButton("OK", null);
+                // Only offered when there's an actual coordinate to copy --
+                // driver backlog #5's own ask ("take a copy of the
+                // coordinates where I can then paste them in a
+                // navigator"), reusing this app's existing simple
+                // clipboard-copy pattern (see DiagnosticsActivity's log-copy
+                // button for the same shape).
+                if (!Double.isNaN(recentHotspotCoords[0])) {
+                    addressBookDialog.setNeutralButton("Copy Recent Hotspot", (dialog, which) -> {
+                        String coordsText = recentHotspotCoords[0] + ", " + recentHotspotCoords[1];
+                        android.content.ClipboardManager clipboard = (android.content.ClipboardManager)
+                                getSystemService(CLIPBOARD_SERVICE);
+                        if (clipboard != null) {
+                            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Recent Hotspot", coordsText));
+                            Toast.makeText(this, "Copied to clipboard: " + coordsText, Toast.LENGTH_LONG).show();
+                        }
+                    });
+                }
+                addressBookDialog.show();
+            } catch (JSONException | PyException e) {
+                Toast.makeText(this, "Could not load address book: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        }
+
+    /**
+         * Driver backlog #7 (docs/driver_backlog_2026_09_03/PRD.md): "for
+         * each restaurant populated, show a breakdown of the last 10
+         * visits." Reuses get_address_book()'s own entries as the list of
+         * known restaurant names to choose from -- no separate "list all
+         * restaurant names" query needed, that data is already fetched
+         * for the Address Book screen.
+         */
+        private void showRestaurantChooserThenVisitHistory() {
+            try {
+                JSONObject result = new JSONObject(engine.callAttr("get_address_book").toString());
+                JSONArray entries = result.optJSONArray("entries");
+                if (entries == null || entries.length() == 0) {
+                    new AlertDialog.Builder(this)
+                            .setTitle("Restaurant Visit History")
+                            .setMessage("No restaurant history yet -- this fills in as you complete "
+                                    + "real deliveries with pickup tracking.")
+                            .setPositiveButton("OK", null)
+                            .show();
+                    return;
+                }
+                String[] names = new String[entries.length()];
+                for (int i = 0; i < entries.length(); i++) {
+                    JSONObject entry = entries.optJSONObject(i);
+                    names[i] = entry == null ? "Unknown" : entry.optString("restaurant_name", "Unknown");
+                }
+                new AlertDialog.Builder(this)
+                        .setTitle("Choose a Restaurant")
+                        .setItems(names, (dialog, which) -> showRestaurantVisitHistory(names[which]))
+                        .setNegativeButton("Cancel", null)
+                        .show();
+            } catch (JSONException | PyException e) {
+                Toast.makeText(this, "Could not load restaurant list: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        }
+
+        private void showRestaurantVisitHistory(String restaurantName) {
+            try {
+                JSONObject result = new JSONObject(
+                        engine.callAttr("get_restaurant_visit_history", restaurantName).toString());
+                JSONArray visits = result.optJSONArray("visits");
+                if (visits == null || visits.length() == 0) {
+                    new AlertDialog.Builder(this)
+                            .setTitle(restaurantName)
+                            .setMessage("No real (non-test) visits recorded for this restaurant yet.")
+                            .setPositiveButton("OK", null)
+                            .show();
+                    return;
+                }
+
+                StringBuilder body = new StringBuilder();
+                if (!result.isNull("avg_smart_score")) {
+                    body.append(String.format("Avg Smart Score: %.1f", result.optDouble("avg_smart_score", 0)));
+                    if (!result.isNull("stdev_smart_score")) {
+                        body.append(String.format(" (stdev %.1f)", result.optDouble("stdev_smart_score", 0)));
+                    }
+                    body.append("\n");
+                }
+                // Honest gap disclosed directly in the dialog, not just in
+                // code comments -- driver ratings aren't currently linkable
+                // to a specific restaurant, so Smart Score is shown instead
+                // and that substitution is named plainly, not left implicit.
+                body.append(result.optString("rating_note", "")).append("\n\n");
+
+                java.text.SimpleDateFormat dateFormat =
+                        new java.text.SimpleDateFormat("MMM d, h:mm a", java.util.Locale.getDefault());
+                for (int i = 0; i < visits.length(); i++) {
+                    JSONObject v = visits.optJSONObject(i);
+                    if (v == null) continue;
+                    long tsMs = (long) (v.optDouble("timestamp", 0) * 1000);
+                    body.append(String.format("%s -- $%.2f, %.1f km, score %.0f [%s]\n",
+                            dateFormat.format(new java.util.Date(tsMs)),
+                            v.optDouble("payout", 0), v.optDouble("distance_km", 0),
+                            v.optDouble("smart_score", 0), v.optString("outcome", "")));
+                }
+
+                new AlertDialog.Builder(this)
+                        .setTitle(restaurantName + " -- Last " + visits.length() + " Visits")
                         .setMessage(body.toString())
                         .setPositiveButton("OK", null)
                         .show();
             } catch (JSONException | PyException e) {
-                Toast.makeText(this, "Could not load address book: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "Could not load visit history: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }
 
@@ -342,9 +471,66 @@ public class TripHistoryActivity extends AppCompatActivity {
                                 Toast.makeText(this, "Could not reset: " + e.getMessage(), Toast.LENGTH_LONG).show();
                             }
                         })
+                        .setNegativeButton("Edit Offers Used", (dialog, which) -> showCalibrationOffersToggle())
                         .show();
             } catch (RuntimeException | JSONException e) {
                 Toast.makeText(this, "Could not load calibration: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        }
+
+        /**
+         * Driver backlog #2 (docs/driver_backlog_2026_09_03/PRD.md):
+         * "give me the option to omit or include each offer" from what
+         * recalculate_personal_calibration learns from. A checklist --
+         * checked means included (the default for every offer), unchecked
+         * means omitted. Each toggle is persisted immediately via
+         * set_offer_omitted_from_calibration, not batched behind a
+         * separate "Save" step -- matches this screen's own "Reset to
+         * Base Weights" button, which also acts immediately.
+         */
+        private void showCalibrationOffersToggle() {
+            try {
+                JSONObject result = new JSONObject(engine.callAttr("get_calibration_offers_list").toString());
+                JSONArray offers = result.optJSONArray("offers");
+                if (offers == null || offers.length() == 0) {
+                    new AlertDialog.Builder(this)
+                            .setTitle("Edit Offers Used")
+                            .setMessage("No real (non-test) offers recorded yet.")
+                            .setPositiveButton("OK", null)
+                            .show();
+                    return;
+                }
+
+                String[] labels = new String[offers.length()];
+                int[] offerIds = new int[offers.length()];
+                boolean[] checked = new boolean[offers.length()];
+                java.text.SimpleDateFormat dateFormat =
+                        new java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault());
+                for (int i = 0; i < offers.length(); i++) {
+                    JSONObject o = offers.optJSONObject(i);
+                    offerIds[i] = o.optInt("id", -1);
+                    checked[i] = !o.optBoolean("omitted", false);
+                    long tsMs = (long) (o.optDouble("timestamp", 0) * 1000);
+                    labels[i] = String.format("%s -- %s -- $%.2f, %.1f km [%s]",
+                            dateFormat.format(new java.util.Date(tsMs)),
+                            o.optString("restaurant_name", "Unknown"),
+                            o.optDouble("payout", 0), o.optDouble("distance_km", 0),
+                            o.optString("outcome", ""));
+                }
+
+                new AlertDialog.Builder(this)
+                        .setTitle("Edit Offers Used (checked = included)")
+                        .setMultiChoiceItems(labels, checked, (dialog, which, isChecked) -> {
+                            try {
+                                engine.callAttr("set_offer_omitted_from_calibration", offerIds[which], !isChecked);
+                            } catch (RuntimeException e) {
+                                Toast.makeText(this, "Could not save: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                            }
+                        })
+                        .setPositiveButton("Done", null)
+                        .show();
+            } catch (RuntimeException | JSONException e) {
+                Toast.makeText(this, "Could not load offers: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }
 

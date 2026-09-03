@@ -214,3 +214,151 @@ recompiles cleanly; `TripHistoryActivity.java` brace/paren balance:
 
 PRD §5 box for #14 checked. Next per §6: #2 (per-offer omit/include
 toggle).
+
+## #2 implemented (2026-09-03): per-offer omit/include toggle for calibration
+
+`recalculate_personal_calibration`'s Source 2 (accept/decline decisions,
+`drive_monitor.py` around line 1158) already filtered on `is_test_data =
+0`, but that flag is auto-set by Developer Testing only - never
+driver-controlled, and reusing it for "I chose to exclude this real
+offer" would have conflated two different concepts. Added a genuinely
+new column instead:
+
+- `offer_outcomes.omitted_from_calibration INTEGER DEFAULT 0` - added to
+  both the fresh-install `CREATE TABLE` and as an `ALTER TABLE`
+  migration for existing databases, same pattern as the existing
+  `is_test_data` migration right above it.
+- `get_calibration_offers_list(limit=100)` - lists every real (non-test)
+  offer, any outcome, most recent first, with its current omitted state.
+- `set_offer_omitted_from_calibration(offer_id, omitted)` - toggles one
+  offer.
+- `recalculate_personal_calibration`'s Source-2 query now adds `AND
+  omitted_from_calibration = 0`.
+
+**UI**: rather than a new top-level button, added "Edit Offers Used" as
+a third button on the EXISTING Personal Calibration dialog
+(`showPersonalCalibration()`) - the driver's own stated purpose was
+"so I can use them to build the smart score algorithm," which is
+exactly what that screen already shows. Opens a checklist dialog
+(`AlertDialog.setMultiChoiceItems` - checked = included, the default)
+listing each offer with date/restaurant/payout/distance/outcome; each
+checkbox toggle calls `set_offer_omitted_from_calibration` immediately,
+matching the existing "Reset to Base Weights" button's own
+immediate-effect pattern on the same screen (no separate "Save" step
+to remember).
+
+**Verification**: real, runnable Python test
+(`/tmp/.../test_omit_calibration.py`) covering: the list correctly
+excludes `is_test_data=1` rows; toggling one offer persists and does
+NOT affect any other offer; `recalculate_personal_calibration`'s own
+exact WHERE clause (re-run directly in the test) correctly excludes the
+omitted offer while keeping the rest; toggling back to included
+restores it. All four cases passed. `drive_monitor.py` recompiles
+cleanly. `TripHistoryActivity.java` brace/paren balance: 111/111
+braces, 738/738 parens.
+
+PRD §5 box for #2 checked. Next per §6: #5 and #7 (hotspot-from-last-5,
+per-restaurant visit breakdown).
+
+## #5 and #7 implemented (2026-09-03)
+
+**#5 - recency-windowed hotspot.** `get_pickup_sweet_spot_zone()`'s
+zone-grid-frequency logic (round to `PICKUP_SWEET_SPOT_GRID_DECIMALS`,
+count occurrences per rounded zone, average the real coordinates within
+the winning zone) was factored out into a shared
+`_best_zone_from_pickup_rows(rows, min_samples)` helper, so the new
+`get_recent_pickup_hotspot()` (restricted to `RECENT_HOTSPOT_WINDOW`
+= 5 most recent `pickup_location_history` rows, `RECENT_HOTSPOT_MIN_
+SAMPLES` = 3) doesn't duplicate that logic. Wired into
+`showAddressBook()`: shown as a second summary line alongside the
+existing all-history sweet spot, and a "Copy Recent Hotspot"
+`setNeutralButton` (only added to the dialog when a suggestion actually
+exists - nothing to copy otherwise) using this app's existing plain
+`ClipboardManager`/`ClipData` pattern (same shape as
+`DiagnosticsActivity`'s log-copy button).
+
+Verified with a real, runnable Python test
+(`/tmp/.../test_recent_hotspot.py`): seeded 10 OLD pickups in zone A
+and 5 RECENT pickups (4 in zone B, 1 in zone A) - confirmed
+`get_recent_pickup_hotspot()` correctly picks zone B (the recent
+majority) while `get_pickup_sweet_spot_zone()` still correctly picks
+zone A (the all-history majority) from the SAME underlying data - proof
+the two are genuinely answering different questions, not accidentally
+returning the same thing.
+
+**#7 - per-restaurant visit history.** Real finding during
+implementation, not assumed away: the PRD's own original framing
+("joining trips/trip_feedback by restaurant name") isn't actually
+possible with the current schema. Checked directly - `trips` has no
+`restaurant_name` column, and `trips.offer_score_snapshot_json` (the
+only other candidate) is populated from `SmartScoreEngine.calculate()`'s
+own returned dict, which doesn't include `restaurant_name` either (read
+the full dict to confirm). So a driver's star rating (`trip_feedback`,
+keyed by `trip_id`) has no reliable path back to "which restaurant was
+this for." Considered a timestamp-proximity join (offer accepted at
+time T, trip started shortly after) and rejected it - close-together
+offers, or a driver who accepts well before actually starting to
+drive, could make it attribute the wrong rating to the wrong
+restaurant, which is worse than not showing one at all.
+
+Implemented `get_restaurant_visit_history(restaurant_name)` using each
+visit's own Smart Score (from `offer_outcomes`, always available and
+genuinely tied to that specific restaurant) instead of a rating, with
+average and SAMPLE standard deviation (n-1, since this is always a
+bounded recent sample, never "all visits that will ever happen") -
+and an explicit `rating_note` field naming the substitution plainly,
+surfaced directly in the Java dialog text too, not just in a code
+comment nobody but a future developer would see.
+
+UI: new "Restaurant Visit History" button (new string resource +
+layout button, following this screen's existing button pattern) opens
+a restaurant chooser (reusing `get_address_book()`'s own entries - no
+separate "list restaurant names" query needed), then the per-restaurant
+breakdown dialog.
+
+Verified with a real, runnable Python test
+(`/tmp/.../test_restaurant_visit_history.py`): no-visits case (empty,
+no averages); single-visit case (avg = that score, stdev correctly
+`None` rather than 0 - a stdev of one point isn't meaningful); known
+3-score case with the exact sample stdev cross-checked against Python's
+own `statistics.stdev`; confirmed test-data rows and a different
+restaurant's rows are excluded; confirmed the `LIMIT 10` +
+most-recent-first ordering with 15 seeded visits.
+
+**Verification (both)**: same disclosed limitation as every Java-side
+change in this repo - no Android SDK/emulator/device, code review plus
+static checks. `TripHistoryActivity.java` brace/paren balance: 130/130
+braces, 859/859 parens. `activity_trip_history.xml`/`strings.xml`
+re-validated as well-formed XML (`xml.etree.ElementTree`).
+`drive_monitor.py` recompiles cleanly.
+
+PRD §5 boxes for #5 and #7 checked. Remaining §5/§4 items per §6:
+#25 (live $/km, $/hr in the recommendation), the three open questions
+(#4, #17, #26), the evidence-blocked bugs (#21, #22, #16), and the two
+large items (#1, #29) last.
+
+## #25 (2026-09-03): found already implemented, no new code
+
+Before writing anything, checked `DasherAccessibilityService.java`
+where the live Smart Score badge is built (per PRD §5's own note that
+this item's underlying data already exists) - the badge already shows
+`$X.XX/km   $X.XX/hr` in both its compact text (line ~902) and its
+expanded/tap-to-see-more text (line ~925), for every real offer. An
+existing inline comment there even documents this as a deliberate,
+previous addition: "Restored to the live badge per explicit request:
+$/km and $/hr specifically -- everything else (deadhead, wait, traffic,
+weather) still stays out of the live view, only in the post-trip
+summary."
+
+This session's own earlier triage (the agent investigation that
+produced §1-§5) missed this - it was classified as a new SMALL-MEDIUM
+feature request rather than caught as already done. Corrected in
+PRD.md §5 rather than shipping duplicate/redundant code on top of
+something that already works. No commit needed for this item beyond
+the PRD/PROGRESS correction itself.
+
+Remaining per §6: the three open questions (#4, #17, #26) need the
+driver's own input before they're actionable; #21/#22/#16 need a fresh
+diagnostic log each; #1 and #29 are deliberately last, pending a
+scoping conversation. Nothing left in the ralph loop's queue that can
+proceed without one of those first.
