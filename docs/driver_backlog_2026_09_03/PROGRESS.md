@@ -667,3 +667,34 @@ addressed pending real-world confirmation, or explicitly deferred
 (#1, #29 - large items needing a scoping conversation; the deadhead
 PRD's own Part 2B stacked-order gap - blocked on a real dropoff
 screenshot).
+
+## #1 and #29 scoping conversation (2026-09-03)
+
+Per RALPH_PROMPT.md's own guardrail ("never start #1 or #29 without
+first raising the scoping question"), asked directly rather than
+guessing.
+
+**#1**: asked whether the driver wanted the smallest useful version
+(e.g. a stat added to an existing screen) or the full original ask.
+Driver answered directly: "a dedicated new map." Moved to its own PRD
+- `docs/location_profitability_map/` - see that folder for the full
+design/implementation.
+
+**#29**: asked what the tutorial should teach (Smart Score mechanics /
+app screens / live overlay meanings - multi-select) and what format
+(interactive walkthrough / guided tour over real screens / static FAQ).
+Driver answered: Smart Score mechanics + app screens, interactive
+walkthrough (building on `DeveloperTestingActivity`'s existing
+canned-offer mechanism - `parse_offer_screen` already produces a real
+Smart Score from fake data, proven working, no new scoring logic
+needed). Proposed a concrete step sequence (six-step Smart Score reveal
+using the existing canned KFC Fairy Meadow offer; a short screens tour
+covering Start/Stop + status dot colors, the Smart Score badge/
+RoadWarrior icon, Setup's toggles, and Trip History as "where your data
+lives" without exhaustively touring every sub-report) and asked two
+follow-ups (Part 2's exact depth; first-run nudge vs. purely opt-in).
+
+**Driver then explicitly said to backburner #29 and continue with #1.**
+Not abandoned - the design discussion above is preserved here and in
+PRD.md's #29 entry, resumable later without redoing this pass. Moving
+to #1 now.

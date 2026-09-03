@@ -1,6 +1,7 @@
 package com.drivingefficiency.app;
 
 import android.app.AlertDialog;
+import android.content.Intent;
 import android.os.Bundle;
 import android.widget.Button;
 import android.widget.EditText;
@@ -38,6 +39,7 @@ public class TripHistoryActivity extends AppCompatActivity {
         Button personalCalibrationButton = findViewById(R.id.personalCalibrationButton);
         Button rejectedOffersReportButton = findViewById(R.id.rejectedOffersReportButton);
         Button restaurantVisitHistoryButton = findViewById(R.id.restaurantVisitHistoryButton);
+        Button locationProfitabilityMapButton = findViewById(R.id.locationProfitabilityMapButton);
 
         viewSummaryButton.setOnClickListener(v -> showLastTripSummary());
         viewTripHistoryButton.setOnClickListener(v -> showTripHistory());
@@ -48,6 +50,12 @@ public class TripHistoryActivity extends AppCompatActivity {
         personalCalibrationButton.setOnClickListener(v -> showPersonalCalibration());
         rejectedOffersReportButton.setOnClickListener(v -> showRejectedOffersReport());
         restaurantVisitHistoryButton.setOnClickListener(v -> showRestaurantChooserThenVisitHistory());
+        // docs/location_profitability_map/PRD.md (driver backlog #1) --
+        // a full new Activity (osmdroid MapView), not an in-place dialog
+        // like every other button above, so this launches via Intent
+        // rather than a show*() method on this Activity.
+        locationProfitabilityMapButton.setOnClickListener(v ->
+                startActivity(new Intent(this, LocationProfitabilityMapActivity.class)));
     }
 
     @Override

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <org.osmdroid.views.MapView
+        android:id="@+id/profitabilityMapView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- docs/location_profitability_map/PRD.md ss2.2: shown instead of
+         the (empty) map when there isn't enough real data yet, matching
+         this app's existing "explain why, don't just show nothing"
+         pattern already used for Address Book/Restaurant Visit History's
+         own empty states. -->
+    <TextView
+        android:id="@+id/notEnoughDataText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:padding="24dp"
+        android:gravity="center"
+        android:textSize="16sp"
+        android:visibility="gone"
+        android:text="@string/location_profitability_map_no_data" />
+
+</FrameLayout>

@@ -106,6 +106,12 @@
         <activity android:name=".TripHistoryActivity" android:exported="false"
             android:theme="@style/Theme.DasherMonitor.TripHistory"
             android:parentActivityName=".MainActivity" />
+        <!-- docs/location_profitability_map/PRD.md (driver backlog #1):
+             a sub-screen of Trip History, reuses its theme rather than
+             a new color. -->
+        <activity android:name=".LocationProfitabilityMapActivity" android:exported="false"
+            android:theme="@style/Theme.DasherMonitor.TripHistory"
+            android:parentActivityName=".TripHistoryActivity" />
         <activity android:name=".TrustedContactsActivity" android:exported="false"
             android:theme="@style/Theme.DasherMonitor.TrustedContacts"
             android:parentActivityName=".MainActivity" />
