@@ -499,6 +499,10 @@ public class TripForegroundService extends Service {
     };
 
     private static final long ACCESSIBILITY_HEARTBEAT_INTERVAL_MS = 15 * 1000;
+    // Driver backlog #4 (docs/driver_backlog_2026_09_03/PRD.md): same
+    // repeat-until-acknowledged interval as the urgent-customer-message
+    // path in AppNotificationListenerService (ACKNOWLEDGE_REMINDER_INTERVAL_MS).
+    private static final long APPROACH_INSTRUCTION_REMINDER_INTERVAL_MS = 30 * 1000;
     private final android.os.Handler accessibilityHeartbeatHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable accessibilityHeartbeatRunnable = new Runnable() {
         @Override
@@ -1262,24 +1266,56 @@ public class TripForegroundService extends Service {
                 // other state change, and not per-stop within a batch.
                 if ("TRIP_ACTIVE".equals(lastKnownTripState) && "IDLE".equals(tripState)
                         && TripForegroundService.hasValidLocation) {
-                    try {
-                        JSONObject check = new JSONObject(engine.callAttr("check_show_return_to_sweet_spot",
-                                TripForegroundService.lastKnownLat, TripForegroundService.lastKnownLon).toString());
-                        if (check.optBoolean("should_show", false)) {
-                            double sweetSpotLat = check.optDouble("lat", 0);
-                            double sweetSpotLon = check.optDouble("lon", 0);
-                            // Waze specifically, not RoadWarrior -- per
-                            // explicit request, RoadWarrior stays
-                            // exclusively for pinpointing the actual
-                            // delivery address.
-                            OverlayHelper.showReturnToSweetSpotIcon(this, () ->
-                                    NavigationHelper.openAddressWithWaze(this, sweetSpotLat, sweetSpotLon));
-                            logDiagnostic("SWEET_SPOT", "Showing return-to-sweet-spot icon -- "
-                                    + check.optDouble("distance_km", 0) + " km from usual pickup zone");
+                    // docs/hotspot_or_home_routing/PRD.md: once the driver
+                    // has configured BOTH a home address and a rate
+                    // threshold, this SAME trigger moment uses the new
+                    // combined hotspot-or-home decision instead of the
+                    // plain sweet-spot-only suggestion below. Until then,
+                    // the original check runs completely unchanged -- a
+                    // driver who never sets this up sees zero behavior
+                    // change.
+                    if (ShiftRoutingPrefs.isConfigured(this)) {
+                        try {
+                            double[] home = ShiftRoutingPrefs.getHomeLatLon(this);
+                            JSONObject check = new JSONObject(engine.callAttr(
+                                    "check_show_hotspot_or_home_suggestion",
+                                    TripForegroundService.lastKnownLat, TripForegroundService.lastKnownLon,
+                                    home[0], home[1], ShiftRoutingPrefs.getThreshold(this)).toString());
+                            if (check.optBoolean("should_show", false)) {
+                                String destination = check.optString("destination", "hotspot");
+                                double targetLat = check.optDouble("lat", 0);
+                                double targetLon = check.optDouble("lon", 0);
+                                OverlayHelper.showHotspotOrHomeIcon(this, destination, () ->
+                                        NavigationHelper.openAddressWithWaze(this, targetLat, targetLon));
+                                logDiagnostic("SHIFT_ROUTING", "Showing " + destination + " suggestion -- "
+                                        + "rate $" + check.optDouble("rate", 0) + "/hr vs threshold $"
+                                        + check.optDouble("threshold", 0) + "/hr, "
+                                        + check.optDouble("distance_km", 0) + " km away");
+                            }
+                        } catch (JSONException | RuntimeException e) {
+                            logDiagnostic("ERROR", "check_show_hotspot_or_home_suggestion exception: "
+                                    + android.util.Log.getStackTraceString(e));
                         }
-                    } catch (JSONException | RuntimeException e) {
-                        logDiagnostic("ERROR", "check_show_return_to_sweet_spot exception: "
-                                + android.util.Log.getStackTraceString(e));
+                    } else {
+                        try {
+                            JSONObject check = new JSONObject(engine.callAttr("check_show_return_to_sweet_spot",
+                                    TripForegroundService.lastKnownLat, TripForegroundService.lastKnownLon).toString());
+                            if (check.optBoolean("should_show", false)) {
+                                double sweetSpotLat = check.optDouble("lat", 0);
+                                double sweetSpotLon = check.optDouble("lon", 0);
+                                // Waze specifically, not RoadWarrior -- per
+                                // explicit request, RoadWarrior stays
+                                // exclusively for pinpointing the actual
+                                // delivery address.
+                                OverlayHelper.showReturnToSweetSpotIcon(this, () ->
+                                        NavigationHelper.openAddressWithWaze(this, sweetSpotLat, sweetSpotLon));
+                                logDiagnostic("SWEET_SPOT", "Showing return-to-sweet-spot icon -- "
+                                        + check.optDouble("distance_km", 0) + " km from usual pickup zone");
+                            }
+                        } catch (JSONException | RuntimeException e) {
+                            logDiagnostic("ERROR", "check_show_return_to_sweet_spot exception: "
+                                    + android.util.Log.getStackTraceString(e));
+                        }
                     }
                 }
 
@@ -1409,7 +1445,18 @@ public class TripForegroundService extends Service {
                     logDiagnostic("ERROR", "get_canned_replies_json exception: "
                             + android.util.Log.getStackTraceString(e));
                 }
-                OverlayHelper.showPersistentTappableMessage(this, approachOverlayText.toString(), cannedReplies);
+                // Driver backlog #4 (docs/driver_backlog_2026_09_03/PRD.md):
+                // same "force me to acknowledge" repeat-reminder as the
+                // urgent-customer-message path in AppNotificationListenerService
+                // -- this overlay already persisted until tapped, but the
+                // VOICE only ever spoke once; if that one announcement was
+                // missed, nothing else would ever say so out loud.
+                boolean shown = OverlayHelper.showPersistentTappableMessage(
+                        this, approachOverlayText.toString(), cannedReplies);
+                if (shown) {
+                    OverlayHelper.startAcknowledgeReminder(
+                            approachSpoken.toString(), APPROACH_INSTRUCTION_REMINDER_INTERVAL_MS);
+                }
                 logDiagnostic("INSTRUCTION", "Approach instruction shown for " + approachAddress);
             }
 

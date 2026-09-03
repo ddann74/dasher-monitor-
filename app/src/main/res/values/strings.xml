@@ -19,6 +19,12 @@
     <string name="fuel_efficiency_hint">Fuel efficiency (L per 100km)</string>
     <string name="fuel_price_hint">Fuel price ($ per liter)</string>
     <string name="save_fuel_cost">Save Fuel Cost Settings</string>
+    <string name="shift_routing_heading">Navigate Home or to Hotspot</string>
+    <string name="shift_routing_subtext_default">Not configured yet -- set both a home address and a rate threshold below to enable. Once both are set, ending a delivery will suggest heading to your busiest recent pickup area (if your recent offers are averaging at or above the threshold) or home (if below it).</string>
+    <string name="home_address_hint">Home address</string>
+    <string name="save_home_address">Save Home Address</string>
+    <string name="rate_threshold_hint">Rate threshold ($ per hour)</string>
+    <string name="save_rate_threshold">Save Rate Threshold</string>
     <string name="screen_recording_heading">Screen Recording</string>
     <string name="screen_recording_subtext">Records the WHOLE device screen for the duration of each trip, using Android\'s own screen-capture permission -- not just this app\'s UI. If you switch to another app mid-trip (messages, banking, anything), that is captured too. Off by default. Recordings are saved privately on this device only, never uploaded anywhere.</string>
     <string name="screen_recording_toggle">Record screen during trips</string>

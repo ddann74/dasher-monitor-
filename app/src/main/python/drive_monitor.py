@@ -47,6 +47,17 @@ ARRIVAL_GEOFENCE_METERS = 50
 APPROACHING_RADIUS_METERS = 500
 MAJOR_DELAY_SECONDS = 2 * 60
 
+# Driver backlog #4 (docs/driver_backlog_2026_09_03/PRD.md): "read aloud
+# customer instructions...when i approach the address within 50 meters" --
+# deliberately a SEPARATE, much tighter threshold from
+# APPROACHING_RADIUS_METERS above, not a change to it. That constant also
+# drives the pickup/dropoff nav icon and the persistent-overlay TRIGGER
+# itself (see _check_approaching_stop) -- shrinking it globally to 50m
+# would also delay the nav icon and overlay from appearing at all until
+# nearly at the door, which isn't what was asked. Only the VOICE reading
+# is gated on this tighter distance.
+INSTRUCTION_READ_RADIUS_METERS = 50
+
 # Walking-speed detection (for the purple "walking" status dot, DASHER
 # mode only): DEFAULT_WALKING_SPEED_THRESHOLD_KMH is a physically-grounded
 # starting guess (average adult walking pace is ~5 km/h, brisk walking up
@@ -112,6 +123,12 @@ RECENT_HOTSPOT_MIN_SAMPLES = 3
 # plausibly be in unfamiliar territory" -- adjustable if 2km turns out
 # too sensitive or not sensitive enough in practice.
 UNFAMILIAR_AREA_THRESHOLD_KM = 2.0
+
+# docs/hotspot_or_home_routing/PRD.md: driver's own choice (asked
+# directly, three real options presented) for "how busy is my shift" --
+# average $/hr of the last N ACCEPTED offers, not raw wall-clock
+# earnings (which gets thrown off by driving/waiting gaps).
+RECENT_RATE_WINDOW = 5
 
 HARSH_ACCEL_MS2 = 2.5
 HARSH_BRAKE_MS2 = -2.5
@@ -416,7 +433,8 @@ class Database:
             timestamp INTEGER,
             components_json TEXT,
             is_test_data INTEGER DEFAULT 0,
-            omitted_from_calibration INTEGER DEFAULT 0
+            omitted_from_calibration INTEGER DEFAULT 0,
+            hourly_rate REAL
         );
 
         CREATE TABLE IF NOT EXISTS personal_calibration (
@@ -478,6 +496,16 @@ class Database:
         if "omitted_from_calibration" not in existing_columns:
             self.conn.execute(
                 "ALTER TABLE offer_outcomes ADD COLUMN omitted_from_calibration INTEGER DEFAULT 0")
+            self.conn.commit()
+
+        # docs/hotspot_or_home_routing/PRD.md: the dollar hourly-rate
+        # figure was never persisted per offer before -- only the 0-100
+        # sub-score (inside components_json) and raw payout/distance_km,
+        # neither of which is $/hr on its own (that needs the estimated
+        # TIME too, which was only ever computed transiently). Needed to
+        # calculate "average $/hr of recent accepted offers" at all.
+        if "hourly_rate" not in existing_columns:
+            self.conn.execute("ALTER TABLE offer_outcomes ADD COLUMN hourly_rate REAL")
             self.conn.commit()
 
         # Migration for databases that already existed before phase-timing
@@ -2623,12 +2651,29 @@ class TripManager:
             "lon": self.pickup["lon"],
         }
 
-    def _check_approach_instruction(self, approaching_stop, ts):
+    def _check_approach_instruction(self, approaching_stop, ts, lat, lon):
         """
-        Feeds the persistent, tappable instruction overlay (per explicit
-        request): triggers once per stop, the moment it's first detected
-        as approaching (see _check_approaching_stop), rather than waiting
-        for arrival.
+        Feeds the persistent, tappable instruction overlay AND its voice
+        readout together (one combined trigger -- see the class doc note
+        below on why this isn't split into two separate distances):
+        triggers once per stop, the moment you're within
+        INSTRUCTION_READ_RADIUS_METERS of it -- driver backlog #4
+        (docs/driver_backlog_2026_09_03/PRD.md): "read aloud customer
+        instructions...when i approach the address within 50 meters."
+
+        Narrowed from the original design (which fired at
+        APPROACHING_RADIUS_METERS, 500m, the same coarse radius
+        _check_approaching_stop already uses for the nav icon) to this
+        much tighter, explicitly-requested distance. Deliberately did
+        NOT split this into "show the overlay early at 500m, only delay
+        the VOICE to 50m" -- that would need a second, parallel per-stop
+        state machine (has the overlay been shown vs. has it been
+        spoken, tracked separately) in a function that already has a
+        documented history of subtle multi-stop/batch-order bugs (see
+        the FIXED note below). One combined trigger at the tighter
+        distance is simpler and safer; if the driver wants the overlay
+        back to appearing earlier than the voice, that's a real, doable
+        follow-up, not assumed here.
 
         FIXED (previously a known limitation): messages are now matched
         by a real stop_id (the closest stop at message-arrival time, see
@@ -2652,6 +2697,9 @@ class TripManager:
         stop_id = id(approaching_stop)
         if stop_id in self._approach_instruction_shown_for_stop_ids:
             return  # already shown for this specific stop, don't repeat
+        dist = haversine_meters(lat, lon, approaching_stop["lat"], approaching_stop["lon"])
+        if dist > INSTRUCTION_READ_RADIUS_METERS:
+            return  # within the coarser 500m approaching-stop radius, but not yet within 50m
 
         # The dropoff screen's own delivery instruction (docs/dropoff_
         # delivery_instruction_wiring/PRD.md) -- present on every delivery
@@ -3296,7 +3344,7 @@ class DriveMonitorEngine:
         # deliberately does NOT auto-clear even after arrival, since the
         # delivery may not actually be complete yet. Only clears when
         # manually tapped away.
-        self.trip_manager._check_approach_instruction(approaching, timestamp_ms / 1000.0)
+        self.trip_manager._check_approach_instruction(approaching, timestamp_ms / 1000.0, lat, lon)
         approach_instruction = self.trip_manager.take_pending_approach_instruction()
 
         # Powers the purple "walking" status dot -- DASHER mode only, and
@@ -3542,6 +3590,76 @@ class DriveMonitorEngine:
         return json.dumps({
             "should_show": True, "distance_km": round(distance_km, 2),
             "lat": sweet_spot["lat"], "lon": sweet_spot["lon"],
+        })
+
+    def get_recent_shift_rate(self):
+        """
+        docs/hotspot_or_home_routing/PRD.md: average $/hr of the last
+        RECENT_RATE_WINDOW accepted, non-test offers with a recorded
+        hourly_rate (older rows recorded before this column existed have
+        NULL here, correctly skipped -- not treated as $0). "has_rate:
+        False" below any real sample, never a fabricated number.
+        """
+        rows = self.db.conn.execute("""
+            SELECT hourly_rate FROM offer_outcomes
+            WHERE outcome = 'accepted' AND is_test_data = 0 AND hourly_rate IS NOT NULL
+            ORDER BY timestamp DESC LIMIT ?
+        """, (RECENT_RATE_WINDOW,)).fetchall()
+        rates = [row["hourly_rate"] for row in rows]
+        if not rates:
+            return json.dumps({"has_rate": False, "sample_count": 0})
+        return json.dumps({
+            "has_rate": True,
+            "avg_hourly_rate": round(sum(rates) / len(rates), 2),
+            "sample_count": len(rates),
+        })
+
+    def check_show_hotspot_or_home_suggestion(self, lat, lon, home_lat, home_lon, threshold_dollars_per_hr):
+        """
+        docs/hotspot_or_home_routing/PRD.md. Same trigger moment as
+        check_show_return_to_sweet_spot (called once ALL deliveries in a
+        trip are complete) -- this REPLACES that call on the Java side
+        only once the driver has configured a home address AND a rate
+        threshold; until then, Java keeps calling the original function
+        unchanged, so a driver who never sets this up sees zero
+        behavior change.
+
+        home_lat/home_lon: None if no home address has been geocoded yet
+        (Java passes None in that case) -- a "go home" suggestion is
+        never produced without one, even if the rate is genuinely low;
+        "no_home_address_set" is returned instead so this is visibly
+        different from "nothing to suggest," not silently the same.
+        """
+        rate_info = json.loads(self.get_recent_shift_rate())
+        if not rate_info["has_rate"]:
+            return json.dumps({"should_show": False, "reason": "not_enough_rate_data"})
+        rate = rate_info["avg_hourly_rate"]
+
+        if rate >= threshold_dollars_per_hr:
+            destination = "hotspot"
+            target = json.loads(self.get_recent_pickup_hotspot())
+            if not target.get("has_suggestion"):
+                target = json.loads(self.get_pickup_sweet_spot_zone())
+            if not target.get("has_suggestion"):
+                return json.dumps({"should_show": False, "reason": "no_hotspot_data", "rate": rate})
+            target_lat, target_lon = target["lat"], target["lon"]
+        else:
+            destination = "home"
+            if home_lat is None or home_lon is None:
+                return json.dumps({"should_show": False, "reason": "no_home_address_set", "rate": rate})
+            target_lat, target_lon = home_lat, home_lon
+
+        distance_km = haversine_meters(lat, lon, target_lat, target_lon) / 1000.0
+        if distance_km < UNFAMILIAR_AREA_THRESHOLD_KM:
+            return json.dumps({
+                "should_show": False, "reason": "already_close",
+                "destination": destination, "distance_km": round(distance_km, 2),
+            })
+        return json.dumps({
+            "should_show": True, "destination": destination,
+            "lat": target_lat, "lon": target_lon,
+            "rate": rate, "threshold": threshold_dollars_per_hr,
+            "distance_km": round(distance_km, 2),
         })
 
     def get_parking_difficulty_rating(self, restaurant_name):
@@ -3923,7 +4041,7 @@ class DriveMonitorEngine:
         })
 
     def record_offer_outcome(self, restaurant_name, payout, distance_km, smart_score, accepted,
-                              components_json=None, is_test_data=False):
+                              components_json=None, is_test_data=False, hourly_rate=None):
         """
         Records whether a scored offer was actually accepted or declined --
         detected via a real Accept/Decline button tap (see
@@ -3944,18 +4062,24 @@ class DriveMonitorEngine:
         export_full_report, recalculate_personal_calibration), since a
         simulated test isn't a real decision and shouldn't pollute real
         stats.
+
+        hourly_rate: the offer's own $/hr estimate (docs/hotspot_or_home_
+        routing/PRD.md) -- the dollar figure, not the 0-100 sub-score
+        already captured in components_json. None for older callers that
+        don't pass it (get_recent_shift_rate skips rows where this is
+        NULL rather than treating a missing value as 0).
         """
         outcome = "accepted" if accepted else "declined"
         self.db.conn.execute("""
             INSERT INTO offer_outcomes
-                (restaurant_name, payout, distance_km, smart_score, accepted, outcome, timestamp, components_json, is_test_data)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (restaurant_name, payout, distance_km, smart_score, accepted, outcome, timestamp, components_json, is_test_data, hourly_rate)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (restaurant_name, payout, distance_km, smart_score, int(accepted), outcome, time.time(),
-              components_json, int(is_test_data)))
+              components_json, int(is_test_data), hourly_rate))
         self.db.conn.commit()
 
     def record_offer_timeout(self, restaurant_name, payout, distance_km, smart_score,
-                              components_json=None, is_test_data=False):
+                              components_json=None, is_test_data=False, hourly_rate=None):
         """
         Records that a scored offer disappeared from screen without either
         button being tapped -- previously invisible entirely: only Accept/
@@ -3974,12 +4098,14 @@ class DriveMonitorEngine:
         perfectly distinguishable from in here.
 
         is_test_data: see record_offer_outcome's note above.
+        hourly_rate: see record_offer_outcome's note above.
         """
         self.db.conn.execute("""
             INSERT INTO offer_outcomes
-                (restaurant_name, payout, distance_km, smart_score, accepted, outcome, timestamp, components_json, is_test_data)
-            VALUES (?, ?, ?, ?, 0, 'timed_out', ?, ?, ?)
-        """, (restaurant_name, payout, distance_km, smart_score, time.time(), components_json, int(is_test_data)))
+                (restaurant_name, payout, distance_km, smart_score, accepted, outcome, timestamp, components_json, is_test_data, hourly_rate)
+            VALUES (?, ?, ?, ?, 0, 'timed_out', ?, ?, ?, ?)
+        """, (restaurant_name, payout, distance_km, smart_score, time.time(), components_json, int(is_test_data),
+              hourly_rate))
         self.db.conn.commit()
 
     def record_pickup_unassigned_for_long_wait(self):

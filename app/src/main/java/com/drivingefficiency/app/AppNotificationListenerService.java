@@ -87,6 +87,9 @@ public class AppNotificationListenerService extends NotificationListenerService 
     private final List<String> pendingLowPriorityMessages = new ArrayList<>();
     private final Handler batchHandler = new Handler(Looper.getMainLooper());
     private static final long BATCH_WINDOW_MS = 15 * 1000;
+    // Driver backlog #4 (docs/driver_backlog_2026_09_03/PRD.md): "keep
+    // reading aloud every 30 secs until i acknowledge."
+    private static final long ACKNOWLEDGE_REMINDER_INTERVAL_MS = 30 * 1000;
     private final Runnable batchAnnouncer = new Runnable() {
         @Override
         public void run() {
@@ -185,7 +188,28 @@ public class AppNotificationListenerService extends NotificationListenerService 
                         // Delivery notes / address corrections -- affects
                         // where you're going or what to do right now, so
                         // this still interrupts immediately as before.
-                        VoiceAnnouncer.speak("Customer message: " + clean);
+                        //
+                        // Driver-requested (2026-09-03, docs/driver_backlog_
+                        // 2026_09_03/PRD.md #4): "force me to acknowledge...
+                        // keep reading aloud every 30 secs until i
+                        // acknowledge" -- a single announcement can be
+                        // missed entirely (phone mounted, road noise,
+                        // mid-conversation). Now paired with the same
+                        // persistent, tappable overlay used for the
+                        // approach-instruction feature, plus a repeating
+                        // voice reminder that only stops once actually
+                        // tapped -- see OverlayHelper.startAcknowledgeReminder.
+                        String spoken = "Customer message: " + clean;
+                        VoiceAnnouncer.speak(spoken);
+                        boolean shown = OverlayHelper.showPersistentTappableMessage(this, spoken, null);
+                        if (shown) {
+                            OverlayHelper.startAcknowledgeReminder(spoken, ACKNOWLEDGE_REMINDER_INTERVAL_MS);
+                        }
+                        // If overlay permission isn't granted, shown is
+                        // false -- the reminder is deliberately NOT started
+                        // in that case (nothing to tap would mean an
+                        // unstoppable repeat), same as the approach-
+                        // instruction path's identical guard.
                     } else {
                         // ETA/lateness updates -- lower priority, doesn't
                         // need to interrupt immediately. Batched with any

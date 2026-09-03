@@ -88,6 +88,11 @@ public class PermissionsActivity extends AppCompatActivity {
         EditText fuelEfficiencyInput = findViewById(R.id.fuelEfficiencyInput);
         EditText fuelPriceInput = findViewById(R.id.fuelPriceInput);
         Button saveFuelCostButton = findViewById(R.id.saveFuelCostButton);
+        TextView shiftRoutingSubtext = findViewById(R.id.shiftRoutingSubtext);
+        EditText homeAddressInput = findViewById(R.id.homeAddressInput);
+        Button saveHomeAddressButton = findViewById(R.id.saveHomeAddressButton);
+        EditText rateThresholdInput = findViewById(R.id.rateThresholdInput);
+        Button saveRateThresholdButton = findViewById(R.id.saveRateThresholdButton);
 
         // Pre-filled with whatever key is currently active (runtime-entered
         // takes priority, falling back to local.properties/BuildConfig) --
@@ -137,6 +142,67 @@ public class PermissionsActivity extends AppCompatActivity {
             } catch (RuntimeException e) { // covers PyException too
                 Toast.makeText(this, "Could not save fuel cost settings: " + e.getMessage(),
                         Toast.LENGTH_LONG).show();
+            }
+        });
+
+        // docs/hotspot_or_home_routing/PRD.md -- driver-configured home
+        // address + rate threshold. Both required before this feature
+        // does anything (TripForegroundService falls back to the
+        // existing sweet-spot-only suggestion until both are set -- see
+        // its own comment on that call site). Pre-filled with whatever
+        // was saved before, same as the fuel cost fields above.
+        homeAddressInput.setText(ShiftRoutingPrefs.getHomeAddress(this));
+        if (ShiftRoutingPrefs.hasThreshold(this)) {
+            rateThresholdInput.setText(String.valueOf(ShiftRoutingPrefs.getThreshold(this)));
+        }
+        refreshShiftRoutingSubtext(shiftRoutingSubtext);
+
+        saveHomeAddressButton.setOnClickListener(v -> {
+            String address = homeAddressInput.getText().toString().trim();
+            if (address.isEmpty()) {
+                ShiftRoutingPrefs.setHomeAddress(this, "", 0, 0);
+                ShiftRoutingPrefs.clearHomeLocation(this);
+                refreshShiftRoutingSubtext(shiftRoutingSubtext);
+                Toast.makeText(this, "Home address cleared.", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            GoogleApiHelper.geocodeAddress(this, address, new GoogleApiHelper.GeocodeCallback() {
+                @Override
+                public void onResult(double lat, double lon) {
+                    ShiftRoutingPrefs.setHomeAddress(PermissionsActivity.this, address, lat, lon);
+                    refreshShiftRoutingSubtext(shiftRoutingSubtext);
+                    Toast.makeText(PermissionsActivity.this, "Home address saved.", Toast.LENGTH_SHORT).show();
+                }
+
+                @Override
+                public void onError(String message) {
+                    // Deliberately does NOT save the typed text as if it
+                    // had resolved -- a stale/wrong location silently
+                    // paired with an address that never actually
+                    // geocoded would be worse than the feature just not
+                    // being configured yet.
+                    ShiftRoutingPrefs.clearHomeLocation(PermissionsActivity.this);
+                    refreshShiftRoutingSubtext(shiftRoutingSubtext);
+                    Toast.makeText(PermissionsActivity.this,
+                            "Could not resolve that address: " + message, Toast.LENGTH_LONG).show();
+                }
+            });
+        });
+
+        saveRateThresholdButton.setOnClickListener(v -> {
+            String text = rateThresholdInput.getText().toString().trim();
+            if (text.isEmpty()) {
+                Toast.makeText(this, "Enter a $/hr number, or the feature stays off until you do.",
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+            try {
+                double threshold = Double.parseDouble(text);
+                ShiftRoutingPrefs.setThreshold(this, threshold);
+                refreshShiftRoutingSubtext(shiftRoutingSubtext);
+                Toast.makeText(this, "Rate threshold saved.", Toast.LENGTH_SHORT).show();
+            } catch (NumberFormatException e) {
+                Toast.makeText(this, "Enter a valid number.", Toast.LENGTH_LONG).show();
             }
         });
 
@@ -564,6 +630,28 @@ public class PermissionsActivity extends AppCompatActivity {
         } catch (JSONException | RuntimeException e) { // covers PyException too
             // Leaves whatever text was already showing -- not worth
             // blocking the settings screen over this.
+        }
+    }
+
+    /**
+     * docs/hotspot_or_home_routing/PRD.md -- purely local SharedPreferences
+     * state (ShiftRoutingPrefs), no Python call needed unlike the fuel-cost
+     * equivalent above.
+     */
+    private void refreshShiftRoutingSubtext(TextView shiftRoutingSubtext) {
+        boolean hasHome = ShiftRoutingPrefs.getHomeLatLon(this) != null;
+        boolean hasThreshold = ShiftRoutingPrefs.hasThreshold(this);
+        if (hasHome && hasThreshold) {
+            shiftRoutingSubtext.setText(String.format(
+                    "Configured -- ending a delivery suggests your busiest recent pickup area if "
+                            + "recent offers average $%.2f/hr or more, otherwise home.",
+                    ShiftRoutingPrefs.getThreshold(this)));
+        } else if (hasHome) {
+            shiftRoutingSubtext.setText("Home address set. Add a rate threshold below to finish enabling this.");
+        } else if (hasThreshold) {
+            shiftRoutingSubtext.setText("Rate threshold set. Add a home address above to finish enabling this.");
+        } else {
+            shiftRoutingSubtext.setText(getString(R.string.shift_routing_subtext_default));
         }
     }
 

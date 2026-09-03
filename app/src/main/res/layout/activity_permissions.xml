@@ -100,6 +100,61 @@
         android:layout_marginTop="8dp"
         android:text="@string/save_fuel_cost" />
 
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:textColor="@color/permissions_orange_dark"
+        android:text="@string/shift_routing_heading" />
+
+    <TextView
+        android:id="@+id/shiftRoutingSubtext"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textSize="12sp"
+        android:text="@string/shift_routing_subtext_default" />
+
+    <EditText
+        android:id="@+id/homeAddressInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:hint="@string/home_address_hint"
+        android:inputType="textPostalAddress"
+        android:textColor="?android:attr/textColorPrimary"
+        android:textColorHint="?android:attr/textColorSecondary" />
+
+    <Button
+        android:id="@+id/saveHomeAddressButton"
+        android:backgroundTint="?attr/colorPrimary"
+        android:textColor="#FFFFFF"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/save_home_address" />
+
+    <EditText
+        android:id="@+id/rateThresholdInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:hint="@string/rate_threshold_hint"
+        android:inputType="numberDecimal"
+        android:textColor="?android:attr/textColorPrimary"
+        android:textColorHint="?android:attr/textColorSecondary" />
+
+    <Button
+        android:id="@+id/saveRateThresholdButton"
+        android:backgroundTint="?attr/colorPrimary"
+        android:textColor="#FFFFFF"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/save_rate_threshold" />
+
     <Button
         android:id="@+id/notifAccessButton"
         android:backgroundTint="?attr/colorPrimary"

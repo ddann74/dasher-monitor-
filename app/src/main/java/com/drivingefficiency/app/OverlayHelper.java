@@ -146,15 +146,31 @@ public final class OverlayHelper {
      * (unlike every other overlay in this app, which are deliberately
      * non-interactive) specifically so a tap can dismiss it.
      */
-    public static void showPersistentTappableMessage(Context context, String message, java.util.List<String> cannedReplies) {
+    public static boolean showPersistentTappableMessage(Context context, String message, java.util.List<String> cannedReplies) {
+        return showPersistentTappableMessage(context, message, cannedReplies, null);
+    }
+
+    /**
+     * onAcknowledged: called exactly once, the moment the driver taps to
+     * dismiss THIS message -- never called if it's cleared some other way
+     * (a newer persistent message replacing it, or clearPersistentMessage()
+     * called directly). Null is fine for callers that don't need to know.
+     * Returns whether the overlay was actually shown (false if overlay
+     * permission isn't granted) -- callers that pair this with
+     * startAcknowledgeReminder() below must check this first, since
+     * starting a repeat-until-acknowledged voice reminder with nothing
+     * shown to actually tap would nag forever with no way to stop it.
+     */
+    public static boolean showPersistentTappableMessage(Context context, String message,
+            java.util.List<String> cannedReplies, Runnable onAcknowledged) {
         if (!hasPermission(context) || message == null || message.isEmpty()) {
-            return;
+            return false;
         }
         Context appContext = context.getApplicationContext();
         WindowManager windowManager =
                 (WindowManager) appContext.getSystemService(Context.WINDOW_SERVICE);
         if (windowManager == null) {
-            return;
+            return false;
         }
 
         clearPersistentMessage(context);
@@ -169,7 +185,12 @@ public final class OverlayHelper {
                 ? "\n\n(tap to dismiss)" : ""));
         messageView.setTextColor(Color.WHITE);
         messageView.setTextSize(16f);
-        messageView.setOnClickListener(v -> clearPersistentMessage(context));
+        messageView.setOnClickListener(v -> {
+            clearPersistentMessage(context);
+            if (onAcknowledged != null) {
+                onAcknowledged.run();
+            }
+        });
         container.addView(messageView);
 
         // Canned-reply buttons -- deliberately copy to clipboard, NOT an
@@ -222,7 +243,42 @@ public final class OverlayHelper {
         instructionOverlayView = container;
         // No auto-dismiss timer at all, unlike showMessage() above --
         // this stays up indefinitely until clearPersistentMessage() is
-        // called, which only ever happens from the tap listener itself.
+        // called, which only ever happens from the tap listener itself
+        // (or a newer persistent message replacing this one).
+        return true;
+    }
+
+    // Driver-requested (2026-09-03, docs/driver_backlog_2026_09_03/PRD.md
+    // #4): "force me to acknowledge" -- a persistent overlay you could
+    // simply not notice (phone mounted, eyes on the road) doesn't actually
+    // force anything on its own. Pairs with showPersistentTappableMessage:
+    // re-speaks the same text on an interval for as long as the overlay
+    // this reminder is tied to is STILL showing, stopping itself the
+    // moment it's been acknowledged (or replaced/cleared some other way) --
+    // never speaks into a void with nothing left to tap.
+    private static Handler reminderHandler;
+    private static Runnable reminderRunnable;
+
+    public static void startAcknowledgeReminder(String spokenText, long intervalMs) {
+        if (reminderHandler == null) {
+            reminderHandler = new Handler(Looper.getMainLooper());
+        }
+        if (reminderRunnable != null) {
+            reminderHandler.removeCallbacks(reminderRunnable);
+        }
+        reminderRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (instructionOverlayView == null) {
+                    return; // already acknowledged (or cleared some other way) -- stop repeating
+                }
+                VoiceAnnouncer.speak(spokenText);
+                reminderHandler.postDelayed(this, intervalMs);
+            }
+        };
+        // First REPEAT fires after intervalMs, not immediately -- the
+        // caller already spoke it once when first showing the overlay.
+        reminderHandler.postDelayed(reminderRunnable, intervalMs);
     }
 
     public static void clearPersistentMessage(Context context) {
@@ -236,6 +292,14 @@ public final class OverlayHelper {
                 // View was already removed.
             }
             instructionOverlayView = null;
+        }
+        // Stops any in-progress acknowledge-reminder too -- instructionOverlayView
+        // being null is exactly what startAcknowledgeReminder's own runnable
+        // checks to know it's done, but cancelling the pending callback here
+        // as well avoids one harmless-but-pointless extra tick before it
+        // notices on its own.
+        if (reminderHandler != null && reminderRunnable != null) {
+            reminderHandler.removeCallbacks(reminderRunnable);
         }
     }
 
@@ -563,6 +627,79 @@ public final class OverlayHelper {
                 // View was already removed.
             }
             navigationIconView = null;
+        }
+    }
+
+    private static View hotspotOrHomeIconView;
+
+    /**
+     * docs/hotspot_or_home_routing/PRD.md -- same "shown once trip goes
+     * idle, tap to navigate, stays until tapped" shape as
+     * showReturnToSweetSpotIcon, but a SEPARATE overlay slot (own static
+     * view field) so the two never collide, and Java decides which of
+     * the two to call rather than this class deciding. Visually distinct
+     * per destination -- a house emoji for "home" would be actively
+     * misleading for a hotspot suggestion, so "hotspot" gets the same
+     * fire emoji already used for this exact concept in the Address Book
+     * text (driver backlog #5).
+     */
+    public static void showHotspotOrHomeIcon(Context context, String destination, Runnable onTapAction) {
+        if (!hasPermission(context)) {
+            return;
+        }
+        Context appContext = context.getApplicationContext();
+        WindowManager windowManager =
+                (WindowManager) appContext.getSystemService(Context.WINDOW_SERVICE);
+        if (windowManager == null) {
+            return;
+        }
+        clearHotspotOrHomeIcon(context);
+
+        TextView icon = new TextView(appContext);
+        icon.setText("home".equals(destination) ? "🏠" : "🔥"); // house vs. fire
+        icon.setTextSize(20f);
+        icon.setGravity(Gravity.CENTER);
+
+        GradientDrawable shape = new GradientDrawable();
+        shape.setShape(GradientDrawable.OVAL);
+        shape.setColor(Color.parseColor("#E6EF6C00")); // distinct orange -- not the sweet-spot green or RoadWarrior blue
+        icon.setBackground(shape);
+        icon.setOnClickListener(v -> onTapAction.run());
+
+        int sizePx = (int) (48 * appContext.getResources().getDisplayMetrics().density);
+
+        int overlayType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                : WindowManager.LayoutParams.TYPE_PHONE;
+
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                sizePx, sizePx, overlayType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT);
+        // Own corner (BOTTOM|START) -- showReturnToSweetSpotIcon already
+        // occupies BOTTOM|END at this same y-offset, and the two are
+        // mutually exclusive per trigger anyway (see TripForegroundService's
+        // call site), but keeping distinct positions avoids any visual
+        // overlap if that ever changes.
+        params.gravity = Gravity.BOTTOM | Gravity.START;
+        params.x = 24;
+        params.y = 220;
+
+        windowManager.addView(icon, params);
+        hotspotOrHomeIconView = icon;
+    }
+
+    public static void clearHotspotOrHomeIcon(Context context) {
+        Context appContext = context.getApplicationContext();
+        WindowManager windowManager =
+                (WindowManager) appContext.getSystemService(Context.WINDOW_SERVICE);
+        if (windowManager != null && hotspotOrHomeIconView != null) {
+            try {
+                windowManager.removeView(hotspotOrHomeIconView);
+            } catch (IllegalArgumentException ignored) {
+                // View was already removed.
+            }
+            hotspotOrHomeIconView = null;
         }
     }
 }
