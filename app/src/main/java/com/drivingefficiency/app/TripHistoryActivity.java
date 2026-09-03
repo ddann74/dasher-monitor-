@@ -40,6 +40,7 @@ public class TripHistoryActivity extends AppCompatActivity {
         Button rejectedOffersReportButton = findViewById(R.id.rejectedOffersReportButton);
         Button restaurantVisitHistoryButton = findViewById(R.id.restaurantVisitHistoryButton);
         Button locationProfitabilityMapButton = findViewById(R.id.locationProfitabilityMapButton);
+        Button payTrendButton = findViewById(R.id.payTrendButton);
 
         viewSummaryButton.setOnClickListener(v -> showLastTripSummary());
         viewTripHistoryButton.setOnClickListener(v -> showTripHistory());
@@ -56,6 +57,7 @@ public class TripHistoryActivity extends AppCompatActivity {
         // rather than a show*() method on this Activity.
         locationProfitabilityMapButton.setOnClickListener(v ->
                 startActivity(new Intent(this, LocationProfitabilityMapActivity.class)));
+        payTrendButton.setOnClickListener(v -> showPayTrend());
     }
 
     @Override
@@ -653,6 +655,104 @@ public class TripHistoryActivity extends AppCompatActivity {
                 case "time_of_day": return "Traffic/time of day";
                 case "weather": return "Weather";
                 default: return factor;
+            }
+        }
+
+        /**
+         * docs/pay_trend/PRD.md -- driver asked directly whether this app
+         * has solved gig-platform algorithmic pay steering (a driver's own
+         * acceptance history influencing what they're offered later). It
+         * hasn't, and structurally can't -- that decision happens entirely
+         * on DoorDash's own backend, invisible to a client-side app that
+         * only reads the screen and notifications. This surfaces the
+         * driver's OWN recorded $/km and $/hr trend instead -- their own
+         * evidence, not a diagnosis of why it moved (framed explicitly in
+         * the dialog text itself, not just in this comment, since a
+         * decline here could be platform-side steering OR ordinary market
+         * seasonality/fewer active restaurants/plain chance, and this
+         * can't tell those apart).
+         */
+        private void showPayTrend() {
+            try {
+                JSONObject result = new JSONObject(engine.callAttr("get_pay_trend").toString());
+                JSONArray weekly = result.optJSONArray("weekly");
+                // Self-caught bug: get_pay_trend() always returns exactly
+                // 8 weekly buckets (empty ones included, so a gap week
+                // shows "no offers recorded" rather than silently
+                // vanishing) -- so `weekly` is never actually null/empty,
+                // even for a driver with zero offer history ever. Checking
+                // array LENGTH here never caught that case; checking
+                // whether every bucket's own sample_count is 0 does.
+                boolean hasAnyData = false;
+                if (weekly != null) {
+                    for (int i = 0; i < weekly.length(); i++) {
+                        JSONObject w = weekly.optJSONObject(i);
+                        if (w != null && w.optInt("sample_count", 0) > 0) {
+                            hasAnyData = true;
+                            break;
+                        }
+                    }
+                }
+                if (!hasAnyData) {
+                    new AlertDialog.Builder(this)
+                            .setTitle("Pay Trend")
+                            .setMessage("No offer history recorded yet.")
+                            .setPositiveButton("OK", null)
+                            .show();
+                    return;
+                }
+
+                StringBuilder body = new StringBuilder();
+                body.append("Your own recorded $/km and $/hr over time, from every offer you've been "
+                        + "shown (accepted, declined, or timed out) -- not a diagnosis of why it moved.\n\n");
+
+                JSONObject trend = result.optJSONObject("trend");
+                if (trend != null) {
+                    body.append("--- Recent weeks vs. earlier weeks ---\n");
+                    if (!trend.isNull("dollar_per_km_change_pct")) {
+                        double pct = trend.optDouble("dollar_per_km_change_pct", 0);
+                        body.append(String.format("$/km: %s%.1f%%\n", pct >= 0 ? "+" : "", pct));
+                    }
+                    if (!trend.isNull("dollar_per_hr_change_pct")) {
+                        double pct = trend.optDouble("dollar_per_hr_change_pct", 0);
+                        body.append(String.format("$/hr: %s%.1f%%\n", pct >= 0 ? "+" : "", pct));
+                    }
+                    body.append("\n");
+                } else {
+                    body.append("Not enough offer history yet in both halves of the window for a "
+                            + "reliable recent-vs-earlier comparison.\n\n");
+                }
+
+                body.append("--- Weekly breakdown (most recent first) ---\n");
+                java.text.SimpleDateFormat dateFormat =
+                        new java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault());
+                for (int i = 0; i < weekly.length(); i++) {
+                    JSONObject w = weekly.optJSONObject(i);
+                    if (w == null) continue;
+                    long startMs = (long) (w.optDouble("week_start_ts", 0) * 1000);
+                    long endMs = (long) (w.optDouble("week_end_ts", 0) * 1000);
+                    int sampleCount = w.optInt("sample_count", 0);
+                    String range = dateFormat.format(new java.util.Date(startMs)) + " - "
+                            + dateFormat.format(new java.util.Date(endMs));
+                    if (sampleCount == 0) {
+                        body.append(String.format("%s: no offers recorded\n", range));
+                        continue;
+                    }
+                    body.append(String.format("%s: %s, %s (%d offer%s)\n", range,
+                            w.isNull("avg_dollar_per_km") ? "$/km n/a"
+                                    : String.format("$%.2f/km", w.optDouble("avg_dollar_per_km")),
+                            w.isNull("avg_dollar_per_hr") ? "$/hr n/a"
+                                    : String.format("$%.2f/hr", w.optDouble("avg_dollar_per_hr")),
+                            sampleCount, sampleCount == 1 ? "" : "s"));
+                }
+
+                new AlertDialog.Builder(this)
+                        .setTitle("Pay Trend")
+                        .setMessage(body.toString())
+                        .setPositiveButton("OK", null)
+                        .show();
+            } catch (JSONException | PyException e) {
+                Toast.makeText(this, "Could not load pay trend: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }
 

@@ -101,5 +101,14 @@
         android:layout_marginTop="8dp"
         android:text="@string/location_profitability_map" />
 
+    <Button
+        android:id="@+id/payTrendButton"
+        android:backgroundTint="?attr/colorPrimary"
+        android:textColor="#FFFFFF"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/pay_trend" />
+
 </LinearLayout>
 </ScrollView>
