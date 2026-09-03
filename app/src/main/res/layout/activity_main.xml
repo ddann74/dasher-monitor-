@@ -109,5 +109,14 @@
         android:layout_marginTop="8dp"
         android:text="@string/nav_developer_testing" />
 
+    <Button
+        android:id="@+id/tutorialNavButton"
+        android:backgroundTint="?attr/colorPrimary"
+        android:textColor="#FFFFFF"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/nav_tutorial" />
+
 </LinearLayout>
 </ScrollView>

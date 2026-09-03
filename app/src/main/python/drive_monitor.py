@@ -26,6 +26,7 @@ import math
 import json
 import os
 import re
+import random
 from datetime import datetime, timedelta
 
 # ------------------------------------------------------------------------- #
@@ -119,6 +120,21 @@ LOCATION_PROFITABILITY_MIN_SAMPLES = 3
 # half to individually clear this minimum before being trusted.
 PAY_TREND_DEFAULT_WEEKS = 8
 PAY_TREND_MIN_SAMPLES_PER_HALF = 3
+
+# docs/tutorial_mode/PRD.md ss4 -- driver chose Option B (varied
+# synthetic environments) + Option C (real address-book restaurants
+# once history exists), combined. This pool is Option B's fallback for
+# a driver with no real pickup_location_history yet -- picked fresh
+# (not seeded) each call, since the driver asked for variety across
+# runs, not reproducibility. Distances/payouts/wait times deliberately
+# varied against each other (not just the restaurant name) so the
+# Smart Score walkthrough shows genuinely different numbers run to run.
+TUTORIAL_SYNTHETIC_ENVIRONMENTS = [
+    {"restaurant_name": "KFC Fairy Meadow", "distance_km": 5.1, "payout": 13.65, "avg_wait_minutes": 8.0},
+    {"restaurant_name": "Nando's Wollongong", "distance_km": 2.3, "payout": 9.20, "avg_wait_minutes": 12.0},
+    {"restaurant_name": "Guzman y Gomez Corrimal", "distance_km": 8.7, "payout": 17.40, "avg_wait_minutes": 5.0},
+    {"restaurant_name": "Subway Figtree", "distance_km": 1.2, "payout": 6.50, "avg_wait_minutes": 15.0},
+]
 
 # Reuses the same ~1.1km grid already proven in zone-based traffic-risk
 # learning, rather than a raw geographic average (which could suggest a
@@ -2224,6 +2240,26 @@ class TripManager:
         self._deadhead_distance_km = None
         self._distance_at_departure_km = None
         self._departure_timestamp = None
+
+    def discard_pending_pickup_and_stops(self):
+        """
+        docs/tutorial_mode/PRD.md ss5 P3: an interrupted tutorial run
+        (driver backs out or switches apps mid-sequence) could otherwise
+        leave a FAKE add_pickup/add_stop_to_buffer registration sitting
+        in memory, which could confuse real geofence/arrival detection
+        if the driver's real GPS later happens to wander near those fake
+        coordinates before the next real trip start (which would
+        otherwise be the only thing to naturally clear self.pickup, per
+        _start_trip's own reset).
+
+        Deliberately a plain reset, NOT a call to add_pickup(None, ...) --
+        add_pickup's own overwrite path persists the OUTGOING pickup's
+        job row first (see its own comment on _persist_pickup_job_row)
+        for the real stacked-order case; a discarded TUTORIAL pickup was
+        never real and must never be persisted anywhere.
+        """
+        self.pickup = None
+        self.stops = []
 
     def update_pickup_coordinates(self, lat, lon):
         """
@@ -4915,6 +4951,93 @@ class DriveMonitorEngine:
             "trend": trend,
         })
 
+    def get_tutorial_environment(self, base_lat, base_lon):
+        """
+        docs/tutorial_mode/PRD.md ss3/ss4 -- picks the fake delivery
+        scenario for one run of the interactive tutorial. Driver chose
+        Option B (varied synthetic environments) + Option C (the
+        driver's own real address-book restaurants once history
+        exists), combined:
+
+        - If any restaurant has a real, GPS-confirmed pickup location
+          (pickup_location_history -- same real geo-anchor
+          docs/location_profitability_map/PRD.md already established),
+          picks one AT RANDOM and uses its real averaged lat/lon, plus
+          its real learned wait time (restaurant_wait_history) and
+          deadhead distance (offer_distance_accuracy) where available --
+          the most personally relevant version. `payout` is NOT a real
+          recorded figure (this app doesn't persist one canonical
+          "the" payout per restaurant, only per individual offer) --
+          a plausible figure derived from the real distance, disclosed
+          as such via `payout_is_illustrative`, never presented as if
+          it were a real historical number.
+        - Otherwise (a driver with no real pickup history yet) picks
+          AT RANDOM from TUTORIAL_SYNTHETIC_ENVIRONMENTS, a small
+          built-in pool of made-up restaurants/distances/payouts/wait
+          times, so even a brand-new driver's first tutorial run has
+          real variety, not always the identical scenario.
+
+        Picked fresh (not seeded) on every call -- the driver asked for
+        variety across runs, not reproducibility.
+
+        base_lat/base_lon: the phone's real current location if known
+        (Java passes TripForegroundService.lastKnownLat/lastKnownLon
+        when hasValidLocation, else its own existing fixed fallback,
+        same pattern DeveloperTestingActivity.addTestStopNearby already
+        uses) -- doubles as the SIMULATED "start" point for the
+        tutorial's driving-to-pickup leg, matching how a real trip
+        actually starts from wherever the driver currently is, not a
+        floating abstract point.
+        """
+        real_restaurants = self.db.conn.execute("""
+            SELECT restaurant_name, AVG(lat) AS avg_lat, AVG(lon) AS avg_lon
+            FROM pickup_location_history GROUP BY restaurant_name
+        """).fetchall()
+
+        if real_restaurants:
+            row = random.choice(real_restaurants)
+            wait_row = self.db.conn.execute(
+                "SELECT avg_wait_minutes FROM restaurant_wait_history WHERE restaurant_name = ?",
+                (row["restaurant_name"],),
+            ).fetchone()
+            deadhead_row = self.db.conn.execute(
+                "SELECT AVG(actual_deadhead_km) AS avg_km FROM offer_distance_accuracy WHERE restaurant_name = ?",
+                (row["restaurant_name"],),
+            ).fetchone()
+            distance_km = (round(deadhead_row["avg_km"], 1)
+                           if deadhead_row and deadhead_row["avg_km"] else 5.0)
+            return json.dumps({
+                "source": "real",
+                "restaurant_name": row["restaurant_name"],
+                "start_lat": base_lat,
+                "start_lon": base_lon,
+                "dest_lat": round(row["avg_lat"], 6),
+                "dest_lon": round(row["avg_lon"], 6),
+                "distance_km": distance_km,
+                "payout": round(distance_km * 2.5, 2),
+                "payout_is_illustrative": True,
+                "avg_wait_minutes": (round(wait_row["avg_wait_minutes"], 1)
+                                      if wait_row and wait_row["avg_wait_minutes"] else 8.0),
+            })
+
+        profile = random.choice(TUTORIAL_SYNTHETIC_ENVIRONMENTS)
+        # Simple due-north offset (1 degree latitude ~= 111km) -- same
+        # order of approximation this codebase's own existing simulate
+        # methods already use (fixed 0.001-degree deltas with no real
+        # distance-aware math), not a claim of navigational precision.
+        return json.dumps({
+            "source": "synthetic",
+            "restaurant_name": profile["restaurant_name"],
+            "start_lat": base_lat,
+            "start_lon": base_lon,
+            "dest_lat": round(base_lat + profile["distance_km"] / 111.0, 6),
+            "dest_lon": base_lon,
+            "distance_km": profile["distance_km"],
+            "payout": profile["payout"],
+            "payout_is_illustrative": False,
+            "avg_wait_minutes": profile["avg_wait_minutes"],
+        })
+
     RESTAURANT_VISIT_HISTORY_LIMIT = 10
 
     def get_restaurant_visit_history(self, restaurant_name):
@@ -5316,6 +5439,10 @@ class DriveMonitorEngine:
         """
         self.trip_manager.add_pickup(restaurant_name, lat, lon, claimed_distance_km, score_snapshot_json,
                                       deadline_text, address, payout)
+
+    def discard_pending_pickup_and_stops(self):
+        """Wrapper -- see TripManager.discard_pending_pickup_and_stops for the real logic (docs/tutorial_mode/PRD.md ss5 P3)."""
+        self.trip_manager.discard_pending_pickup_and_stops()
 
     def update_pickup_coordinates(self, lat, lon):
         """

@@ -94,6 +94,7 @@ public class MainActivity extends AppCompatActivity {
             Button dataManagementNavButton = findViewById(R.id.dataManagementNavButton);
             Button diagnosticsNavButton = findViewById(R.id.diagnosticsNavButton);
             Button developerTestingNavButton = findViewById(R.id.developerTestingNavButton);
+            Button tutorialNavButton = findViewById(R.id.tutorialNavButton);
 
             startButton.setOnClickListener(v -> {
                 logDiagnostic("BUTTON", "Start Monitoring tapped");
@@ -158,6 +159,11 @@ public class MainActivity extends AppCompatActivity {
                     startActivity(new Intent(this, DiagnosticsActivity.class)));
             developerTestingNavButton.setOnClickListener(v ->
                     startActivity(new Intent(this, DeveloperTestingActivity.class)));
+            // docs/tutorial_mode/PRD.md (driver backlog #29) -- driver-
+            // facing, unlike Developer Testing above (a hidden dev tool,
+            // wrong audience for a teaching walkthrough).
+            tutorialNavButton.setOnClickListener(v ->
+                    startActivity(new Intent(this, TutorialActivity.class)));
 
             updateStatusText();
         }

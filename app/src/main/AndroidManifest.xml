@@ -130,6 +130,12 @@
         <activity android:name=".DeveloperTestingActivity" android:exported="false"
             android:theme="@style/Theme.DasherMonitor.DeveloperTesting"
             android:parentActivityName=".MainActivity" />
+        <!-- docs/tutorial_mode/PRD.md (driver backlog #29): driver-
+             facing, reuses the base theme (not one of the original 6
+             category screens). -->
+        <activity android:name=".TutorialActivity" android:exported="false"
+            android:theme="@style/Theme.DasherMonitor"
+            android:parentActivityName=".MainActivity" />
 
         <!-- Foreground service: GPS logging, trip state machine, and
              (opt-in, see docs/screen_recording/PRD.md) screen recording.

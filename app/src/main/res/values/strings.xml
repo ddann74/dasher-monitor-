@@ -41,6 +41,9 @@
     <string name="nav_data_management">Data Management</string>
     <string name="nav_diagnostics">Diagnostics</string>
     <string name="nav_developer_testing">Developer Testing</string>
+    <string name="nav_tutorial">Tutorial</string>
+    <string name="tutorial_next">Next</string>
+    <string name="tutorial_skip">Skip Tutorial</string>
     <string name="view_distance_accuracy">View Distance Accuracy</string>
     <string name="view_hourly_rate_accuracy">View Hourly Rate Accuracy</string>
     <string name="trusted_contacts_heading">Trusted Contacts</string>
