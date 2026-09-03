@@ -1,10 +1,9 @@
 # PRD — make the Smart Score's fixed thresholds market-relative (learned)
 
-Status: DRAFT. Investigation only, grounded in the real code and real
-schema. Nothing implemented yet — do not start coding from this PRD
-until the driver says "yes implement it." §4B (added at the driver's
-request) is a second, alternative design — see §5 for how the two
-relate; this PRD does not yet pick one over the other.
+Status: IMPLEMENTED and tested (2026-09-03) — driver said "yes
+implement it" and then answered all of §5's open questions directly
+(see §7). §4B (composite-score quartile labeling) was built, NOT §4
+(per-factor anchors) — driver's own choice, see §7.1.
 
 ## 1. What "fixed thresholds" means here
 
@@ -143,68 +142,117 @@ moving, AND the label thresholds on top of that also moving), with no
 way to tell which one changed. This PRD does not pick between them —
 see the new open question below.
 
-## 5. Open questions (need a driver decision before implementation)
+## 5. Open questions — ANSWERED (2026-09-03), see §7 for the writeup
 
-- **§4 vs. §4B, or a staged combination**: build the per-factor anchors
-  (§4), the composite-label quartiles (§4B), both, or start with just
-  one and revisit? §4B is the smaller, more self-contained change (one
-  function's breakpoints, not four formulas) and reuses data already
-  proven to work for §4's own `base_score`/`hourly_score` case — a
-  reasonable candidate to build first if the driver wants to start
-  somewhere concrete, but that's a product call, not a coding one.
-- **Interaction with `recalculate_personal_calibration`**: once an
-  anchor is itself market-relative, does per-factor weight calibration
-  still mean the same thing? A factor could simultaneously have its
-  anchor drift toward "typical" (making everything average score near
-  50) AND its weight drift based on correlation with your
-  satisfaction. Recommend deciding whether these should run on
-  visibly separate, clearly labeled numbers (an "anchor" and a
-  "weight," never silently combined) rather than trying to have this
-  PRD unify them into one mechanism.
-- **Percentile choice and window**: a specific value (e.g. "75th
-  percentile of the last 90 days" vs. "median of all-time") needs to
-  be picked deliberately, not left as an implementation detail —
-  changes what "100" means to the driver.
-- **Which sample population for `base_score`/`hourly_score`**: all
-  scored offers (`offer_outcomes`, includes declined/timed-out — a
-  fuller picture of the local market) vs. only accepted ones (smaller,
-  but reflects what you actually chose to drive). These can give
-  meaningfully different anchors.
-- **The circularity risk flagged when this was first raised**: if a
-  market has a genuinely bad week, a percentile-based anchor quietly
-  redefines "good" downward instead of showing you the market got
-  worse. Worth deciding whether the anchor should have a floor (never
-  drift below some fraction of the current fixed constant) so "100"
-  can't silently mean less than it used to.
+- ~~§4 vs. §4B, or a staged combination~~ → **§4B only**, driver's
+  direct choice.
+- **Interaction with `recalculate_personal_calibration`**: not
+  re-asked separately — §4B doesn't touch any factor-level anchor or
+  weight, so this PRD's own recommendation (keep them visibly separate)
+  was moot for the design actually chosen; personal calibration is
+  completely untouched by this change.
+- ~~Percentile choice and window~~ → **75th/50th/25th percentile, last
+  90 days.**
+- ~~Which sample population~~ → **all scored offers** (accepted,
+  declined, timed out) — matches §4B's own text, which already
+  proposed this same population; driver confirmed directly rather than
+  it being assumed.
+- ~~Circularity floor~~ → **yes, add a floor** — see §7.2 for the exact
+  mechanism chosen.
 
-## 6. Success criteria (not started — nothing here is implemented yet)
+## 6. Success criteria
 
-- [ ] §5's open questions answered by the driver, INCLUDING which of
-      §4/§4B (or both, or a staged order) to actually build (recorded
-      in PROGRESS.md before any of the boxes below are started).
+§4 (per-factor anchors) — NOT built, driver chose §4B only:
+- [ ] N/A — see §5.
 
-§4 (per-factor anchors), if chosen:
-- [ ] `base_score` anchor learnable from `offer_outcomes`, gated on a
-      minimum sample count, falling back to the fixed $2.00/km anchor
-      below that count.
-- [ ] `hourly_score` anchor learnable the same way.
-- [ ] `deadhead_score` anchor learnable from `offer_distance_accuracy`.
-- [ ] `wait_score` anchor learnable from `restaurant_wait_history`.
-- [ ] The learned anchor is surfaced in `calculate()`'s return dict,
-      not just used silently.
-- [ ] Real executable test proving at least one factor: same raw
-      input, anchor shifts after seeding synthetic historical data,
-      and the resulting sub-score changes accordingly.
-
-§4B (composite-score quartile labeling), if chosen:
-- [ ] `_label()`'s breakpoints learnable from `offer_outcomes.smart_score`'s
+§4B (composite-score quartile labeling) — built:
+- [x] `_label()`'s breakpoints learnable from `offer_outcomes.smart_score`'s
       real quartile distribution, gated on a minimum sample count,
       falling back to the exact fixed 85/70/50 breakpoints below that
       count.
-- [ ] `colorForLabel`/the badge/haptics need no change — they already
-      key off the label string, not a raw score number.
-- [ ] Real executable test: same `final_score`, label changes once
-      enough synthetic historical `offer_outcomes` rows shift the
-      quartile boundaries around it.
+- [x] `colorForLabel`/the badge/haptics needed no change — confirmed,
+      they key off the label string, not a raw score number.
+- [x] Real executable test: 7 cases, all passed (see §7.3).
+- [x] Floor mechanism implemented and tested (§7.2) — a uniformly bad
+      market can't collapse the thresholds below
+      `LABEL_QUARTILE_FLOOR_FRACTION` of the fixed constants.
+- [x] Learned-vs-fixed transparency surfaced in `calculate()`'s return
+      dict (`label_is_learned`, `label_sample_count`), not just used
+      silently — same "why" principle every other learned value in
+      this file already follows.
 
 - [ ] Driver sign-off.
+
+## 7. Implementation writeup (2026-09-03)
+
+### 7.1 §4B chosen, §4 not built
+
+Driver picked §4B (recommended) directly when asked. §4 (per-factor
+anchors on `base_score`/`hourly_score`/`deadhead_score`/`wait_score`)
+remains exactly as designed in §4 above if ever wanted later — not
+started, not half-built.
+
+### 7.2 Design actually implemented
+
+New `SmartScoreEngine._learned_label_thresholds()`: queries
+`offer_outcomes.smart_score` for `is_test_data = 0`, any outcome,
+`timestamp >=` a 90-day cutoff (`LABEL_QUARTILE_WINDOW_DAYS`). Below
+`LABEL_QUARTILE_MIN_SAMPLES = 25` (same scale as the existing
+`CALIBRATION_MIN_SAMPLES` precedent — quartiles of a tiny sample are
+unstable), returns the original fixed `(85, 70, 50)` with
+`is_learned=False`. At or above that count, computes the 75th/50th/25th
+percentile via a new module-level `_percentile()` helper (linear
+interpolation, no new dependency — Chaquopy's bundled Python version
+isn't guaranteed to include `statistics.quantiles`, added in 3.8), then
+applies the driver-approved floor: each learned breakpoint is
+`max(percentile, FIXED_BREAKPOINT * LABEL_QUARTILE_FLOOR_FRACTION)`
+(`LABEL_QUARTILE_FLOOR_FRACTION = 0.7`, a deliberately disclosed,
+round-number choice — not independently re-confirmed with the driver
+beyond "yes, add a floor," open to adjustment if 0.7 turns out wrong in
+practice). A cheap safety clamp afterward (`good = min(good,
+excellent)`, `fair = min(fair, good)`) keeps the three thresholds
+strictly ordered even in an edge-case distribution where a floor and a
+percentile might otherwise disagree on ordering.
+
+`_label(score)` (previously `@staticmethod`, now a real instance
+method — confirmed both existing call sites already called it via an
+instance, `self._label(...)`/`self.smart_score._label(...)`, so this
+needed no call-site changes) now fetches the learned thresholds and
+buckets against them via new `_bucket_label(score, excellent, good,
+fair)`. `calculate()` computes the thresholds ONCE directly (not via
+`self._label()`, which would re-run the same query) and reuses them for
+both the label itself and two new transparency fields on its return
+dict: `label_is_learned`, `label_sample_count` — the same "why"
+principle every other learned value in this file already follows (e.g.
+`deadhead_is_restaurant_specific`).
+
+### 7.3 Verification
+
+Real, runnable Python test (`test_market_relative_label_thresholds.py`,
+7 cases, all passed):
+
+1. Below `LABEL_QUARTILE_MIN_SAMPLES` → exact fixed 85/70/50,
+   `is_learned=False`, and `_label()` still buckets correctly against
+   the fixed constants.
+2. 25 samples, a real spread distribution → learned thresholds match
+   `_percentile()` called directly on the same sorted data (cross-
+   checked independently, not just re-deriving the same formula).
+3. **The floor, the whole point of this PRD's driver-flagged risk**: 30
+   samples, every single offer scoring 20 (a uniformly bad market) →
+   without a floor, "Excellent" would collapse to 20; confirmed it
+   instead holds at exactly `85 * 0.7 = 59.5`, and all three thresholds
+   stay correctly ordered.
+4. Samples older than 90 days are excluded from the window.
+5. `is_test_data = 1` rows are excluded.
+6. `_bucket_label()` boundary correctness at each of the four buckets.
+7. `_percentile()` itself: known linear-interpolation values, including
+   the single-element edge case.
+
+Re-ran the full existing scratchpad test suite after this change — no
+regressions (the one pre-existing failure, `test_dropoff_instruction_
+wiring.py`, predates this pass entirely and is already tracked as
+stale). `drive_monitor.py` recompiles cleanly. No Java changes were
+needed for this PRD — confirmed directly, `colorForLabel`/the live
+badge/haptics all key off the label STRING (`"Excellent"`/`"Good"`/
+etc.), never a raw score number, so a driver whose market has genuinely
+shifted just sees the label move under otherwise-identical Java code.
