@@ -251,18 +251,20 @@ analysis plus new UI.
       difficulty) - not individual visit records or ratings. Needs a new
       per-restaurant visit-history query joining `trips`/`trip_feedback`
       by restaurant name, plus a stdev calculation.
-- [ ] **#8 - trip history: full stage breakdown (driving to pickup,
+- [x] **#8 - trip history: full stage breakdown (driving to pickup,
       waiting at restaurant incl. wait-time rating, driving to dropoff,
-      completing dropoff, deadhead time if applicable).** SMALL - MOSTLY
-      ALREADY BUILT. `phase_breakdown` (the four driving/waiting phases)
-      is already computed and shown
-      (`TripHistoryActivity.java:520-575`). Missing pieces only: the
-      wait-time RATING itself (`merchant_wait_rating` is captured in
-      `trip_feedback` but never surfaced in this specific view), and
-      deadhead shown as a TIME (only deadhead KM is currently shown,
-      from the offer snapshot - a time value isn't computed/stored
-      today). Two small additions to an existing screen, not new
-      infrastructure.
+      completing dropoff, deadhead time if applicable).** FIXED
+      (2026-09-03): both missing pieces added to
+      `TripHistoryActivity.buildTripSummaryBody()`. Wait-time RATING -
+      `feedback_merchant_wait` ("Fast"/"Okay"/"Slow", already returned
+      in the same summary JSON, just never read here before) now shown
+      as "(rated: X)" next to the wait duration. Deadhead TIME - reuses
+      `phase_breakdown`'s existing `driving_to_pickup_seconds` (for the
+      single/first-job scope this data already has, driving-to-pickup
+      time IS the deadhead leg's time, not a new computation), shown
+      alongside the existing "Deadhead: X km" line rather than as a
+      separate, confusingly-duplicate "Driving to pickup" entry. See
+      PROGRESS.md for the honest caveat about that reuse.
 - [ ] **#9 - separate Dasher vs. General trips in the report.** SMALL.
       `trips.mode` already exists and is already returned by
       `get_trip_history()` (`drive_monitor.py:3683-3706`) - no

@@ -82,3 +82,56 @@ has always already run by the time this fires - no init-order risk.
 
 PRD §4 box checked. Remaining §6-ordered items: #8, then #6/#9, per the
 recommended order.
+
+## #8 implemented (2026-09-03): trip history full stage breakdown
+
+Second item per §6. Both pieces the PRD flagged as missing from the
+already-existing `phase_breakdown` display in
+`TripHistoryActivity.buildTripSummaryBody()`:
+
+1. **Wait-time rating.** `drive_monitor.py`'s `get_trip_summary()` (the
+   function backing this whole dialog) already returns
+   `feedback_merchant_wait` (`"Fast"`/`"Okay"`/`"Slow"`, confirmed by
+   checking `MainActivity.java:724`'s rating-dialog options) in the same
+   JSON `phase_breakdown` comes from - it was simply never read in this
+   view. Added as `"(rated: X)"` next to the existing wait-duration line.
+2. **Deadhead time.** Confirmed via a full `grep -i deadhead` across
+   `drive_monitor.py` that "deadhead" is exclusively a DISTANCE concept
+   in this codebase (`deadhead_km`, `actual_deadhead_km`) - no
+   timestamp-based deadhead duration is computed or stored anywhere.
+   Rather than inventing a new computation, reused
+   `phase_breakdown["driving_to_pickup_seconds"]`: for the single/
+   first-job scope `phase_breakdown` already documents as its own
+   limitation (only the FIRST pickup/dropoff of a trip, a known,
+   already-disclosed gap for stacked/multi-stop orders - see
+   `docs/deadhead_stacked_order_baseline/PRD.md`), driving-to-pickup
+   time and deadhead time are the same interval. Added as a
+   parenthetical next to the existing "Deadhead: X km" line (which
+   lives in the offer-snapshot section) rather than as a second,
+   confusingly-duplicate "Driving to pickup" line in the phase-breakdown
+   section further down - same underlying number, one place to see it
+   tied to the concept the driver actually asked about.
+
+**Honest caveat, disclosed rather than silently assumed**: this reuse
+is only correct because of `phase_breakdown`'s own pre-existing single-
+job scope limitation. If that limitation is ever fixed (tracked
+separately, `docs/deadhead_stacked_order_baseline/PRD.md` Part 2B,
+currently blocked on real evidence about the dropoff screen), this
+deadhead-time display would need re-checking - it was built assuming
+today's known scope, not guessed at as if it were a general truth.
+
+**Refactor note**: `phaseBreakdown` was previously fetched only inside
+the "Where The Time Went" section further down the method; hoisted its
+`summary.optJSONObject("phase_breakdown")` lookup earlier (fetched
+once, reused by both the new deadhead-time line and the existing
+section) rather than fetching the same key twice.
+
+**Verification**: same disclosed limitation as every Java-side PRD in
+this repo - no Android SDK/emulator/device, code review plus static
+checks. `TripHistoryActivity.java` brace/paren balance: 96/96 braces,
+636/636 parens. Confirmed `optString(key, "")`'s null/missing-key
+fallback behavior matches this exact file's own established pattern
+(e.g. `pickup_address`, `verdict_sentence` already use it identically).
+
+PRD §4 box checked. Next per §6: #6 and #9 (accepted/declined $/km,
+Dasher/General separation).
