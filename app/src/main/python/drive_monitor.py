@@ -406,7 +406,8 @@ class Database:
             outcome TEXT DEFAULT 'accepted',
             timestamp INTEGER,
             components_json TEXT,
-            is_test_data INTEGER DEFAULT 0
+            is_test_data INTEGER DEFAULT 0,
+            omitted_from_calibration INTEGER DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS personal_calibration (
@@ -455,6 +456,19 @@ class Database:
                 UPDATE offer_outcomes SET is_test_data = 1
                 WHERE restaurant_name IN ('Test Accepted Place', 'Test Declined Place', 'Test Timed Out Place')
             """)
+            self.conn.commit()
+
+        # Driver backlog #2 (docs/driver_backlog_2026_09_03/PRD.md):
+        # "give me the option to omit or include each offer" from what
+        # recalculate_personal_calibration learns from. Deliberately a
+        # SEPARATE column from is_test_data, not a reuse of it -- that
+        # flag means something different (auto-set by Developer Testing,
+        # never driver-controlled) and conflating "this was test data"
+        # with "I chose to exclude this real offer" would misrepresent
+        # both. Same ALTER TABLE migration pattern as is_test_data above.
+        if "omitted_from_calibration" not in existing_columns:
+            self.conn.execute(
+                "ALTER TABLE offer_outcomes ADD COLUMN omitted_from_calibration INTEGER DEFAULT 0")
             self.conn.commit()
 
         # Migration for databases that already existed before phase-timing
@@ -1155,10 +1169,14 @@ class SmartScoreEngine:
         # an active decline, since the driver forfeits real earned pay
         # specifically to escape it. No new branch needed below: anything
         # in this filtered set that isn't "accepted" already maps to 0.0.
+        # omitted_from_calibration (driver backlog #2) honored here --
+        # the driver's own per-offer choice to exclude a real offer from
+        # what this function learns from, separate from is_test_data.
         outcome_rows = self.db.conn.execute("""
             SELECT outcome, components_json FROM offer_outcomes
             WHERE components_json IS NOT NULL
                 AND outcome IN ('accepted', 'declined', 'unassigned_long_wait') AND is_test_data = 0
+                AND omitted_from_calibration = 0
         """).fetchall()
         for row in outcome_rows:
             try:
@@ -4146,6 +4164,38 @@ class DriveMonitorEngine:
         }
 
         return json.dumps({"entries": entries, "comparison": comparison, "rate_comparison": rate_comparison})
+
+    def get_calibration_offers_list(self, limit=100):
+        """
+        Driver backlog #2 (docs/driver_backlog_2026_09_03/PRD.md):
+        "give me the option to omit or include each offer" from what
+        recalculate_personal_calibration learns from. Lists every
+        real (is_test_data = 0) offer -- accepted, declined, timed out,
+        unassigned-long-wait, whatever outcome -- most recent first,
+        with its current omitted_from_calibration state, so the driver
+        can review and toggle each one.
+        """
+        rows = self.db.conn.execute("""
+            SELECT id, restaurant_name, payout, distance_km, outcome, timestamp, omitted_from_calibration
+            FROM offer_outcomes WHERE is_test_data = 0
+            ORDER BY timestamp DESC LIMIT ?
+        """, (limit,)).fetchall()
+        return json.dumps({"offers": [{
+            "id": row["id"],
+            "restaurant_name": row["restaurant_name"],
+            "payout": row["payout"],
+            "distance_km": row["distance_km"],
+            "outcome": row["outcome"],
+            "timestamp": row["timestamp"],
+            "omitted": bool(row["omitted_from_calibration"]),
+        } for row in rows]})
+
+    def set_offer_omitted_from_calibration(self, offer_id, omitted):
+        """Driver backlog #2 -- toggles one offer's omitted_from_calibration flag."""
+        self.db.conn.execute(
+            "UPDATE offer_outcomes SET omitted_from_calibration = ? WHERE id = ?",
+            (int(bool(omitted)), offer_id))
+        self.db.conn.commit()
 
     def export_trips_csv(self):
         """

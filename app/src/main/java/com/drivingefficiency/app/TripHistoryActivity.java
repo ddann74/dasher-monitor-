@@ -342,9 +342,66 @@ public class TripHistoryActivity extends AppCompatActivity {
                                 Toast.makeText(this, "Could not reset: " + e.getMessage(), Toast.LENGTH_LONG).show();
                             }
                         })
+                        .setNegativeButton("Edit Offers Used", (dialog, which) -> showCalibrationOffersToggle())
                         .show();
             } catch (RuntimeException | JSONException e) {
                 Toast.makeText(this, "Could not load calibration: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        }
+
+        /**
+         * Driver backlog #2 (docs/driver_backlog_2026_09_03/PRD.md):
+         * "give me the option to omit or include each offer" from what
+         * recalculate_personal_calibration learns from. A checklist --
+         * checked means included (the default for every offer), unchecked
+         * means omitted. Each toggle is persisted immediately via
+         * set_offer_omitted_from_calibration, not batched behind a
+         * separate "Save" step -- matches this screen's own "Reset to
+         * Base Weights" button, which also acts immediately.
+         */
+        private void showCalibrationOffersToggle() {
+            try {
+                JSONObject result = new JSONObject(engine.callAttr("get_calibration_offers_list").toString());
+                JSONArray offers = result.optJSONArray("offers");
+                if (offers == null || offers.length() == 0) {
+                    new AlertDialog.Builder(this)
+                            .setTitle("Edit Offers Used")
+                            .setMessage("No real (non-test) offers recorded yet.")
+                            .setPositiveButton("OK", null)
+                            .show();
+                    return;
+                }
+
+                String[] labels = new String[offers.length()];
+                int[] offerIds = new int[offers.length()];
+                boolean[] checked = new boolean[offers.length()];
+                java.text.SimpleDateFormat dateFormat =
+                        new java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault());
+                for (int i = 0; i < offers.length(); i++) {
+                    JSONObject o = offers.optJSONObject(i);
+                    offerIds[i] = o.optInt("id", -1);
+                    checked[i] = !o.optBoolean("omitted", false);
+                    long tsMs = (long) (o.optDouble("timestamp", 0) * 1000);
+                    labels[i] = String.format("%s -- %s -- $%.2f, %.1f km [%s]",
+                            dateFormat.format(new java.util.Date(tsMs)),
+                            o.optString("restaurant_name", "Unknown"),
+                            o.optDouble("payout", 0), o.optDouble("distance_km", 0),
+                            o.optString("outcome", ""));
+                }
+
+                new AlertDialog.Builder(this)
+                        .setTitle("Edit Offers Used (checked = included)")
+                        .setMultiChoiceItems(labels, checked, (dialog, which, isChecked) -> {
+                            try {
+                                engine.callAttr("set_offer_omitted_from_calibration", offerIds[which], !isChecked);
+                            } catch (RuntimeException e) {
+                                Toast.makeText(this, "Could not save: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                            }
+                        })
+                        .setPositiveButton("Done", null)
+                        .show();
+            } catch (RuntimeException | JSONException e) {
+                Toast.makeText(this, "Could not load offers: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }
 

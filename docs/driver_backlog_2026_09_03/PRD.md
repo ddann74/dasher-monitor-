@@ -223,12 +223,18 @@ analysis plus new UI.
       plus new UI to present it. `docs/market_relative_score_thresholds/`
       (DRAFT, driver decision still pending) is adjacent (learned score
       thresholds) but doesn't cover this - a separate design pass.
-- [ ] **#2 - per-offer omit/include toggle for calibration.**
-      SMALL-MEDIUM. `offer_outcomes` collection already exists;
-      `is_test_data` exists but is only auto-set by Developer Testing,
-      not driver-toggleable per real offer. Needs a UI list (Address
-      Book/Trip History-adjacent) + a new driver-settable flag + honoring
-      it in `recalculate_personal_calibration`'s existing query.
+- [x] **#2 - per-offer omit/include toggle for calibration.** FIXED
+      (2026-09-03): new `omitted_from_calibration` column on
+      `offer_outcomes` (deliberately separate from `is_test_data`, which
+      means something different and is never driver-controlled) plus a
+      migration for existing databases. New
+      `get_calibration_offers_list()`/`set_offer_omitted_from_calibration()`
+      on `DriveMonitorEngine`; `recalculate_personal_calibration`'s
+      Source-2 query now excludes omitted offers. UI: a checklist dialog
+      (checked = included) reachable via a new "Edit Offers Used" button
+      on the existing Personal Calibration screen, each toggle saved
+      immediately. Verified with a real, runnable Python test covering
+      the list, the toggle, and the calibration query's own exclusion.
 - [ ] **#5 - suggested hotspot from the last 5 deliveries, weighted by
       offer quantity, with a copy-coordinates button.** MEDIUM.
       `get_pickup_sweet_spot_zone()` already exists

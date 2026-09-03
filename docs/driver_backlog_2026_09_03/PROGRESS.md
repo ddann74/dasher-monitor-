@@ -214,3 +214,48 @@ recompiles cleanly; `TripHistoryActivity.java` brace/paren balance:
 
 PRD §5 box for #14 checked. Next per §6: #2 (per-offer omit/include
 toggle).
+
+## #2 implemented (2026-09-03): per-offer omit/include toggle for calibration
+
+`recalculate_personal_calibration`'s Source 2 (accept/decline decisions,
+`drive_monitor.py` around line 1158) already filtered on `is_test_data =
+0`, but that flag is auto-set by Developer Testing only - never
+driver-controlled, and reusing it for "I chose to exclude this real
+offer" would have conflated two different concepts. Added a genuinely
+new column instead:
+
+- `offer_outcomes.omitted_from_calibration INTEGER DEFAULT 0` - added to
+  both the fresh-install `CREATE TABLE` and as an `ALTER TABLE`
+  migration for existing databases, same pattern as the existing
+  `is_test_data` migration right above it.
+- `get_calibration_offers_list(limit=100)` - lists every real (non-test)
+  offer, any outcome, most recent first, with its current omitted state.
+- `set_offer_omitted_from_calibration(offer_id, omitted)` - toggles one
+  offer.
+- `recalculate_personal_calibration`'s Source-2 query now adds `AND
+  omitted_from_calibration = 0`.
+
+**UI**: rather than a new top-level button, added "Edit Offers Used" as
+a third button on the EXISTING Personal Calibration dialog
+(`showPersonalCalibration()`) - the driver's own stated purpose was
+"so I can use them to build the smart score algorithm," which is
+exactly what that screen already shows. Opens a checklist dialog
+(`AlertDialog.setMultiChoiceItems` - checked = included, the default)
+listing each offer with date/restaurant/payout/distance/outcome; each
+checkbox toggle calls `set_offer_omitted_from_calibration` immediately,
+matching the existing "Reset to Base Weights" button's own
+immediate-effect pattern on the same screen (no separate "Save" step
+to remember).
+
+**Verification**: real, runnable Python test
+(`/tmp/.../test_omit_calibration.py`) covering: the list correctly
+excludes `is_test_data=1` rows; toggling one offer persists and does
+NOT affect any other offer; `recalculate_personal_calibration`'s own
+exact WHERE clause (re-run directly in the test) correctly excludes the
+omitted offer while keeping the rest; toggling back to included
+restores it. All four cases passed. `drive_monitor.py` recompiles
+cleanly. `TripHistoryActivity.java` brace/paren balance: 111/111
+braces, 738/738 parens.
+
+PRD §5 box for #2 checked. Next per §6: #5 and #7 (hotspot-from-last-5,
+per-restaurant visit breakdown).
