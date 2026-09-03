@@ -107,6 +107,19 @@ PARKING_DIFFICULTY_MIN_SAMPLES = 3
 # confident-looking data point.
 LOCATION_PROFITABILITY_MIN_SAMPLES = 3
 
+# docs/pay_trend/PRD.md -- driver asked directly whether this app has
+# solved gig-platform algorithmic pay steering (it can't -- that
+# happens entirely on DoorDash's own backend, invisible to a client-
+# side accessibility/notification-reading app). What IS buildable: make
+# the driver's own recorded pay trend over time visible to them, since
+# every offer's payout/distance/hourly_rate is already captured
+# regardless of outcome. 8 rolling 7-day buckets by default -- 2 months,
+# enough to see a real trend without so many buckets the report becomes
+# unreadable. A "recent half vs. earlier half" comparison needs each
+# half to individually clear this minimum before being trusted.
+PAY_TREND_DEFAULT_WEEKS = 8
+PAY_TREND_MIN_SAMPLES_PER_HALF = 3
+
 # Reuses the same ~1.1km grid already proven in zone-based traffic-risk
 # learning, rather than a raw geographic average (which could suggest a
 # nonsensical midpoint if real pickup locations are spread out and not
@@ -4822,6 +4835,85 @@ class DriveMonitorEngine:
                 "sample_count": len(score_values),
             })
         return json.dumps({"entries": entries})
+
+    def get_pay_trend(self, weeks=None):
+        """
+        docs/pay_trend/PRD.md -- driver asked directly whether this app
+        has solved gig-platform algorithmic pay steering (a driver's own
+        acceptance history influencing what they're offered later). It
+        hasn't, and structurally can't -- that decision happens entirely
+        on DoorDash's own backend, invisible to a client-side app that
+        only reads the screen and notifications. What this DOES do:
+        surface the driver's OWN recorded pay trend over time, in weekly
+        buckets, plus a recent-half-vs-earlier-half comparison -- their
+        own evidence, not a diagnosis of WHY it moved. A decline here
+        could be platform-side steering, but could equally be market
+        seasonality, fewer restaurants active, a city/zone change, or
+        plain chance -- this can't tell those apart and doesn't claim to.
+
+        Uses ALL scored offers (accepted, declined, timed out), not just
+        accepted -- consistent with the same population choice already
+        made for the Address Book, Profitability Map, and market-relative
+        thresholds this same session: a fuller picture of what's actually
+        being OFFERED, which is the more direct signal for "is DoorDash
+        offering me less lately," not just what was driven.
+        """
+        if weeks is None:
+            weeks = PAY_TREND_DEFAULT_WEEKS
+        now = time.time()
+        week_seconds = 7 * 86400.0
+
+        def rate_stats(start_ts, end_ts):
+            rows = self.db.conn.execute("""
+                SELECT payout, distance_km, hourly_rate FROM offer_outcomes
+                WHERE is_test_data = 0 AND timestamp >= ? AND timestamp < ?
+            """, (start_ts, end_ts)).fetchall()
+            rate_values = [r["payout"] / r["distance_km"] for r in rows
+                           if r["payout"] is not None and r["distance_km"] is not None and r["distance_km"] > 0]
+            hourly_values = [r["hourly_rate"] for r in rows if r["hourly_rate"] is not None]
+            return {
+                "avg_dollar_per_km": round(sum(rate_values) / len(rate_values), 2) if rate_values else None,
+                "avg_dollar_per_hr": round(sum(hourly_values) / len(hourly_values), 2) if hourly_values else None,
+                "sample_count": len(rows),
+            }
+
+        weekly = []
+        for i in range(weeks):
+            end_ts = now - i * week_seconds
+            start_ts = end_ts - week_seconds
+            stats = rate_stats(start_ts, end_ts)
+            stats["week_start_ts"] = start_ts
+            stats["week_end_ts"] = end_ts
+            weekly.append(stats)
+
+        # Recent-half vs. earlier-half comparison: computed directly from
+        # the raw rows in each half's own date range (a POOLED average),
+        # not by averaging the weekly buckets above -- averaging averages
+        # would let a single low-sample week skew the comparison as much
+        # as a high-sample week, which is not an honest representation.
+        half_weeks = weeks // 2
+        recent_half = rate_stats(now - half_weeks * week_seconds, now)
+        earlier_half = rate_stats(now - weeks * week_seconds, now - half_weeks * week_seconds)
+
+        trend = None
+        if (recent_half["sample_count"] >= PAY_TREND_MIN_SAMPLES_PER_HALF
+                and earlier_half["sample_count"] >= PAY_TREND_MIN_SAMPLES_PER_HALF):
+            trend = {}
+            if recent_half["avg_dollar_per_km"] is not None and earlier_half["avg_dollar_per_km"]:
+                trend["dollar_per_km_change_pct"] = round(
+                    (recent_half["avg_dollar_per_km"] - earlier_half["avg_dollar_per_km"])
+                    / earlier_half["avg_dollar_per_km"] * 100.0, 1)
+            if recent_half["avg_dollar_per_hr"] is not None and earlier_half["avg_dollar_per_hr"]:
+                trend["dollar_per_hr_change_pct"] = round(
+                    (recent_half["avg_dollar_per_hr"] - earlier_half["avg_dollar_per_hr"])
+                    / earlier_half["avg_dollar_per_hr"] * 100.0, 1)
+
+        return json.dumps({
+            "weekly": weekly,
+            "recent_half": recent_half,
+            "earlier_half": earlier_half,
+            "trend": trend,
+        })
 
     RESTAURANT_VISIT_HISTORY_LIMIT = 10
 

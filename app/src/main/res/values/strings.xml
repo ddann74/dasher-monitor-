@@ -78,5 +78,6 @@
     <string name="rejected_offers_report">Rejected Offers Report</string>
     <string name="restaurant_visit_history">Restaurant Visit History</string>
     <string name="location_profitability_map">Profitability Map</string>
+    <string name="pay_trend">Pay Trend</string>
     <string name="location_profitability_map_no_data">Not enough real pickup history yet -- this fills in as you complete real deliveries. Each restaurant needs at least a few recorded offers before it shows up here.</string>
 </resources>
