@@ -206,14 +206,14 @@ not effort in the abstract - "small" means the underlying data mostly
 already exists and this is wiring/UI; "large" means new schema plus new
 analysis plus new UI.
 
-- [ ] **#1 - geo-tagged smart-score database -> most profitable
-      locations.** LARGE. No lat/lon on `offer_outcomes` today (only
-      `restaurant_name`); geo data currently lives separately in
-      `pickup_location_history`. Needs a schema change joining the two,
-      plus a genuinely new location-profitability aggregation/analysis,
-      plus new UI to present it. `docs/market_relative_score_thresholds/`
-      (DRAFT, driver decision still pending) is adjacent (learned score
-      thresholds) but doesn't cover this - a separate design pass.
+- [x] **#1 - geo-tagged smart-score database -> most profitable
+      locations.** SCOPED (2026-09-03) and moved to its own PRD - driver
+      confirmed the full version: a dedicated new map, not just a stat
+      shown in an existing screen. See `docs/location_profitability_map/`
+      for the full design/implementation.
+      `docs/market_relative_score_thresholds/` (DRAFT, driver decision
+      still pending) is adjacent (learned score thresholds) but doesn't
+      cover this - a separate design pass.
 - [x] **#2 - per-offer omit/include toggle for calibration.** FIXED
       (2026-09-03): new `omitted_from_calibration` column on
       `offer_outcomes` (deliberately separate from `is_test_data`, which
@@ -327,14 +327,15 @@ analysis plus new UI.
       (avg $/km, avg $/hr, avg Smart Score + standard deviation). See §16
       for the full writeup.
 - [ ] **#29 - screen-recording-based tutorial/walkthrough to learn how
-      the app works.** MEDIUM-LARGE, no existing infrastructure at all -
-      no onboarding/tutorial/walkthrough system exists anywhere in this
-      codebase (checked directly, zero hits). Note: `docs/screen_recording/`
-      is a DIFFERENT feature entirely (in-trip recording for the
-      driver's own review, not a teaching tool) - don't conflate the
-      two when scoping this. `DeveloperTestingActivity`'s existing
-      simulate-offer buttons could seed a "practice mode" rather than
-      building from nothing, worth considering during design.
+      the app works.** ON THE BACKBURNER (2026-09-03) - driver directly
+      asked to deprioritize this in favor of #1. Design discussion
+      already happened (not lost): driver wants an interactive
+      walkthrough (not a guided tour or static FAQ), teaching the Smart
+      Score's 6 factors via a canned offer plus a short tour of the
+      real app screens - see PROGRESS.md for the full proposed shape.
+      Picking this back up needs two remaining open questions answered
+      first: Part 2's exact scope, and whether it's nudged on first
+      install or purely opt-in.
 
 ## 6. Recommended priority order (my judgment call, not driver-specified)
 

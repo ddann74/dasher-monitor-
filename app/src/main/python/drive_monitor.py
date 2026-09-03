@@ -101,6 +101,12 @@ DEFAULT_OFFER_TIMEOUT_ASSUMPTION_SECONDS = 90
 # restaurant before it means anything.
 PARKING_DIFFICULTY_MIN_SAMPLES = 3
 
+# docs/location_profitability_map/PRD.md -- same small-sample-caution
+# precedent as PARKING_DIFFICULTY_MIN_SAMPLES above, applied to a
+# restaurant's plotted map marker: 1-2 samples would be a misleadingly
+# confident-looking data point.
+LOCATION_PROFITABILITY_MIN_SAMPLES = 3
+
 # Reuses the same ~1.1km grid already proven in zone-based traffic-risk
 # learning, rather than a raw geographic average (which could suggest a
 # nonsensical midpoint if real pickup locations are spread out and not
@@ -4655,6 +4661,52 @@ class DriveMonitorEngine:
                 "avg_smart_score": round(avg_score, 1) if avg_score is not None else None,
                 "stdev_smart_score": round(stdev_score, 1) if stdev_score is not None else None,
                 "smart_score_samples": len(score_values),
+            })
+        return json.dumps({"entries": entries})
+
+    def get_location_profitability(self):
+        """
+        Driver backlog #1 (docs/location_profitability_map/PRD.md): "build
+        a database of smart score data and geolocation so I can determine
+        the most profitable locations to be in." Driver confirmed the full
+        version: a dedicated map, not just a stat on an existing screen.
+
+        HONEST SCOPE BOUNDARY: only restaurants with at least one real,
+        GPS-confirmed pickup (a row in pickup_location_history, written by
+        TripManager._evaluate_pickup's real arrival-geofence detection) can
+        be plotted -- a restaurant you've only ever declined offers from
+        has no recorded location anywhere in this app, regardless of how
+        many offer_outcomes rows exist for it. Not solvable without a real
+        GPS anchor that doesn't exist for a place you've never driven to.
+        """
+        location_rows = self.db.conn.execute("""
+            SELECT restaurant_name, AVG(lat) AS avg_lat, AVG(lon) AS avg_lon
+            FROM pickup_location_history GROUP BY restaurant_name
+        """).fetchall()
+
+        entries = []
+        for row in location_rows:
+            outcome_rows = self.db.conn.execute("""
+                SELECT payout, distance_km, hourly_rate, smart_score
+                FROM offer_outcomes WHERE restaurant_name = ? AND is_test_data = 0
+            """, (row["restaurant_name"],)).fetchall()
+            score_values = [o["smart_score"] for o in outcome_rows if o["smart_score"] is not None]
+            if len(score_values) < LOCATION_PROFITABILITY_MIN_SAMPLES:
+                continue
+            rate_values = [o["payout"] / o["distance_km"] for o in outcome_rows
+                           if o["payout"] is not None and o["distance_km"] is not None and o["distance_km"] > 0]
+            hourly_values = [o["hourly_rate"] for o in outcome_rows if o["hourly_rate"] is not None]
+            avg_score = sum(score_values) / len(score_values)
+
+            entries.append({
+                "restaurant_name": row["restaurant_name"],
+                "lat": round(row["avg_lat"], 6),
+                "lon": round(row["avg_lon"], 6),
+                "avg_smart_score": round(avg_score, 1),
+                "label": self.smart_score._label(avg_score),
+                "avg_dollar_per_km": round(sum(rate_values) / len(rate_values), 2) if rate_values else None,
+                "avg_dollar_per_hr": round(sum(hourly_values) / len(hourly_values), 2) if hourly_values else None,
+                "sample_count": len(score_values),
             })
         return json.dumps({"entries": entries})
 

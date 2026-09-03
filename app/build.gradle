@@ -78,9 +78,15 @@ dependencies {
     implementation 'com.google.android.material:material:1.12.0'
     implementation 'androidx.core:core-ktx:1.13.1'
     implementation 'com.google.android.gms:play-services-location:21.4.0'
-    // Note: osmdroid was previously listed here for a planned map view
-    // (color-coded route trail + delay pins) that was never actually
-    // built -- a genuinely dead dependency, just adding APK size for a
-    // feature that didn't exist. Removed. Add it back if/when that map
-    // screen actually gets built.
+    // Re-added (docs/location_profitability_map/PRD.md, driver backlog
+    // #1) -- previously removed as dead code (see this file's own former
+    // comment, still in git history) when the map screen it was meant
+    // for was never built. That map now exists. No API key needed
+    // (OpenStreetMap tiles, unlike Google Maps SDK) -- only INTERNET/
+    // ACCESS_NETWORK_STATE, both already declared in the manifest for
+    // the existing geocoding calls. Version pinned explicitly; not
+    // verified resolving against Maven Central in this environment (no
+    // Android SDK/network-backed Gradle sync available here -- see the
+    // PRD's own ss4 for this specific, elevated disclosed risk).
+    implementation 'org.osmdroid:osmdroid-android:6.1.20'
 }
