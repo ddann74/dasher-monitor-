@@ -608,3 +608,62 @@ block with no duplicate-alert risk on the first heartbeat after start.
 PRD.md §17/§18 boxes checked except driver confirmation/sign-off. Only
 #16 remains open in the original evidence-blocked bug list (needs a
 diagnostic log from a session where the status dot didn't show).
+
+## #16 partially addressed (2026-09-03): hardened an unguarded addView() in showStatusDot
+
+No diagnostic log available for #16, which this PRD's own §4 entry
+already said was needed before attempting anything. Same approach as
+#21: read the actual code end-to-end for a real, already-disclosed-
+adjacent risk rather than leave it fully blocked or guess blind.
+
+Found: `OverlayHelper.showStatusDot()`'s `windowManager.addView(dot,
+params)` call had zero try/catch anywhere in the method - a real,
+documented source of runtime exceptions on Android, and this app
+already has established reasoning for guarding exactly this class of
+risk elsewhere (`TripForegroundService`'s GPS-tick handler, wrapping
+its own overlay work for the identical stated reason), just never
+applied here. Confirmed several of `refreshStatusDot()`'s own 8 call
+sites in `TripForegroundService` have no surrounding try/catch either -
+an unguarded failure wouldn't just mean "the dot doesn't show," it
+could silently abort whatever the caller does next (e.g.
+`stopTracking()`'s own watchdog-cancellation calls a few lines after
+its `refreshStatusDot()` call). Reasoned through why THIS overlay
+specifically, not this app's others sharing the identical unguarded
+pattern (confirmed via grep - none of the 6 `addView` call sites in
+this file are guarded): the status dot fires on nearly every GPS tick,
+far more often than any other overlay here, so it has far more
+real-world exposure to any transient failure.
+
+**Fix**: wrapped the `addView` call in `try/catch (RuntimeException)`,
+logging via `FallbackLogger.log()` - the established pattern this exact
+class of static, engine-less helper already uses elsewhere
+(`NavigationHelper`, `VoiceAnnouncer`). Lives at the source inside
+`OverlayHelper`, so it protects every `refreshStatusDot()` call site
+uniformly without needing to patch each one individually.
+
+**Deliberately NOT applied to this file's other overlay methods**
+(navigation icon, message bubble, hotspot-or-home icon) even though the
+same unguarded pattern exists in all of them - scoped tightly to what
+#16 actually asked about. Flagged as a real, disclosed follow-up
+opportunity, not silently expanded into or silently ignored.
+
+**Honestly scoped, not oversold**: this hardens a real, plausible risk
+class - it is NOT a confirmed bug fix, since no log or device evidence
+ever confirmed this exact exception was the driver's actual cause.
+Marked "partially addressed" in PRD.md, not fully closed.
+
+**Verification**: same disclosed limitation as every Java-side change
+in this repo - no Android SDK/emulator/device, code review plus
+brace/paren balance (`OverlayHelper.java`: 79/79 braces, 339/339
+parens). Confirmed `statusDotView` is only assigned after `addView`
+succeeds (a failed call leaves it `null`, no stale-reference risk);
+confirmed the early `return` on catch correctly skips the pointless
+animation setup for a view that was never added; confirmed
+`FallbackLogger.log`'s signature matches the new call.
+
+PRD.md §19/§20 boxes checked except driver confirmation/sign-off. Every
+item in the original 36-item backlog is now either fixed, partially
+addressed pending real-world confirmation, or explicitly deferred
+(#1, #29 - large items needing a scoping conversation; the deadhead
+PRD's own Part 2B stacked-order gap - blocked on a real dropoff
+screenshot).
