@@ -4105,7 +4105,33 @@ class DriveMonitorEngine:
             "avg_timed_out": avg(sums[k]["timed_out"]),
         } for k in factor_keys]
 
-        return json.dumps({"entries": entries, "comparison": comparison})
+        # Average $/km by outcome (driver backlog #6,
+        # docs/driver_backlog_2026_09_03/PRD.md) -- a SEPARATE query from
+        # `all_rows` above, deliberately: that one is scoped to rows with a
+        # components_json snapshot, but $/km only needs payout/distance_km,
+        # and coupling it to component-snapshot availability would silently
+        # drop offers that have valid payout/distance data but a missing or
+        # malformed components snapshot for some unrelated reason.
+        rate_rows = self.db.conn.execute("""
+            SELECT outcome, payout, distance_km FROM offer_outcomes
+            WHERE is_test_data = 0 AND payout IS NOT NULL
+              AND distance_km IS NOT NULL AND distance_km > 0
+        """).fetchall()
+        rates_by_outcome = {"accepted": [], "declined": [], "timed_out": []}
+        for row in rate_rows:
+            if row["outcome"] in rates_by_outcome:
+                rates_by_outcome[row["outcome"]].append(row["payout"] / row["distance_km"])
+
+        def avg_rate(values):
+            return round(sum(values) / len(values), 2) if values else None
+
+        rate_comparison = {
+            "avg_dollar_per_km_accepted": avg_rate(rates_by_outcome["accepted"]),
+            "avg_dollar_per_km_declined": avg_rate(rates_by_outcome["declined"]),
+            "avg_dollar_per_km_timed_out": avg_rate(rates_by_outcome["timed_out"]),
+        }
+
+        return json.dumps({"entries": entries, "comparison": comparison, "rate_comparison": rate_comparison})
 
     def export_trips_csv(self):
         """

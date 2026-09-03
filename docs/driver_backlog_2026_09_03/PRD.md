@@ -238,12 +238,17 @@ analysis plus new UI.
       button (no existing clipboard-copy UI for this specific case, but
       RoadWarrior's own clipboard-copy feature is a directly reusable
       pattern to copy, not invent from scratch).
-- [ ] **#6 - average $/km for accepted vs. declined offers.** SMALL.
-      `payout`/`distance_km` already stored per offer in
-      `offer_outcomes`. Needs one new `GROUP BY outcome` aggregate query
-      + a UI line. `get_rejected_offers_report`'s existing
-      accepted/declined/timed-out comparison structure is a direct
-      template to extend, not a new pattern.
+- [x] **#6 - average $/km for accepted vs. declined offers.** FIXED
+      (2026-09-03): added a `rate_comparison` block to
+      `get_rejected_offers_report()`, using a query separate from the
+      existing per-factor `comparison` (which is scoped to rows with a
+      components snapshot - $/km doesn't need one, so reusing that query
+      would silently drop valid rows). Excludes zero-distance and
+      missing-payout rows to avoid division by zero. Shown in
+      `TripHistoryActivity`'s existing Rejected Offers Report dialog, one
+      line above the per-factor comparison. Verified with a real,
+      runnable Python test (zero-distance/missing-payout/test-data rows
+      confirmed excluded, averages confirmed correct).
 - [ ] **#7 - per-restaurant breakdown: last 10 visits with dates, times,
       ratings, average, and standard deviation.** MEDIUM. Builds on
       `get_address_book()` (`drive_monitor.py:4334-4364`), which
@@ -265,10 +270,12 @@ analysis plus new UI.
       alongside the existing "Deadhead: X km" line rather than as a
       separate, confusingly-duplicate "Driving to pickup" entry. See
       PROGRESS.md for the honest caveat about that reuse.
-- [ ] **#9 - separate Dasher vs. General trips in the report.** SMALL.
-      `trips.mode` already exists and is already returned by
-      `get_trip_history()` (`drive_monitor.py:3683-3706`) - no
-      filter/grouping toggle exists in the UI yet. Pure UI addition.
+- [x] **#9 - separate Dasher vs. General trips in the report.** FIXED
+      (2026-09-03): `showTripHistory()` now shows an up-front chooser
+      ("All Trips" / "Dasher Only" / "General Only") before the list -
+      filtered client-side from the same already-fetched `trips` array
+      (`trip.mode` was already returned by `get_trip_history()`, just
+      never used to filter). No Python change needed.
 - [ ] **#14 - surface the traffic ratio as a reported metric.** SMALL.
       `_live_traffic_ratio`/`_get_traffic_risk`
       (`drive_monitor.py:690-767`) already compute this internally and
