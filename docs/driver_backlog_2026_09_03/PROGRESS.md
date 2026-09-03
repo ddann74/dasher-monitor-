@@ -698,3 +698,27 @@ follow-ups (Part 2's exact depth; first-run nudge vs. purely opt-in).
 Not abandoned - the design discussion above is preserved here and in
 PRD.md's #29 entry, resumable later without redoing this pass. Moving
 to #1 now.
+
+## #29 picked back up and moved to its own PRD (2026-09-03)
+
+Driver asked a direct follow-up question ("would it show the screens
+at every delivery stage") that meaningfully improved the original
+static-cards design into a staged, simulated-delivery walkthrough -
+each screen/overlay shown at the real moment it'd appear in an actual
+delivery, chaining the same simulate-style mechanisms
+`DeveloperTestingActivity` already proves work (real code paths, fake
+data). Driver also asked for randomized simulated environments across
+tutorial runs.
+
+Per driver's own request, first wrote out the exact prompt that would
+be used to produce the PRD/RALPH_PROMPT/premortem and showed it before
+running it - driver said "run it as-is." Full investigation, staged
+design, THREE concrete randomization options (not resolved - a real
+driver decision), and a premortem now live in `docs/tutorial_mode/PRD.md`
++ `RALPH_PROMPT.md`, moved out of this backlog PRD since it's grown
+well beyond a single checklist item. PRD.md's #29 entry updated to
+point there instead of duplicating the design in two places.
+
+Nothing implemented yet - explicitly blocked on the driver answering
+`docs/tutorial_mode/PRD.md` §4 before any code starts, per that PRD's
+own guardrail against guessing a real design fork.

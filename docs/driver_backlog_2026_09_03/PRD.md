@@ -327,15 +327,13 @@ analysis plus new UI.
       (avg $/km, avg $/hr, avg Smart Score + standard deviation). See §16
       for the full writeup.
 - [ ] **#29 - screen-recording-based tutorial/walkthrough to learn how
-      the app works.** ON THE BACKBURNER (2026-09-03) - driver directly
-      asked to deprioritize this in favor of #1. Design discussion
-      already happened (not lost): driver wants an interactive
-      walkthrough (not a guided tour or static FAQ), teaching the Smart
-      Score's 6 factors via a canned offer plus a short tour of the
-      real app screens - see PROGRESS.md for the full proposed shape.
-      Picking this back up needs two remaining open questions answered
-      first: Part 2's exact scope, and whether it's nudged on first
-      install or purely opt-in.
+      the app works.** DESIGNED, moved to its own PRD (2026-09-03) -
+      the design was refined further in a later conversation (a staged,
+      simulated-delivery walkthrough, not static cards) plus a new
+      randomization ask. See `docs/tutorial_mode/PRD.md` for the full
+      investigation, design, and premortem - one real open question
+      there (§4, which randomized-environment option) still needs a
+      driver decision before implementation starts.
 
 ## 6. Recommended priority order (my judgment call, not driver-specified)
 
