@@ -235,15 +235,20 @@ analysis plus new UI.
       on the existing Personal Calibration screen, each toggle saved
       immediately. Verified with a real, runnable Python test covering
       the list, the toggle, and the calibration query's own exclusion.
-- [ ] **#5 - suggested hotspot from the last 5 deliveries, weighted by
-      offer quantity, with a copy-coordinates button.** MEDIUM.
-      `get_pickup_sweet_spot_zone()` already exists
-      (`drive_monitor.py:3418-3460` - zone-grid frequency over ALL
-      history, shown as plain text in the Address Book dialog). Needs: a
-      recency-windowed (last-5) query variant, and a clipboard-copy
-      button (no existing clipboard-copy UI for this specific case, but
-      RoadWarrior's own clipboard-copy feature is a directly reusable
-      pattern to copy, not invent from scratch).
+- [x] **#5 - suggested hotspot from the last 5 deliveries, weighted by
+      offer quantity, with a copy-coordinates button.** FIXED
+      (2026-09-03): `get_pickup_sweet_spot_zone()`'s zone-grid-frequency
+      logic factored into a shared `_best_zone_from_pickup_rows()` helper
+      (avoiding duplicated logic), reused by new
+      `get_recent_pickup_hotspot()` - same algorithm, restricted to the
+      5 most recent pickups, with its own much smaller min-samples
+      threshold (3, since the window itself is capped at 5). Shown in
+      the Address Book dialog alongside the existing all-history sweet
+      spot; a "Copy Recent Hotspot" button (only offered when a
+      suggestion exists) copies the coordinates via this app's existing
+      simple clipboard-copy pattern. Verified with a real, runnable
+      Python test proving the recent window picks a DIFFERENT zone than
+      all-history when recent behavior actually differs.
 - [x] **#6 - average $/km for accepted vs. declined offers.** FIXED
       (2026-09-03): added a `rate_comparison` block to
       `get_rejected_offers_report()`, using a query separate from the
@@ -255,13 +260,27 @@ analysis plus new UI.
       line above the per-factor comparison. Verified with a real,
       runnable Python test (zero-distance/missing-payout/test-data rows
       confirmed excluded, averages confirmed correct).
-- [ ] **#7 - per-restaurant breakdown: last 10 visits with dates, times,
-      ratings, average, and standard deviation.** MEDIUM. Builds on
-      `get_address_book()` (`drive_monitor.py:4334-4364`), which
-      currently returns only aggregates (avg wait, avg deadhead, parking
-      difficulty) - not individual visit records or ratings. Needs a new
-      per-restaurant visit-history query joining `trips`/`trip_feedback`
-      by restaurant name, plus a stdev calculation.
+- [x] **#7 - per-restaurant breakdown: last 10 visits with dates, times,
+      ratings, average, and standard deviation.** FIXED (2026-09-03),
+      WITH A REAL, DISCLOSED GAP found during implementation: the PRD's
+      own original framing ("joining `trips`/`trip_feedback` by
+      restaurant name") turned out not to be possible - `trips` has no
+      `restaurant_name` column and `offer_score_snapshot_json` doesn't
+      include one either (confirmed by reading
+      `SmartScoreEngine.calculate()`'s own returned dict), so driver
+      star ratings (trip-level) cannot be reliably linked to a specific
+      restaurant. A fragile timestamp-proximity join was considered and
+      rejected - it could silently attribute the wrong rating to the
+      wrong restaurant. New `get_restaurant_visit_history()` uses each
+      visit's own Smart Score instead (always available, genuinely tied
+      to that restaurant, per `offer_outcomes`), with average and SAMPLE
+      standard deviation, and an explicit `rating_note` naming this
+      substitution rather than silently presenting a Smart Score as if
+      it were a "rating." UI: new "Restaurant Visit History" button ->
+      restaurant chooser -> per-restaurant breakdown dialog. Verified
+      with a real, runnable Python test (empty/single/multi-visit cases,
+      exact stdev matched against Python's own `statistics.stdev`,
+      limit + ordering, test-data exclusion).
 - [x] **#8 - trip history: full stage breakdown (driving to pickup,
       waiting at restaurant incl. wait-time rating, driving to dropoff,
       completing dropoff, deadhead time if applicable).** FIXED

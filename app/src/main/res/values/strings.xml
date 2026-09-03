@@ -70,4 +70,5 @@
     <string name="acceptance_stats">Accept/Decline Stats</string>
     <string name="personal_calibration">Personal Calibration</string>
     <string name="rejected_offers_report">Rejected Offers Report</string>
+    <string name="restaurant_visit_history">Restaurant Visit History</string>
 </resources>

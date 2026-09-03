@@ -259,3 +259,80 @@ braces, 738/738 parens.
 
 PRD §5 box for #2 checked. Next per §6: #5 and #7 (hotspot-from-last-5,
 per-restaurant visit breakdown).
+
+## #5 and #7 implemented (2026-09-03)
+
+**#5 - recency-windowed hotspot.** `get_pickup_sweet_spot_zone()`'s
+zone-grid-frequency logic (round to `PICKUP_SWEET_SPOT_GRID_DECIMALS`,
+count occurrences per rounded zone, average the real coordinates within
+the winning zone) was factored out into a shared
+`_best_zone_from_pickup_rows(rows, min_samples)` helper, so the new
+`get_recent_pickup_hotspot()` (restricted to `RECENT_HOTSPOT_WINDOW`
+= 5 most recent `pickup_location_history` rows, `RECENT_HOTSPOT_MIN_
+SAMPLES` = 3) doesn't duplicate that logic. Wired into
+`showAddressBook()`: shown as a second summary line alongside the
+existing all-history sweet spot, and a "Copy Recent Hotspot"
+`setNeutralButton` (only added to the dialog when a suggestion actually
+exists - nothing to copy otherwise) using this app's existing plain
+`ClipboardManager`/`ClipData` pattern (same shape as
+`DiagnosticsActivity`'s log-copy button).
+
+Verified with a real, runnable Python test
+(`/tmp/.../test_recent_hotspot.py`): seeded 10 OLD pickups in zone A
+and 5 RECENT pickups (4 in zone B, 1 in zone A) - confirmed
+`get_recent_pickup_hotspot()` correctly picks zone B (the recent
+majority) while `get_pickup_sweet_spot_zone()` still correctly picks
+zone A (the all-history majority) from the SAME underlying data - proof
+the two are genuinely answering different questions, not accidentally
+returning the same thing.
+
+**#7 - per-restaurant visit history.** Real finding during
+implementation, not assumed away: the PRD's own original framing
+("joining trips/trip_feedback by restaurant name") isn't actually
+possible with the current schema. Checked directly - `trips` has no
+`restaurant_name` column, and `trips.offer_score_snapshot_json` (the
+only other candidate) is populated from `SmartScoreEngine.calculate()`'s
+own returned dict, which doesn't include `restaurant_name` either (read
+the full dict to confirm). So a driver's star rating (`trip_feedback`,
+keyed by `trip_id`) has no reliable path back to "which restaurant was
+this for." Considered a timestamp-proximity join (offer accepted at
+time T, trip started shortly after) and rejected it - close-together
+offers, or a driver who accepts well before actually starting to
+drive, could make it attribute the wrong rating to the wrong
+restaurant, which is worse than not showing one at all.
+
+Implemented `get_restaurant_visit_history(restaurant_name)` using each
+visit's own Smart Score (from `offer_outcomes`, always available and
+genuinely tied to that specific restaurant) instead of a rating, with
+average and SAMPLE standard deviation (n-1, since this is always a
+bounded recent sample, never "all visits that will ever happen") -
+and an explicit `rating_note` field naming the substitution plainly,
+surfaced directly in the Java dialog text too, not just in a code
+comment nobody but a future developer would see.
+
+UI: new "Restaurant Visit History" button (new string resource +
+layout button, following this screen's existing button pattern) opens
+a restaurant chooser (reusing `get_address_book()`'s own entries - no
+separate "list restaurant names" query needed), then the per-restaurant
+breakdown dialog.
+
+Verified with a real, runnable Python test
+(`/tmp/.../test_restaurant_visit_history.py`): no-visits case (empty,
+no averages); single-visit case (avg = that score, stdev correctly
+`None` rather than 0 - a stdev of one point isn't meaningful); known
+3-score case with the exact sample stdev cross-checked against Python's
+own `statistics.stdev`; confirmed test-data rows and a different
+restaurant's rows are excluded; confirmed the `LIMIT 10` +
+most-recent-first ordering with 15 seeded visits.
+
+**Verification (both)**: same disclosed limitation as every Java-side
+change in this repo - no Android SDK/emulator/device, code review plus
+static checks. `TripHistoryActivity.java` brace/paren balance: 130/130
+braces, 859/859 parens. `activity_trip_history.xml`/`strings.xml`
+re-validated as well-formed XML (`xml.etree.ElementTree`).
+`drive_monitor.py` recompiles cleanly.
+
+PRD §5 boxes for #5 and #7 checked. Remaining §5/§4 items per §6:
+#25 (live $/km, $/hr in the recommendation), the three open questions
+(#4, #17, #26), the evidence-blocked bugs (#21, #22, #16), and the two
+large items (#1, #29) last.
