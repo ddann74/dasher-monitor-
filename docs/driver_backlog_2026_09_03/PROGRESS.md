@@ -417,3 +417,103 @@ standing right on top of it. All three cases passed.
 
 PRD §11 boxes for #10 checked except driver confirmation/sign-off.
 Two open questions remain: #17 and #26.
+
+## #17 resolved (2026-09-03): confirmed reading (b), confirmed already satisfied
+
+Asked the driver directly which of the two possible readings they meant
+(§3 explicitly forbade guessing here - P4's premortem risk). Driver
+confirmed reading (b): the "navigate home with a saved/preset route"
+feature, not the RoadWarrior-icon-didn't-appear bug reading (a).
+
+No new code needed: `docs/hotspot_or_home_routing/` (a different,
+concurrent driver request from earlier the same day - shift-rate-based
+routing) already built the exact mechanism #17 asked for as a side
+effect - a tappable icon that appears on trip completion and navigates
+(via the existing `NavigationHelper`/Waze integration) to a stored home
+address. Driver confirmed this covers it when shown the connection.
+
+Flagged one honest, disclosed difference rather than silently declaring
+a perfect match: the hotspot-or-home icon is CONDITIONAL on the
+shift-rate algorithm (only suggests home when the recent $/hr is below
+the driver's threshold; suggests the hotspot instead when above) - not
+an unconditional "take me home right now" button independent of shift
+performance. Not built, not assumed wanted - left as a real, small,
+separately-doable follow-up if the driver ever wants it.
+
+PRD.md §3/§4/§5 updated: #17 struck through as resolved, #17a (the
+RoadWarrior-icon bug reading) explicitly left as NOT what was meant and
+NOT touched by this, #17b checked off in §5 pointing at the shipped
+feature.
+
+Only #26 remains open (which report needs formatting improved).
+
+## #26 resolved (2026-09-03): Trip History full time detail + Address Book rate/score stats
+
+Driver named both screens (Trip History, Address Book) and raised a
+real accuracy concern alongside it: "I want to see all details of where
+the time went as some don't look accurate." Asked directly whether
+this was on stacked/batch-order trips (a known, already-documented
+bug, `docs/deadhead_stacked_order_baseline/PRD.md` Part 2B - blocked on
+real evidence) or single-order trips (would need fresh root-causing) -
+driver answered "both/not sure." Rather than guess which case applied
+and risk building the wrong fix (this PRD's own P4 premortem risk),
+gave full diagnostic detail instead - see PRD.md §13/§14 for the full
+design writeup. Summarized here:
+
+- `_build_trip_summary_dict` (`drive_monitor.py`) now returns
+  `phase_timestamps` (raw clock times for trip start, pickup arrival/
+  departure, dropoff arrival, walking confirmed, trip end - each
+  included only if actually captured) and `job_count` (count of
+  `offer_distance_accuracy` rows for the trip, already one-per-job).
+- `TripHistoryActivity`'s "Where The Time Went" section now shows a new
+  "Full time detail" block with real clock times next to the existing
+  durations, plus an explicit warning when `job_count > 1` linking
+  directly to the known Part 2B stacked-order limitation, instead of
+  silently presenting a possibly-mixed number as reliable.
+- `get_address_book()` gained avg $/km, avg $/hr, and avg Smart Score +
+  sample stdev per restaurant, from `offer_outcomes` - scoped to ANY
+  offer outcome (not accepted-only), matching `get_restaurant_visit_
+  history`'s own already-shipped definition of "visit" for the same
+  restaurant grouping, disclosed as a deliberate consistency choice
+  rather than assumed. Reused the same $/km exclusion rules (missing
+  payout, zero/missing distance) the Rejected Offers Report's
+  `rate_comparison` already established.
+- New shared `_sample_stdev()` helper (module-level, next to
+  `haversine_meters`) - `get_restaurant_visit_history`'s existing inline
+  stdev calculation refactored to use it, removing a duplicate formula.
+
+**Verification**: same disclosed limitation as every Java-side change
+in this repo - no Android SDK/emulator/device, code review plus
+brace/paren balance for Java (`TripHistoryActivity.java`: 144/144
+braces, 921/921 parens); real, runnable Python tests for the pure-Python
+logic. `drive_monitor.py` recompiles cleanly.
+`test_address_book_rates_and_time_detail.py` (3 cases): known $/km/
+$/hr/Smart-Score averages correct with a zero-distance row excluded
+from $/km only (not the other two metrics, since they don't depend on
+distance) and a test-data row excluded from all three; a restaurant
+with zero `offer_outcomes` rows returns `None` fields rather than
+crashing; `get_restaurant_visit_history` re-verified unaffected by the
+`_sample_stdev` refactor.
+`test_trip_summary_job_count_phase_timestamps.py` (3 cases): a
+single-order trip returns `job_count: 1` + all 6 raw timestamps; a
+synthetic 2-job trip returns `job_count: 2`; an older trip with no
+phase capture returns only start/end (not fabricated intermediate
+values) and `job_count: 0`. Re-ran every existing scratchpad test
+touching the changed functions - no regressions (one pre-existing,
+already-stale scratch test unrelated to this pass, calling an older
+pre-#4-fix function signature, was already broken before this and is
+not a regression from it).
+
+**Honest scope note**: this does NOT fix the underlying Part 2B
+stacked-order timestamp-mixing bug itself - that's still genuinely
+blocked on real evidence (a stacked-order dropoff screenshot), same as
+before. This pass makes the problem visible and diagnosable (raw times
++ an explicit warning) rather than solved, and gives the driver what's
+needed to pinpoint a real single-order accuracy problem if one exists,
+which the "both/not sure" answer couldn't rule out.
+
+PRD.md §13/§14 boxes checked except driver confirmation/sign-off. All
+three of §3's original open questions (#4, #17, #26) are now resolved -
+remaining backlog items are the evidence-blocked bugs (#21, #22, #16,
+plus the deadhead PRD's own Part 2B) and the two large, deliberately-
+deferred items (#1, #29).
