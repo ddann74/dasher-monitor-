@@ -108,15 +108,16 @@ Kept here as the reference record for why.
 
 ## 3. Open question before any ralph-loop work starts
 
-- **#4** ("Force me to acknowledge all dasher related...") - the
-  sentence is cut off in the driver's own message. Best guess given
-  neighboring items is overlap with #10/#28's "force
-  foreground/acknowledge before scoring" theme already implemented, but
-  this is a guess, not a confirmed read. **Do not implement anything
-  under #4's label until the driver finishes the sentence** - flagged
-  here rather than silently assumed, per this session's established
-  practice of not resolving a genuinely unclear driver request on its
-  own initiative.
+- ~~**#4**~~ **RESOLVED (2026-09-03) and IMPLEMENTED** - driver finished
+  the sentence: "force-acknowledging any customer messages, keep
+  reading aloud every 30 secs until i acknowledge; also read aloud
+  customer instructions including generic instructions when i approach
+  the address within 50 meters." Two real, separate mechanisms in the
+  codebase mapped directly onto this: the urgent-customer-message voice
+  path (`AppNotificationListenerService`) and the existing
+  approach-instruction overlay (`TripForegroundService`/`_check_
+  approach_instruction`). See §10/§11 for the full writeup and
+  PROGRESS.md for verification.
 - **#17** genuinely could mean two different things: (a) the
   already-implemented RoadWarrior icon (§1/#32) simply not appearing
   that specific time - a bug report, needs a diagnostic log, not new
@@ -522,4 +523,106 @@ words; see §1-§5 for what each number maps to.
 - [ ] §3's three open questions answered by the driver
 - [ ] Driver confirms the recommended priority order in §6, or gives a
       different one
+
+## 10. #4 resolved and implemented (2026-09-03): force-acknowledge messages + tighter approach radius
+
+Driver clarified #4 as two related but distinct asks:
+
+1. "Force-acknowledging any customer messages, keep reading aloud every
+   30 secs until i acknowledge."
+2. "Also read aloud customer instructions including generic
+   instructions when i approach the address within 50 meters."
+
+### 10.1 Real code found for both, before writing anything new
+
+- **(1)** maps to `AppNotificationListenerService`'s urgent-customer-
+  message path - a delivery note or address correction extracted from a
+  Dasher/SMS notification was already spoken ONCE
+  (`VoiceAnnouncer.speak("Customer message: " + clean)`), no repeat, no
+  acknowledgment concept anywhere.
+- **(2)** maps to an ALREADY-EXISTING feature
+  (`docs/dropoff_delivery_instruction_wiring/PRD.md`,
+  `_check_approach_instruction`): fires once per stop, speaks the
+  dropoff screen's own delivery instruction plus any matched chat
+  message, AND shows a persistent tappable overlay
+  (`OverlayHelper.showPersistentTappableMessage`) that already stays up
+  until tapped. Two real gaps against the driver's exact wording: the
+  trigger radius is `APPROACHING_RADIUS_METERS` = 500m, not the
+  requested 50m; and the voice only speaks once, with no repeat.
+  "Including generic instructions" is already satisfied -
+  `DropoffScreenParser`'s delivery-instruction capture is a best-effort
+  "any leftover free-text line" match, not filtered to exclude
+  boilerplate/generic text.
+
+### 10.2 Design
+
+**New shared primitive** (`OverlayHelper.startAcknowledgeReminder`):
+repeats `VoiceAnnouncer.speak(text)` every `intervalMs`, checking before
+each repeat whether the persistent overlay it's paired with is still
+showing (`instructionOverlayView != null`) - stops itself the instant
+it's been tapped away, never speaks into a void with nothing left to
+acknowledge. `clearPersistentMessage()` also cancels it directly (not
+just relying on the runnable's own next-tick check), and
+`showPersistentTappableMessage` gained a `boolean` return (was the
+overlay actually shown - false if overlay permission isn't granted) and
+an optional `onAcknowledged` callback.
+
+**(1) Urgent customer messages**: now shows the same persistent overlay
+(previously this path never showed one at all, voice-only) plus starts
+the repeat reminder - both only if the overlay actually rendered
+(permission check).
+
+**(2) Approach instructions**: `INSTRUCTION_READ_RADIUS_METERS = 50`
+added as a genuinely SEPARATE constant from `APPROACHING_RADIUS_METERS`
+(500, unchanged) - that constant also drives the nav icon and the
+coarse pre-filter this feature still uses before checking the real
+distance, and narrowing it globally would have delayed the nav icon
+too, which wasn't asked for. `_check_approach_instruction` now takes
+`lat, lon` and computes the actual distance to the stop, only firing
+within 50m. Also gained the same repeat-reminder as (1).
+
+**Scope decision, disclosed rather than silent**: did NOT split "show
+the overlay early at 500m, only delay the voice to 50m" into two
+separate triggers - that would need a second, parallel per-stop state
+machine in a function whose own comments document a real history of
+subtle multi-stop/batch-order bugs. One combined trigger at the tighter
+50m distance is simpler and lower-risk; if the driver wants the overlay
+back to appearing earlier than the voice, that's a real, separately
+doable follow-up, not assumed here.
+
+### 10.3 Verification
+
+No Android SDK/emulator/device in this environment (disclosed
+limitation throughout this repo) - real runnable Python tests for the
+pure-Python logic, code review plus brace/paren balance for Java.
+
+- `drive_monitor.py` recompiles cleanly.
+- `OverlayHelper.java`: 70/70 braces, 290/290 parens.
+- `AppNotificationListenerService.java`: 75/75 braces, 311/311 parens.
+- `TripForegroundService.java`: 189/189 braces, 859/859 parens.
+- Real Python test (`test_instruction_read_radius.py`): 200m out (within
+  the old 500m radius, outside the new 50m one) correctly does NOT
+  fire; 20m out correctly fires with the delivery instruction included;
+  already-shown-for-this-stop correctly does not re-fire even standing
+  right on top of it.
+
+## 11. Success criteria for §10
+
+- [x] Root cause / existing-code mapping confirmed for both parts of #4
+      before writing anything
+- [x] Shared `startAcknowledgeReminder` primitive added, paired
+      correctly with the persistent overlay's own lifecycle (tap OR
+      programmatic clear both stop it)
+- [x] Urgent customer messages: overlay + repeat reminder added
+- [x] Approach instructions: radius narrowed to the requested 50m via a
+      new, separate constant; repeat reminder added
+- [x] "Including generic instructions" confirmed already satisfied by
+      existing capture logic - no change needed for that clause
+- [x] Real Python test covering the 50m gating (too far / within range /
+      already-shown) - all three cases passed
+- [ ] Driver confirms in real use: a customer message actually keeps
+      re-announcing every 30s until tapped; approaching a dropoff within
+      50m (not 500m) triggers the instruction read; the overlay's tap
+      target correctly stops the repeat both times
+- [ ] Driver sign-off.
 

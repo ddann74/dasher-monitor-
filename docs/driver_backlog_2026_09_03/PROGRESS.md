@@ -362,3 +362,58 @@ driver's own input before they're actionable; #21/#22/#16 need a fresh
 diagnostic log each; #1 and #29 are deliberately last, pending a
 scoping conversation. Nothing left in the ralph loop's queue that can
 proceed without one of those first.
+
+## #4 resolved and implemented (2026-09-03)
+
+Driver answered #4's cut-off sentence directly: force-acknowledge
+customer messages (repeat every 30s until tapped) plus read delivery
+instructions aloud within 50m of the address (not the existing 500m).
+Full design writeup in PRD.md §10/§11 - summarized here:
+
+- New `OverlayHelper.startAcknowledgeReminder(spokenText, intervalMs)` -
+  a repeating `VoiceAnnouncer.speak()` that checks before each repeat
+  whether its paired persistent overlay is still showing, stopping
+  itself the instant it's been tapped. `showPersistentTappableMessage`
+  changed to return `boolean` (was it actually shown) and gained an
+  optional `onAcknowledged` callback; `clearPersistentMessage()` now
+  also cancels any pending reminder directly.
+- `AppNotificationListenerService`'s urgent-customer-message path
+  (previously voice-only, single announcement) now also shows the
+  persistent overlay and starts the repeat reminder - only if the
+  overlay actually rendered (permission-gated, same as the existing
+  approach-instruction path already was).
+- New `INSTRUCTION_READ_RADIUS_METERS = 50` (`drive_monitor.py`),
+  deliberately separate from `APPROACHING_RADIUS_METERS` (500,
+  unchanged - still drives the nav icon and the coarse pre-filter).
+  `_check_approach_instruction` now takes `lat, lon` and gates on the
+  real distance to the stop before firing; gained the same repeat
+  reminder as the customer-message path.
+- Confirmed "including generic instructions" was already satisfied -
+  `DropoffScreenParser`'s delivery-instruction capture is a best-effort
+  "any leftover free-text line" match with no generic/boilerplate
+  filtering to remove.
+
+**Scope decision, disclosed**: did not split the approach-instruction
+overlay's appearance (could stay at 500m) from its voice (delayed to
+50m) into two separate triggers - that would need a second, parallel
+per-stop state machine in a function whose own comments already
+document real historical multi-stop/batch-order bugs. One combined
+trigger at 50m is simpler and lower-risk; flagged as a real, doable
+follow-up if the driver wants the overlay to still appear earlier than
+the voice.
+
+**Verification**: same disclosed limitation as every Java-side change
+in this repo - no Android SDK/emulator/device, code review plus static
+checks for Java; a real, runnable Python test for the pure-Python
+radius logic. `drive_monitor.py` recompiles cleanly. Brace/paren
+balance: `OverlayHelper.java` 70/70 braces, 290/290 parens;
+`AppNotificationListenerService.java` 75/75 braces, 311/311 parens;
+`TripForegroundService.java` 189/189 braces, 859/859 parens. Python
+test (`test_instruction_read_radius.py`) covered: 200m out (within the
+old 500m radius but outside the new 50m one) correctly doesn't fire;
+20m out correctly fires with the real delivery instruction text
+included; already-shown-for-this-stop correctly doesn't re-fire even
+standing right on top of it. All three cases passed.
+
+PRD §11 boxes for #10 checked except driver confirmation/sign-off.
+Two open questions remain: #17 and #26.

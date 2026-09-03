@@ -499,6 +499,10 @@ public class TripForegroundService extends Service {
     };
 
     private static final long ACCESSIBILITY_HEARTBEAT_INTERVAL_MS = 15 * 1000;
+    // Driver backlog #4 (docs/driver_backlog_2026_09_03/PRD.md): same
+    // repeat-until-acknowledged interval as the urgent-customer-message
+    // path in AppNotificationListenerService (ACKNOWLEDGE_REMINDER_INTERVAL_MS).
+    private static final long APPROACH_INSTRUCTION_REMINDER_INTERVAL_MS = 30 * 1000;
     private final android.os.Handler accessibilityHeartbeatHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable accessibilityHeartbeatRunnable = new Runnable() {
         @Override
@@ -1409,7 +1413,18 @@ public class TripForegroundService extends Service {
                     logDiagnostic("ERROR", "get_canned_replies_json exception: "
                             + android.util.Log.getStackTraceString(e));
                 }
-                OverlayHelper.showPersistentTappableMessage(this, approachOverlayText.toString(), cannedReplies);
+                // Driver backlog #4 (docs/driver_backlog_2026_09_03/PRD.md):
+                // same "force me to acknowledge" repeat-reminder as the
+                // urgent-customer-message path in AppNotificationListenerService
+                // -- this overlay already persisted until tapped, but the
+                // VOICE only ever spoke once; if that one announcement was
+                // missed, nothing else would ever say so out loud.
+                boolean shown = OverlayHelper.showPersistentTappableMessage(
+                        this, approachOverlayText.toString(), cannedReplies);
+                if (shown) {
+                    OverlayHelper.startAcknowledgeReminder(
+                            approachSpoken.toString(), APPROACH_INSTRUCTION_REMINDER_INTERVAL_MS);
+                }
                 logDiagnostic("INSTRUCTION", "Approach instruction shown for " + approachAddress);
             }
 
