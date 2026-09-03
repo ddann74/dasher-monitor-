@@ -517,3 +517,48 @@ three of §3's original open questions (#4, #17, #26) are now resolved -
 remaining backlog items are the evidence-blocked bugs (#21, #22, #16,
 plus the deadhead PRD's own Part 2B) and the two large, deliberately-
 deferred items (#1, #29).
+
+## #21 partially addressed (2026-09-03): tolerant bounds matching, no confirmed bug found
+
+Driver had no diagnostic log for #21 and, when asked directly, reframed
+the goal: "I'm not sure. I just want to collect all data to build the
+smart score engine." Rather than guess at a specific unconfirmed bug
+(this PRD's own P4 premortem risk), read the full accept/decline
+detection chain in `DasherAccessibilityService.java` end-to-end first -
+found it's already a 3-layer system (direct click match, real evidence
+already on file that clicks likely never fire for Dasher's own buttons
+at all; node-bounds matching, the real mechanism; a timeout fallback so
+nothing is ever silently lost entirely) built through substantial prior
+real-diagnostic-log-driven work that predates this backlog.
+
+The gap that IS real and already named in the existing code's own
+comments: `checkNodeBoundsMatch` required byte-exact `Rect.equals()`
+between bounds recorded at scan time and the actual tap event - a
+"bounds-shift edge case" the code already flagged as a risk. Confirmed
+via `recalculate_personal_calibration`'s own docstring that this isn't
+just cosmetic: a decline that falls into the timeout bucket due to a
+pixel-level shift gets genuinely EXCLUDED from calibration learning
+("timeouts... not a real preference signal the way an active decline
+is") - real data loss for the driver's stated goal.
+
+**Fix**: new `boundsRoughlyMatch()` (24px tolerance per edge) replaces
+the exact-equality checks for both Accept and Decline bounds matching.
+Deliberately still requires all four edges close (not just overlap), so
+the two buttons - always separate, non-adjacent - can't be confused
+with each other.
+
+**Honestly scoped, not oversold**: this hardens a real, already-named
+risk - it is NOT a confirmed bug fix, since no log or device evidence
+ever confirmed a decline was actually being lost in practice. Marked
+"partially addressed" in PRD.md, not fully closed - if the driver
+notices anything still missing after this ships, that's the real
+evidence to reopen this with.
+
+**Verification**: same disclosed limitation as every Java-only change
+in this repo - no Android SDK/emulator/device, code review plus
+brace/paren balance (`DasherAccessibilityService.java`: 152/152 braces,
+556/556 parens). `android.graphics.Rect` has no reachable pure-Python or
+plain-Java equivalent in this sandbox, so `boundsRoughlyMatch` itself
+couldn't be executed as a real test here - disclosed, not glossed over.
+
+PRD.md §15/§16 boxes checked except driver confirmation/sign-off.
