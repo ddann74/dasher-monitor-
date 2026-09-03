@@ -118,13 +118,22 @@ Kept here as the reference record for why.
   approach-instruction overlay (`TripForegroundService`/`_check_
   approach_instruction`). See §10/§11 for the full writeup and
   PROGRESS.md for verification.
-- **#17** genuinely could mean two different things: (a) the
-  already-implemented RoadWarrior icon (§1/#32) simply not appearing
-  that specific time - a bug report, needs a diagnostic log, not new
-  code; or (b) a DISTINCT "navigate home with a saved/preset route"
-  feature, which does not exist anywhere in this codebase (no home-
-  address storage, no route-preloading) - a real, large new feature.
-  Tracked as an open question in §4, not assumed either way.
+- ~~**#17**~~ **RESOLVED (2026-09-03), reading (b)** - driver confirmed
+  they meant the "navigate home with a saved/preset route" reading
+  (§4/#17b), not the RoadWarrior-icon bug reading (§4/#17a). Satisfied
+  by `docs/hotspot_or_home_routing/` (shipped, PR #19, merged
+  2026-09-03) - built for a different, concurrent driver request (shift-
+  rate-based routing) but its icon-appears-on-trip-end + tap-to-navigate
+  mechanism is the same shape as what #17 asked for. Driver confirmed
+  this covers it. One honest, disclosed difference, not silently
+  papered over: the icon is conditional on the shift-rate algorithm (only
+  suggests home when the recent rate is BELOW the driver's threshold;
+  suggests the hotspot instead when above) - it is not an always-
+  available "just take me home now" button regardless of shift
+  performance. If that unconditional version is ever wanted, it's a
+  small, separate, NOT-yet-built follow-up, not assumed here. #17a (the
+  RoadWarrior-icon-didn't-appear bug reading) remains untouched - it was
+  not what the driver meant, so it needed no fix, not "fixed by this."
 - **#26** ("improve report formatting") doesn't say which report - the
   full diagnostic export (`export_full_report`, already has some table
   formatting via `_format_table`, `drive_monitor.py:4162`), Trip
@@ -312,12 +321,13 @@ analysis plus new UI.
       typical)" next to the existing High/Low label. Verified with a
       real, runnable Python test covering all three cases: no live data,
       fresh live data, and stale live data falling back correctly.
-- [ ] **#17b - "navigate home" with a pre-determined/saved route** (the
-      "genuinely new feature" reading of #17 - see §3). If this is what
-      the driver meant: LARGE, no existing infrastructure at all (no
-      home-address storage, no route-preloading anywhere in the
-      codebase). **Blocked on the same open question as #17a** - confirm
-      which reading before sizing further or starting design.
+- [x] **#17b - "navigate home" with a pre-determined/saved route.**
+      RESOLVED (2026-09-03) - driver confirmed this was the intended
+      reading of #17, and confirmed it's satisfied by the already-shipped
+      `docs/hotspot_or_home_routing/` feature (home address + tap-to-
+      navigate-via-Waze icon on trip completion). See §3 for the full
+      writeup and the one disclosed gap (conditional on the shift-rate
+      algorithm, not an unconditional manual home button).
 - [x] **#25 - add $/km and $/hr metrics to the smart score
       recommendation itself.** ALREADY IMPLEMENTED (found during this
       pass, no new code needed): `DasherAccessibilityService.java`'s

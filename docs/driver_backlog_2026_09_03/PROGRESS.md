@@ -417,3 +417,32 @@ standing right on top of it. All three cases passed.
 
 PRD §11 boxes for #10 checked except driver confirmation/sign-off.
 Two open questions remain: #17 and #26.
+
+## #17 resolved (2026-09-03): confirmed reading (b), confirmed already satisfied
+
+Asked the driver directly which of the two possible readings they meant
+(§3 explicitly forbade guessing here - P4's premortem risk). Driver
+confirmed reading (b): the "navigate home with a saved/preset route"
+feature, not the RoadWarrior-icon-didn't-appear bug reading (a).
+
+No new code needed: `docs/hotspot_or_home_routing/` (a different,
+concurrent driver request from earlier the same day - shift-rate-based
+routing) already built the exact mechanism #17 asked for as a side
+effect - a tappable icon that appears on trip completion and navigates
+(via the existing `NavigationHelper`/Waze integration) to a stored home
+address. Driver confirmed this covers it when shown the connection.
+
+Flagged one honest, disclosed difference rather than silently declaring
+a perfect match: the hotspot-or-home icon is CONDITIONAL on the
+shift-rate algorithm (only suggests home when the recent $/hr is below
+the driver's threshold; suggests the hotspot instead when above) - not
+an unconditional "take me home right now" button independent of shift
+performance. Not built, not assumed wanted - left as a real, small,
+separately-doable follow-up if the driver ever wants it.
+
+PRD.md §3/§4/§5 updated: #17 struck through as resolved, #17a (the
+RoadWarrior-icon bug reading) explicitly left as NOT what was meant and
+NOT touched by this, #17b checked off in §5 pointing at the shipped
+feature.
+
+Only #26 remains open (which report needs formatting improved).
