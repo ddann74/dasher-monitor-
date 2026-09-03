@@ -175,15 +175,18 @@ anything) is still needed before a fix can be attempted.
       - needs the driver to confirm this is worth building before
       attempting it, since it's diagnostic instrumentation for a
       one-off report, not a confirmed recurring bug.
-- [ ] **#27 - missed hearing the "dash paused" notification/
-      announcement.** CONFIRMED REAL GAP: `DashPauseDetector`/
+- [x] **#27 - missed hearing the "dash paused" notification/
+      announcement.** FIXED (2026-09-03): `DashPauseDetector`/
       `is_dash_paused_screen` (`DasherAccessibilityService.java:629-646`)
-      already detects a paused dash (screen-based), pauses/resumes GPS,
-      and writes a diagnostic log line - but never calls
-      `VoiceAnnouncer.speak()`. The driver would never hear anything
-      about a pause regardless of volume/settings. Root cause is clear;
-      this is a small, well-scoped fix (add one `VoiceAnnouncer.speak()`
-      call at the existing detection point) - no blocking open question.
+      already detected a paused dash (screen-based), paused GPS, and
+      wrote a diagnostic log line - but never called
+      `VoiceAnnouncer.speak()`. Added one call at the existing detection
+      point. Scoped to the PAUSE announcement only (the driver's literal
+      complaint) - the RESUME path (`attemptAutoStartMonitoring`) was
+      also found silent during this fix but is NOT touched here, per
+      RALPH_PROMPT.md's "don't expand into general cleanup" guardrail;
+      left as a candidate for a future, separately-scoped item if the
+      driver wants it too. See PROGRESS.md.
 - [ ] **#16 - status dot doesn't always appear.** No dedicated PRD.
       Existing partial mitigation only covers "overlay permission never
       granted" (a notification nudge,

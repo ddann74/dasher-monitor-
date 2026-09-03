@@ -46,3 +46,39 @@ triage in chat, per the driver's own request, including:
 
 No code touched. This PRD's own §9 checklist is the tracking mechanism
 for the ralph loop's eventual work through §4/§5 - nothing to check yet.
+
+## #27 implemented (2026-09-03): voice-announce a dash pause
+
+First item per §6's recommended order. `DasherAccessibilityService.java`'s
+existing `is_dash_paused_screen` detection block (around line 629)
+already stopped GPS tracking and logged `AUTO_PAUSE` on detecting the
+Dash Paused screen, but never spoke anything - added one
+`VoiceAnnouncer.speak("Dash paused. Monitoring stopped.")` call right
+where the pause is detected and acted on, matching this class's
+existing voice-announcement style used elsewhere (e.g. the smart-score
+readout at line ~935).
+
+**Scope note, per RALPH_PROMPT.md's guardrail against expanding beyond
+the chosen item**: while implementing this, noticed the RESUME path
+(`attemptAutoStartMonitoring`, called when the Dash Paused screen
+clears) is ALSO silent - no voice announcement there either. The
+driver's own #27 wording was specifically about missing the "paused"
+announcement, and the PRD's own #27 entry scoped the fix to "one
+`VoiceAnnouncer.speak()` call at the existing detection point" -
+singular, referring to pause. Left resume untouched rather than
+silently expanding scope; noted here and in PRD.md's #27 entry as a
+candidate for its own, separately-scoped item if the driver wants
+symmetric coverage.
+
+**Verification**: same disclosed limitation as every Java-side PRD in
+this repo - no Android SDK/emulator/device, so code review plus static
+checks. `DasherAccessibilityService.java` brace/paren balance: 151/151
+braces, 541/541 parens. Confirmed `VoiceAnnouncer` is in the same
+package (`com.drivingefficiency.app`) as this file, no import needed.
+Confirmed the new call only fires when `TripForegroundService.isRunning`
+is true (same guard as the existing pause-handling code), meaning
+`VoiceAnnouncer.init()` (called from `TripForegroundService.onCreate()`)
+has always already run by the time this fires - no init-order risk.
+
+PRD §4 box checked. Remaining §6-ordered items: #8, then #6/#9, per the
+recommended order.
