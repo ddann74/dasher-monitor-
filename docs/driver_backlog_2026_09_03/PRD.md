@@ -164,27 +164,13 @@ anything) is still needed before a fix can be attempted.
       a real diagnostic log (`OUTCOME: Declined` vs. `OUTCOME: Timed out`
       lines around a session with real declines) if the driver notices
       anything still missing after this ships.
-- [ ] **#22 - accessibility off before start; status dot visible <7s,
-      possibly interrupted by the notification-read-aloud announcement
-      happening almost simultaneously.** Partial answer already
-      confirmed: yes, the log WOULD show the accessibility state itself
-      - `checkAndLogPermissions(true)` force-logs it at
-      `startTracking()` (`TripForegroundService.java:354`, current line
-      number after this session's other changes may have shifted
-      slightly - re-check when working this item). But there is NO
-      alert for "already off at start" (alerts only fire on a
-      true->false transition while monitoring is ALREADY active - an
-      already-off-at-launch state is currently silent), and nothing
-      correlates status-dot visibility duration with voice-announcement
-      timing - that specific interaction isn't tracked anywhere.
-      **Action: two separable pieces** - (a) add a start-of-monitoring
-      accessibility-already-off alert (small, same alert channel as the
-      permission-revoked and vibration-alarm infra
-      `docs/permission_alert_vibration/`), (b) the dot-duration/
-      announcement-timing correlation is a bigger, more speculative ask
-      - needs the driver to confirm this is worth building before
-      attempting it, since it's diagnostic instrumentation for a
-      one-off report, not a confirmed recurring bug.
+- [x] **#22 part (a) - accessibility (and the other 3 critical
+      permissions) already off at monitoring start.** FIXED (2026-09-03)
+      - see §17/§18 for the full writeup. Part (b) (dot-duration /
+      announcement-timing correlation) - driver confirmed part (a) alone
+      is enough for now; part (b) not built, per the driver's own
+      explicit choice not to build speculative instrumentation for a
+      one-off report.
 - [x] **#27 - missed hearing the "dash paused" notification/
       announcement.** FIXED (2026-09-03): `DashPauseDetector`/
       `is_dash_paused_screen` (`DasherAccessibilityService.java:629-646`)
@@ -884,5 +870,93 @@ dependent method in this file).
 - [ ] Driver confirms in real use (or via a future diagnostic log) that
       declined offers show up correctly, ideally after a screen re-render
       delay that would previously have caused a mismatch
+- [ ] Driver sign-off.
+
+## 17. #22 part (a) implemented (2026-09-03): alert when a critical permission is already off at monitoring start
+
+Driver's literal complaint: "Accessibility access seemed to be turned
+off before I tried to start - does the log detect this?" Confirmed by
+tracing the exact code path, not assumed: it did NOT.
+
+### 17.1 Root cause, confirmed from the code as written
+
+`checkAndLogPermissions(boolean forceLog)` has exactly one
+`forceLog=true` caller in the whole file -
+`startTracking()`'s very first line, BEFORE `monitoringActive = true`
+is set on the next line. The existing alert block (`raisePermission
+RevokedAlert`, added for a different, earlier PRD) has two conditions
+that both silently defeat it at this exact call site:
+
+1. It's gated on `if (monitoringActive)` - still `false` here, since
+   `checkAndLogPermissions(true)` runs one line BEFORE
+   `monitoringActive = true`.
+2. Each permission's check requires a TRUE->FALSE transition
+   (`lastLoggedX != null && lastLoggedX && !hasX`) - on the very first
+   call in a fresh process, `lastLoggedX` is always `null`, so this
+   condition can never be true regardless of (1).
+
+Net effect: a permission (accessibility or any of the other 3 critical
+ones) that's already off the moment monitoring starts was completely
+silent - exactly the driver's own complaint, now root-caused rather
+than just reproduced.
+
+### 17.2 Fix
+
+New block in `checkAndLogPermissions`, gated on `forceLog` directly
+(not `lastLoggedX == null`, which would wrongly stay silent on a
+SECOND `startTracking()` within the same process if a permission got
+revoked while monitoring was off between two start/stop cycles) -
+checks each of the 4 critical permissions' CURRENT state and fires the
+same `raisePermissionRevokedAlert` mechanism (same notification
+channel, sound, vibration, diagnostic log line) immediately if any are
+off.
+
+`raisePermissionRevokedAlert` gained a third `alreadyOffAtStart`
+parameter (existing 2-arg calls unchanged via an overload) - "X turned
+off" would be misleading wording for a permission that was never
+granted to begin with this session, so the notification title and log
+line read "X already off" instead for this path.
+
+**Scope decision, per the driver's own explicit choice**: part (b)
+(correlating the status dot's actual visible duration with
+voice-announcement timing) was NOT built - asked directly via
+AskUserQuestion, driver confirmed part (a) alone addresses what they
+actually ran into, and declined the speculative instrumentation for a
+one-off report.
+
+### 17.3 Verification
+
+Same disclosed limitation as every Java-side change in this repo - no
+Android SDK/emulator/device, code review plus brace/paren balance.
+
+- `TripForegroundService.java` brace/paren balance: 200/200 braces,
+  897/897 parens.
+- Confirmed all 8 pre-existing `raisePermissionRevokedAlert` call sites
+  still compile against the 2-arg overload (unchanged); the 4 new call
+  sites use the 3-arg form with `alreadyOffAtStart=true`.
+- Confirmed `forceLog=true` has exactly one caller in the file
+  (`startTracking()`), so the new block can't accidentally fire during
+  the periodic heartbeat (`forceLog=false`).
+- Confirmed the new block sits alongside, not inside, the existing
+  `if (monitoringActive)` block - both run independently off the same
+  computed `hasX` values, no duplicate alert on the very first
+  heartbeat right after start (that block still requires a real
+  `lastLoggedX != null` transition, which can't be true yet either).
+
+## 18. Success criteria for §17
+
+- [x] Root cause traced to the exact two conditions that both defeat
+      the existing alert at the `forceLog=true` call site
+- [x] New already-off-at-start alert added for all 4 critical
+      permissions, reusing the existing alert mechanism with corrected
+      wording
+- [x] `raisePermissionRevokedAlert` overload added, all existing call
+      sites unaffected
+- [x] Part (b) explicitly asked about and declined by the driver, not
+      silently skipped or silently built
+- [x] Brace/paren balance re-verified after the change
+- [ ] Driver confirms in real use: starting monitoring with
+      accessibility (or another critical permission) already off now
+      raises an immediate, correctly-worded alert
 - [ ] Driver sign-off.
 

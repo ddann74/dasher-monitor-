@@ -633,6 +633,38 @@ public class TripForegroundService extends Service {
             }
         }
 
+        // Driver backlog #22 part a (docs/driver_backlog_2026_09_03/PRD.md):
+        // "accessibility access seemed to be turned off before I tried to
+        // start -- does the log detect this." It didn't: the block above
+        // only fires on a true->false TRANSITION while monitoring is
+        // ALREADY active, and is itself gated on `monitoringActive`, which
+        // is still false at this method's one forceLog=true call site
+        // (startTracking()'s very first line, before monitoringActive is
+        // set) -- so a permission already off the moment monitoring starts
+        // was completely silent, confirmed by tracing this exact path.
+        // forceLog is true ONLY at that one call site, so it's a reliable
+        // "monitoring is starting right now" signal on its own -- checked
+        // directly against current state rather than lastLoggedX (which
+        // could be stale from an earlier start/stop cycle in this same
+        // process and would wrongly suppress this on a second start).
+        if (forceLog) {
+            if (!hasLocation) {
+                raisePermissionRevokedAlert("Location", "GPS tracking won't start", true);
+            }
+            if (!hasOverlay) {
+                raisePermissionRevokedAlert("Overlay",
+                        "The Smart Score badge, status dot, and RoadWarrior navigation icon won't show", true);
+            }
+            if (!hasNotificationAccess) {
+                raisePermissionRevokedAlert("Notification Access",
+                        "Offer detection via notification and message reading won't work", true);
+            }
+            if (!hasAccessibility) {
+                raisePermissionRevokedAlert("Accessibility",
+                        "Offer detection and Accept/Decline tracking won't work", true);
+            }
+        }
+
         if (forceLog || changed) {
             logDiagnostic("PERMISSIONS", "location=" + hasLocation + " overlay=" + hasOverlay
                     + " notificationAccess=" + hasNotificationAccess + " batteryExempt=" + hasBatteryExemption
@@ -684,6 +716,18 @@ public class TripForegroundService extends Service {
      * firing close together don't overwrite each other.
      */
     private void raisePermissionRevokedAlert(String permissionName, String consequenceText) {
+        raisePermissionRevokedAlert(permissionName, consequenceText, false);
+    }
+
+    /**
+     * alreadyOffAtStart distinguishes a permission that was already off
+     * the moment monitoring started (driver backlog #22, docs/driver_
+     * backlog_2026_09_03/PRD.md part a) from a genuine mid-session
+     * revoke -- same notification channel/vibration/log mechanism, only
+     * the wording changes, since "turned off" would be misleading for a
+     * permission that was never on to begin with this session.
+     */
+    private void raisePermissionRevokedAlert(String permissionName, String consequenceText, boolean alreadyOffAtStart) {
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager == null) {
             return;
@@ -697,8 +741,9 @@ public class TripForegroundService extends Service {
             channel.enableVibration(true);
             manager.createNotificationChannel(channel);
         }
+        String titleState = alreadyOffAtStart ? " already off" : " turned off";
         Notification notification = new Notification.Builder(this, channelId)
-                .setContentTitle("\u26A0 " + permissionName + " turned off")
+                .setContentTitle("\u26A0 " + permissionName + titleState)
                 .setContentText(consequenceText + " until this is re-enabled.")
                 .setSmallIcon(android.R.drawable.ic_dialog_alert)
                 .setPriority(Notification.PRIORITY_HIGH)
@@ -710,8 +755,10 @@ public class TripForegroundService extends Service {
         // rather than relying on memory of when the APK was last
         // installed/updated, this queries Android's own record of it
         // directly, every time this alert fires.
-        logDiagnostic("ALERT", permissionName + " revoked while monitoring active -- immediate notification raised. "
-                + buildInstallTimingNote());
+        String eventDescription = alreadyOffAtStart
+                ? " already off when monitoring started -- immediate notification raised. "
+                : " revoked while monitoring active -- immediate notification raised. ";
+        logDiagnostic("ALERT", permissionName + eventDescription + buildInstallTimingNote());
         startPermissionAlertVibration();
     }
 

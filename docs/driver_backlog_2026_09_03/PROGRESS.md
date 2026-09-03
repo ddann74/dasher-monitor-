@@ -562,3 +562,49 @@ plain-Java equivalent in this sandbox, so `boundsRoughlyMatch` itself
 couldn't be executed as a real test here - disclosed, not glossed over.
 
 PRD.md §15/§16 boxes checked except driver confirmation/sign-off.
+
+## #22 part (a) implemented (2026-09-03): alert when a critical permission is already off at monitoring start
+
+Driver's literal complaint: "Accessibility access seemed to be turned
+off before I tried to start - does the log detect this?" Traced the
+exact code path rather than assumed - confirmed it did NOT. Root cause:
+`checkAndLogPermissions(true)` (the one call that runs at monitoring
+start) runs BEFORE `monitoringActive = true` is set, and the existing
+alert block is gated on `monitoringActive` AND requires a real
+true->false transition (`lastLoggedX` starts `null` on a fresh
+process) - both conditions silently defeat the existing alert exactly
+at this call site.
+
+**Fix**: new block in `checkAndLogPermissions`, gated on `forceLog`
+directly (has exactly one caller in the file - `startTracking()` -
+confirmed by grep) rather than `lastLoggedX == null`, so a SECOND
+`startTracking()` in the same process still correctly re-checks rather
+than wrongly trusting a stale prior state. Checks all 4 critical
+permissions' current state and fires the existing `raisePermission
+RevokedAlert` mechanism immediately if any are off.
+`raisePermissionRevokedAlert` gained a third `alreadyOffAtStart`
+parameter (2-arg overload keeps all 8 pre-existing call sites
+unchanged) so the notification says "already off" rather than the
+misleading "turned off" for a permission that was never granted to
+begin with this session.
+
+**Scope decision, per the driver's own explicit answer**: asked
+directly via `AskUserQuestion` whether part (b) (correlating the
+status dot's visible duration with voice-announcement timing - always
+flagged as speculative, one-off-report instrumentation, not a
+confirmed recurring bug) was also wanted. Driver confirmed part (a)
+alone is enough. Not built.
+
+**Verification**: same disclosed limitation as every Java-side change
+in this repo - no Android SDK/emulator/device, code review plus
+brace/paren balance (`TripForegroundService.java`: 200/200 braces,
+897/897 parens). Confirmed all 8 pre-existing `raisePermissionRevoked
+Alert` call sites still compile against the unchanged 2-arg overload;
+confirmed `forceLog=true` has exactly one caller so the new block can't
+fire during the periodic heartbeat; confirmed the new block runs
+independently alongside (not inside) the existing `monitoringActive`
+block with no duplicate-alert risk on the first heartbeat after start.
+
+PRD.md §17/§18 boxes checked except driver confirmation/sign-off. Only
+#16 remains open in the original evidence-blocked bug list (needs a
+diagnostic log from a session where the status dot didn't show).
