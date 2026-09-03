@@ -68,6 +68,30 @@ public class DasherAccessibilityService extends AccessibilityService {
     // screen first loads, which is not a real user interaction.
     private static final long NODE_MATCH_MIN_DELAY_MS = 1500;
 
+    // Driver-requested data-completeness hardening (driver backlog #21,
+    // docs/driver_backlog_2026_09_03/PRD.md), applied without a specific
+    // diagnostic log to root-cause against -- the driver's actual goal
+    // ("collect all data to build the smart score engine") is served by
+    // hardening the ALREADY-NAMED weak point in this detection, not by
+    // guessing at an unconfirmed bug. checkNodeBoundsMatch previously
+    // required byte-exact Rect equality between the bounds recorded at
+    // scan time and the bounds on the actual tap event -- if the screen
+    // re-renders by even a few pixels in between (a real, disclosed risk
+    // this class's own comments already named: "a bounds-shift edge
+    // case"), a genuine decline silently falls through to the timeout
+    // fallback instead, which recalculate_personal_calibration then
+    // deliberately EXCLUDES from learning (a timeout isn't treated as a
+    // real preference signal the way an active decline is) -- real data
+    // loss for exactly the goal the driver stated. This tolerance lets
+    // each edge of the tapped bounds drift up to this many pixels from
+    // the recorded bounds and still count as the same button, while
+    // still being spatially precise enough that Accept and Decline
+    // (always separate, non-adjacent buttons) can't be confused with
+    // each other. HONEST LIMIT: a fixed pixel value, not density-scaled
+    // -- generous enough for a minor re-render shift on any real screen
+    // density, not verified against a real device in this environment.
+    private static final int NODE_MATCH_BOUNDS_TOLERANCE_PX = 24;
+
     // Tap-to-expand state for the live Smart Score badge -- lives in
     // fields (not lambda captures) so toggleSmartScoreBadge can
     // reference itself indefinitely as the next tap's action.
@@ -349,13 +373,13 @@ public class DasherAccessibilityService extends AccessibilityService {
         try {
             android.graphics.Rect eventBounds = new android.graphics.Rect();
             source.getBoundsInScreen(eventBounds);
-            if (acceptNodeBounds != null && eventBounds.equals(acceptNodeBounds)) {
+            if (acceptNodeBounds != null && boundsRoughlyMatch(eventBounds, acceptNodeBounds)) {
                 logDiagnostic("NODE_MATCH", "Event on Accept node bounds -- type="
                         + AccessibilityEvent.eventTypeToString(event.getEventType()));
                 recordLastOfferOutcome(true);
                 acceptNodeBounds = null;
                 declineNodeBounds = null;
-            } else if (declineNodeBounds != null && eventBounds.equals(declineNodeBounds)) {
+            } else if (declineNodeBounds != null && boundsRoughlyMatch(eventBounds, declineNodeBounds)) {
                 logDiagnostic("NODE_MATCH", "Event on Decline node bounds -- type="
                         + AccessibilityEvent.eventTypeToString(event.getEventType()));
                 recordLastOfferOutcome(false);
@@ -365,6 +389,21 @@ public class DasherAccessibilityService extends AccessibilityService {
         } catch (RuntimeException e) {
             logDiagnostic("ERROR", "checkNodeBoundsMatch exception: " + android.util.Log.getStackTraceString(e));
         }
+    }
+
+    /**
+     * True if every edge of `a` is within NODE_MATCH_BOUNDS_TOLERANCE_PX
+     * of the corresponding edge of `b` -- a tolerant replacement for
+     * Rect.equals() (see NODE_MATCH_BOUNDS_TOLERANCE_PX's own comment for
+     * why byte-exact equality was too fragile). Still requires all four
+     * edges to be close, not just an overlap, so this can't accidentally
+     * match a different, nearby element.
+     */
+    private boolean boundsRoughlyMatch(android.graphics.Rect a, android.graphics.Rect b) {
+        return Math.abs(a.left - b.left) <= NODE_MATCH_BOUNDS_TOLERANCE_PX
+                && Math.abs(a.top - b.top) <= NODE_MATCH_BOUNDS_TOLERANCE_PX
+                && Math.abs(a.right - b.right) <= NODE_MATCH_BOUNDS_TOLERANCE_PX
+                && Math.abs(a.bottom - b.bottom) <= NODE_MATCH_BOUNDS_TOLERANCE_PX;
     }
 
     private void recordLastOfferOutcome(boolean accepted) {

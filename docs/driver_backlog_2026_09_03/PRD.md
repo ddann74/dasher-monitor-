@@ -152,18 +152,18 @@ anything) is still needed before a fix can be attempted.
       direct-launch/notification-fallback silently failed). **Action
       for this ralph loop: none until that log arrives** - do not
       duplicate that PRD's own blocked status here.
-- [ ] **#21 - rejected offers not being recorded.** Code exists and
-      looks sound (`recordLastOfferOutcome`,
-      `DasherAccessibilityService.java:369-391`, triggered on
-      accessibility-node-bounds match for the Decline button), but no
-      PRD tracks a failure report against it. Possible root cause: exact
-      node-bounds equality could miss a decline via a different UI path
-      (swipe/back gesture) or a bounds-shift edge case on some device/
-      DoorDash-app-version combination. **Action: needs a diagnostic log
-      from a session where declines were made, specifically checked for
-      `OUTCOME: Declined` lines**, before guessing at a fix - same
-      "real evidence before code" discipline as every other bug fix
-      this session.
+- [x] **#21 - rejected offers not being recorded.** PARTIALLY ADDRESSED
+      (2026-09-03) - driver had no specific diagnostic log to root-cause
+      against, and reframed the real goal directly: "collect all data to
+      build the smart score engine." Rather than guess at an unconfirmed
+      bug, hardened the ALREADY-NAMED weak point instead - see §15/§16
+      for the full writeup. **Not closed as fully verified** - the
+      hardening addresses a real, disclosed risk in the existing code,
+      but whether a decline was actually ever being lost in practice is
+      still unconfirmed (no device/log evidence either way). Re-open with
+      a real diagnostic log (`OUTCOME: Declined` vs. `OUTCOME: Timed out`
+      lines around a session with real declines) if the driver notices
+      anything still missing after this ships.
 - [ ] **#22 - accessibility off before start; status dot visible <7s,
       possibly interrupted by the notification-read-aloud announcement
       happening almost simultaneously.** Partial answer already
@@ -776,5 +776,113 @@ Java; real, runnable Python tests for the pure-Python logic.
       helps identify which specific number(s) looked wrong (this is the
       real next step toward actually fixing whatever's inaccurate, not
       the fix itself)
+- [ ] Driver sign-off.
+
+## 15. #21 partially addressed (2026-09-03): hardened bounds-matching without a confirmed bug
+
+Driver had no specific diagnostic log for #21 and, when asked directly,
+reframed the goal rather than confirming a specific failure: "I'm not
+sure. I just want to collect all data to build the smart score engine."
+This PRD's own discipline (§7 P4, "real evidence before code") means a
+specific unconfirmed bug can't be guessed at - but the driver's actual
+goal pointed at something concrete and already named in the existing
+code, not a guess.
+
+### 15.1 What was found before touching anything
+
+Read `DasherAccessibilityService.java`'s full accept/decline detection
+chain (further along than the original §4/#21 triage description
+suggested - substantial real-diagnostic-log-driven work already
+happened here, predating this backlog, confirmed via `git log`):
+
+1. Direct click-text match (`equalsIgnoreCase("Decline")`) - real
+   evidence already on file (a deliberate test: 2 genuine declines, 0
+   click events captured) shows this likely never fires for Dasher's
+   own buttons at all.
+2. **The real mechanism**: `scanAndRecordAcceptDeclineNodeBounds()`
+   records the Accept/Decline buttons' exact screen bounds when an
+   offer appears; `checkNodeBoundsMatch()` matches ANY later
+   accessibility event landing on those bounds, gated by
+   `NODE_MATCH_MIN_DELAY_MS` to rule out focus-on-load false positives.
+3. **A safety net**: if the offer screen disappears with neither button
+   detected, `handleOfferResult` schedules `record_offer_timeout` after
+   a grace period - so a decline that slips past #2 doesn't vanish with
+   zero record, it's just recorded as `OUTCOME: Timed out` instead of
+   `OUTCOME: Declined`.
+
+The gap: #2's own comment already named the exact risk -
+"exact node-bounds equality could miss a decline... or a bounds-shift
+edge case" - `checkNodeBoundsMatch` compared bounds with `Rect.equals()`,
+byte-exact. And `recalculate_personal_calibration`'s own docstring
+confirms the consequence is real, not hypothetical: "Timeouts are
+deliberately excluded... not a real preference signal the way an
+active decline is." So a decline that fell into the timeout bucket due
+to a pixel-level bounds shift wouldn't just be mislabeled - it would be
+silently EXCLUDED from the exact learning loop the driver said they
+care about.
+
+### 15.2 Fix: tolerant bounds matching, not exact equality
+
+New `NODE_MATCH_BOUNDS_TOLERANCE_PX = 24` and `boundsRoughlyMatch(Rect
+a, Rect b)` - requires every edge (left/top/right/bottom) to be within
+24px of the recorded bounds, not byte-identical. Replaces both
+`eventBounds.equals(acceptNodeBounds)` and
+`eventBounds.equals(declineNodeBounds)` in `checkNodeBoundsMatch`.
+Deliberately still requires ALL FOUR edges close (not just an overlap
+or a contains-check) so Accept and Decline - always separate,
+non-adjacent buttons - can't be confused with each other at this
+tolerance.
+
+**Honestly scoped, not oversold**: this is a defensive hardening of an
+already-named risk, not a confirmed bug fix. Whether a real decline was
+ever actually being lost in practice remains unconfirmed - no diagnostic
+log or device evidence either way, same disclosed limitation as every
+other Java-only change in this repo. If the driver notices anything
+still missing after this ships, that's real evidence worth reopening
+this with, not a sign the hardening didn't work.
+
+**Not attempted**: reclassifying already-recorded `timed_out` rows that
+might actually have been real declines - no reliable way to tell which
+historical rows were affected, so no backfill was attempted (same
+reasoning this PRD's own `docs/deadhead_stacked_order_baseline/PRD.md`
+already used for a similar backfill question).
+
+### 15.3 Verification
+
+Same disclosed limitation as every Java-side change in this repo - no
+Android SDK/emulator/device, code review plus brace/paren balance.
+`android.graphics.Rect` has no pure-Python or plain-Java equivalent
+reachable in this sandbox, so `boundsRoughlyMatch` itself couldn't be
+unit-tested here (same class of limitation as every other Android-API-
+dependent method in this file).
+
+- `DasherAccessibilityService.java` brace/paren balance: 152/152 braces,
+  556/556 parens.
+- Confirmed both call sites (`acceptNodeBounds`/`declineNodeBounds`
+  checks) updated consistently - no stray `.equals()` left behind.
+- Confirmed the `else if` structure is preserved (an event can still
+  only ever match Accept OR Decline, never attempt to process as both).
+
+## 16. Success criteria for §15
+
+- [x] Driver's actual goal clarified directly ("collect all data") when
+      no specific diagnostic log was available, rather than guessing at
+      an unconfirmed bug
+- [x] Full accept/decline detection chain read end-to-end before
+      touching anything - confirmed it's already a 3-layer system with
+      real diagnostic-log-driven history, not the simpler mechanism the
+      original triage description implied
+- [x] The exact, already-named risk (byte-exact bounds equality) fixed
+      with a disclosed, bounded tolerance - not a broader rewrite
+- [x] Confirmed via `recalculate_personal_calibration`'s own docstring
+      that a decline misclassified as a timeout is genuinely excluded
+      from calibration learning, not just cosmetically mislabeled -
+      real justification for this being worth fixing without a log
+- [x] Explicitly NOT framed as a confirmed bug fix - honestly scoped as
+      a hardening of a named risk, unconfirmed either way without real
+      evidence
+- [ ] Driver confirms in real use (or via a future diagnostic log) that
+      declined offers show up correctly, ideally after a screen re-render
+      delay that would previously have caused a mismatch
 - [ ] Driver sign-off.
 
