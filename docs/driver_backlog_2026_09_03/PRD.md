@@ -317,13 +317,17 @@ analysis plus new UI.
       home-address storage, no route-preloading anywhere in the
       codebase). **Blocked on the same open question as #17a** - confirm
       which reading before sizing further or starting design.
-- [ ] **#25 - add $/km and $/hr metrics to the smart score
-      recommendation itself** (distinct from #6's accepted-vs-declined
-      report - this is surfacing it live, in the recommendation UI, not
-      just in a historical report). SMALL-MEDIUM. The underlying data
-      (payout, distance, and `hourly_rate_actual_vs_estimated`'s
-      already-implemented §4.A/§4.B live estimate) already exists;
-      needs wiring into whatever view shows the live recommendation.
+- [x] **#25 - add $/km and $/hr metrics to the smart score
+      recommendation itself.** ALREADY IMPLEMENTED (found during this
+      pass, no new code needed): `DasherAccessibilityService.java`'s
+      live Smart Score badge already shows `$X.XX/km   $X.XX/hr` in
+      both its compact and expanded text (lines ~894-903, ~925-926) -
+      an existing inline comment there even says "Restored to the live
+      badge per explicit request: $/km and $/hr specifically." The
+      original triage (§1-§5's investigation pass) missed this one;
+      corrected here rather than duplicating working code. Distinct from
+      #6, which is the historical accepted-vs-declined comparison, not
+      the live per-offer badge.
 - [ ] **#26 - improve report formatting for readability.** SIZE
       DEPENDS ON THE OPEN QUESTION IN §3 (which report). Some formatting
       infrastructure already exists (`_format_table`,

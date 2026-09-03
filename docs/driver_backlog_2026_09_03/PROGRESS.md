@@ -336,3 +336,29 @@ PRD §5 boxes for #5 and #7 checked. Remaining §5/§4 items per §6:
 #25 (live $/km, $/hr in the recommendation), the three open questions
 (#4, #17, #26), the evidence-blocked bugs (#21, #22, #16), and the two
 large items (#1, #29) last.
+
+## #25 (2026-09-03): found already implemented, no new code
+
+Before writing anything, checked `DasherAccessibilityService.java`
+where the live Smart Score badge is built (per PRD §5's own note that
+this item's underlying data already exists) - the badge already shows
+`$X.XX/km   $X.XX/hr` in both its compact text (line ~902) and its
+expanded/tap-to-see-more text (line ~925), for every real offer. An
+existing inline comment there even documents this as a deliberate,
+previous addition: "Restored to the live badge per explicit request:
+$/km and $/hr specifically -- everything else (deadhead, wait, traffic,
+weather) still stays out of the live view, only in the post-trip
+summary."
+
+This session's own earlier triage (the agent investigation that
+produced §1-§5) missed this - it was classified as a new SMALL-MEDIUM
+feature request rather than caught as already done. Corrected in
+PRD.md §5 rather than shipping duplicate/redundant code on top of
+something that already works. No commit needed for this item beyond
+the PRD/PROGRESS correction itself.
+
+Remaining per §6: the three open questions (#4, #17, #26) need the
+driver's own input before they're actionable; #21/#22/#16 need a fresh
+diagnostic log each; #1 and #29 are deliberately last, pending a
+scoping conversation. Nothing left in the ralph loop's queue that can
+proceed without one of those first.
