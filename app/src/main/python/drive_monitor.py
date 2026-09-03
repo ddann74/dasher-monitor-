@@ -26,6 +26,7 @@ import math
 import json
 import os
 import re
+import random
 from datetime import datetime, timedelta
 
 # ------------------------------------------------------------------------- #
@@ -89,6 +90,24 @@ WALKING_PATTERN_CONSECUTIVE_READINGS = 2
 WALKING_RECENTLY_PARKED_WINDOW_SECONDS = 5 * 60
 PARK_TO_WALK_GAP_MIN_SAMPLES_TO_LEARN = 10
 
+# Auto-labeled parking-difficulty samples, written the instant a
+# park-to-walk gap is measured (see _record_park_to_walk_gap_sample),
+# instead of only ever existing when the driver manually answers the
+# post-trip feedback dialog. That manual path produced at most ONE
+# sample per trip (only the LAST stop's gap survives to be shown --
+# see get_last_parking_gap_for_feedback), and only if the driver
+# bothered to tap through instead of "Skip" -- real per-restaurant
+# data was accumulating at well under one sample per trip, i.e. months
+# to reach PARKING_DIFFICULTY_MIN_SAMPLES for any one restaurant. A raw
+# duration alone can't tell a genuinely tight park from a restaurant
+# that's just naturally far from the door, so this is a cheap first
+# guess, not a replacement for a real answer -- see
+# record_parking_difficulty_feedback, which upgrades the auto row in
+# place rather than double-counting the same stop.
+PARKING_AUTO_LABEL_DEFAULT_BASELINE_SECONDS = 45
+PARKING_AUTO_LABEL_EASY_RATIO = 0.6
+PARKING_AUTO_LABEL_DIFFICULT_RATIO = 1.5
+
 # Conservative fallback used only when no real countdown was readable
 # from the offer screen (see OfferScreenParser.extract_countdown_seconds)
 # -- deliberately generous so a genuinely still-pending offer doesn't get
@@ -119,6 +138,21 @@ LOCATION_PROFITABILITY_MIN_SAMPLES = 3
 # half to individually clear this minimum before being trusted.
 PAY_TREND_DEFAULT_WEEKS = 8
 PAY_TREND_MIN_SAMPLES_PER_HALF = 3
+
+# docs/tutorial_mode/PRD.md ss4 -- driver chose Option B (varied
+# synthetic environments) + Option C (real address-book restaurants
+# once history exists), combined. This pool is Option B's fallback for
+# a driver with no real pickup_location_history yet -- picked fresh
+# (not seeded) each call, since the driver asked for variety across
+# runs, not reproducibility. Distances/payouts/wait times deliberately
+# varied against each other (not just the restaurant name) so the
+# Smart Score walkthrough shows genuinely different numbers run to run.
+TUTORIAL_SYNTHETIC_ENVIRONMENTS = [
+    {"restaurant_name": "KFC Fairy Meadow", "distance_km": 5.1, "payout": 13.65, "avg_wait_minutes": 8.0},
+    {"restaurant_name": "Nando's Wollongong", "distance_km": 2.3, "payout": 9.20, "avg_wait_minutes": 12.0},
+    {"restaurant_name": "Guzman y Gomez Corrimal", "distance_km": 8.7, "payout": 17.40, "avg_wait_minutes": 5.0},
+    {"restaurant_name": "Subway Figtree", "distance_km": 1.2, "payout": 6.50, "avg_wait_minutes": 15.0},
+]
 
 # Reuses the same ~1.1km grid already proven in zone-based traffic-risk
 # learning, rather than a raw geographic average (which could suggest a
@@ -525,6 +559,19 @@ class Database:
         # calculate "average $/hr of recent accepted offers" at all.
         if "hourly_rate" not in existing_columns:
             self.conn.execute("ALTER TABLE offer_outcomes ADD COLUMN hourly_rate REAL")
+            self.conn.commit()
+
+        # Migration for databases that predate auto-labeled parking
+        # samples (see PARKING_AUTO_LABEL_* above) -- every row that
+        # already existed was, by definition, a driver's own manual
+        # answer (the auto path didn't exist yet), so it defaults to
+        # 'manual' rather than being mistaken for a low-confidence guess.
+        parking_feedback_columns = [
+            row["name"] for row in self.conn.execute("PRAGMA table_info(parking_difficulty_feedback)")
+        ]
+        if "source" not in parking_feedback_columns:
+            self.conn.execute(
+                "ALTER TABLE parking_difficulty_feedback ADD COLUMN source TEXT DEFAULT 'manual'")
             self.conn.commit()
 
         # Migration for databases that already existed before phase-timing
@@ -2070,6 +2117,7 @@ class TripManager:
         self._last_notification_skip_log = None
         self._last_gap_restaurant_name = None
         self._last_gap_seconds = None
+        self._last_gap_feedback_row_id = None
 
         # Dual-mode support: DASHER mode (Dasher app active / delivery in
         # progress) vs GENERAL mode (plain driving-efficiency tracking).
@@ -2224,6 +2272,26 @@ class TripManager:
         self._deadhead_distance_km = None
         self._distance_at_departure_km = None
         self._departure_timestamp = None
+
+    def discard_pending_pickup_and_stops(self):
+        """
+        docs/tutorial_mode/PRD.md ss5 P3: an interrupted tutorial run
+        (driver backs out or switches apps mid-sequence) could otherwise
+        leave a FAKE add_pickup/add_stop_to_buffer registration sitting
+        in memory, which could confuse real geofence/arrival detection
+        if the driver's real GPS later happens to wander near those fake
+        coordinates before the next real trip start (which would
+        otherwise be the only thing to naturally clear self.pickup, per
+        _start_trip's own reset).
+
+        Deliberately a plain reset, NOT a call to add_pickup(None, ...) --
+        add_pickup's own overwrite path persists the OUTGOING pickup's
+        job row first (see its own comment on _persist_pickup_job_row)
+        for the real stacked-order case; a discarded TUTORIAL pickup was
+        never real and must never be persisted anywhere.
+        """
+        self.pickup = None
+        self.stops = []
 
     def update_pickup_coordinates(self, lat, lon):
         """
@@ -2892,7 +2960,16 @@ class TripManager:
         """
         if self._last_gap_restaurant_name is None:
             return None
-        return {"restaurant_name": self._last_gap_restaurant_name, "gap_seconds": self._last_gap_seconds}
+        return {
+            "restaurant_name": self._last_gap_restaurant_name,
+            "gap_seconds": self._last_gap_seconds,
+            # id of the auto-labeled row already written for this same
+            # stop (see _record_park_to_walk_gap_sample) -- passed back
+            # through record_parking_difficulty_feedback so a manual
+            # answer UPGRADES that row instead of adding a second one for
+            # the same physical park event.
+            "feedback_id": self._last_gap_feedback_row_id,
+        }
 
     def clear_last_parking_gap_for_feedback(self):
         """
@@ -2903,6 +2980,7 @@ class TripManager:
         """
         self._last_gap_restaurant_name = None
         self._last_gap_seconds = None
+        self._last_gap_feedback_row_id = None
 
     def _learned_walking_speed_threshold_kmh(self):
         """
@@ -2966,6 +3044,33 @@ class TripManager:
             return row["avg_gap_seconds"] * 2.0, row["sample_count"], True
         return WALKING_RECENTLY_PARKED_WINDOW_SECONDS, row["sample_count"] if row else 0, False
 
+    def _auto_parking_difficulty_label(self, gap_seconds):
+        """
+        Cheap first-pass 'easy'/'normal'/'difficult' label for a raw
+        park-to-walk duration -- see PARKING_AUTO_LABEL_* above for why
+        this exists. Same fixed-default-then-learned-baseline shape as
+        _learned_recently_parked_window_seconds just above: uses the same
+        global park_to_walk_gap_history average once enough real gaps
+        exist, a fixed guess before that. Global, not per-restaurant --
+        no per-restaurant average exists to draw from (park_to_walk_gap_
+        history is a single learned-average row, same table the walking-
+        pace window above already trusts), but the RATING this feeds
+        (get_parking_difficulty_rating) still gates per-restaurant, which
+        is what actually needs to be meaningful.
+        """
+        row = self.db.conn.execute(
+            "SELECT avg_gap_seconds, sample_count FROM park_to_walk_gap_history WHERE id = 1"
+        ).fetchone()
+        if row and row["sample_count"] and row["sample_count"] >= PARK_TO_WALK_GAP_MIN_SAMPLES_TO_LEARN:
+            baseline = row["avg_gap_seconds"]
+        else:
+            baseline = PARKING_AUTO_LABEL_DEFAULT_BASELINE_SECONDS
+        if gap_seconds <= baseline * PARKING_AUTO_LABEL_EASY_RATIO:
+            return "easy"
+        if gap_seconds >= baseline * PARKING_AUTO_LABEL_DIFFICULT_RATIO:
+            return "difficult"
+        return "normal"
+
     def _record_park_to_walk_gap_sample(self, gap_seconds, restaurant_name=None):
         """
         Records the real time elapsed between a genuine park being
@@ -2993,6 +3098,21 @@ class TripManager:
         # gets confirmed/corrected by the user afterward, per restaurant.
         self._last_gap_restaurant_name = restaurant_name
         self._last_gap_seconds = gap_seconds
+        # Immediately persist an auto-labeled sample for THIS stop -- see
+        # PARKING_AUTO_LABEL_* above. Fires here, once per park event, so
+        # every stop of a multi-stop trip gets its own row, not just the
+        # last one (the only one the trip-end feedback dialog ever sees).
+        # Skipped when there's no restaurant name to attach it to (nothing
+        # for get_parking_difficulty_rating to ever group it under).
+        self._last_gap_feedback_row_id = None
+        if restaurant_name is not None:
+            auto_difficulty = self._auto_parking_difficulty_label(gap_seconds)
+            cursor = self.db.conn.execute("""
+                INSERT INTO parking_difficulty_feedback (restaurant_name, gap_seconds, difficulty, timestamp, source)
+                VALUES (?, ?, ?, ?, 'auto')
+            """, (restaurant_name, gap_seconds, auto_difficulty, time.time()))
+            self.db.conn.commit()
+            self._last_gap_feedback_row_id = cursor.lastrowid
         # Consumed by DriveMonitorEngine.on_gps_update to log this --
         # TripManager has no direct access to log_diagnostic itself.
         # Previously zero trace of this learning mechanism ever running.
@@ -3620,16 +3740,34 @@ class DriveMonitorEngine:
         # If expiration hasn't passed yet, leave it in place -- still
         # genuinely pending, not yet safe to assume anything happened to it.
 
-    def record_parking_difficulty_feedback(self, restaurant_name, gap_seconds, difficulty):
+    def record_parking_difficulty_feedback(self, restaurant_name, gap_seconds, difficulty, feedback_id=None):
         """
         Confirms or corrects what a raw park-to-walk duration actually
         meant -- a long gap alone can't distinguish a genuinely difficult
         park from an easy one that's just naturally far from the door.
         difficulty: 'easy', 'normal', or 'difficult'.
+
+        feedback_id, when given (and >= 0 -- Java passes -1 as its "no id"
+        sentinel, see MainActivity's showFeedbackDialog), is the id of the
+        auto-labeled row already written for this SAME stop (see
+        _record_park_to_walk_gap_sample). Upgrades that row to the
+        driver's real answer in place instead of inserting a second row
+        for the same physical parking event, which would double-count it
+        in get_parking_difficulty_rating's average. Falls back to a plain
+        insert if that row is missing (an older client, or it somehow
+        never got auto-recorded) so a manual answer is never dropped.
         """
+        if feedback_id is not None and feedback_id >= 0:
+            cursor = self.db.conn.execute(
+                "UPDATE parking_difficulty_feedback SET difficulty = ?, source = 'manual' WHERE id = ?",
+                (difficulty, feedback_id),
+            )
+            self.db.conn.commit()
+            if cursor.rowcount > 0:
+                return
         self.db.conn.execute("""
-            INSERT INTO parking_difficulty_feedback (restaurant_name, gap_seconds, difficulty, timestamp)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO parking_difficulty_feedback (restaurant_name, gap_seconds, difficulty, timestamp, source)
+            VALUES (?, ?, ?, ?, 'manual')
         """, (restaurant_name, gap_seconds, difficulty, time.time()))
         self.db.conn.commit()
 
@@ -3815,11 +3953,14 @@ class DriveMonitorEngine:
         gated on PARKING_DIFFICULTY_MIN_SAMPLES confirmed samples for
         THIS specific restaurant -- same mapping pattern as personal
         calibration's overall_rating_map: easy=0, normal=50, difficult=100,
-        averaged across every confirmation given for this location.
+        averaged across every sample recorded for this location (both
+        auto-labeled -- see PARKING_AUTO_LABEL_* -- and driver-confirmed;
+        manual_sample_count/auto_sample_count below disclose the split
+        rather than presenting a mostly-guessed rating as fully confirmed).
         """
         difficulty_map = {"easy": 0.0, "normal": 50.0, "difficult": 100.0}
         rows = self.db.conn.execute(
-            "SELECT difficulty FROM parking_difficulty_feedback WHERE restaurant_name = ?",
+            "SELECT difficulty, source FROM parking_difficulty_feedback WHERE restaurant_name = ?",
             (restaurant_name,),
         ).fetchall()
         scores = [difficulty_map[r["difficulty"]] for r in rows if r["difficulty"] in difficulty_map]
@@ -3830,9 +3971,12 @@ class DriveMonitorEngine:
             })
         avg_score = sum(scores) / len(scores)
         label = "Easy" if avg_score < 33 else "Difficult" if avg_score > 66 else "Normal"
+        manual_count = sum(1 for r in rows if r["source"] == "manual")
         return json.dumps({
             "has_rating": True, "sample_count": len(scores),
             "avg_score": round(avg_score, 1), "label": label,
+            "manual_sample_count": manual_count,
+            "auto_sample_count": len(scores) - manual_count,
         })
 
     def get_canned_replies_json(self):
@@ -4915,6 +5059,93 @@ class DriveMonitorEngine:
             "trend": trend,
         })
 
+    def get_tutorial_environment(self, base_lat, base_lon):
+        """
+        docs/tutorial_mode/PRD.md ss3/ss4 -- picks the fake delivery
+        scenario for one run of the interactive tutorial. Driver chose
+        Option B (varied synthetic environments) + Option C (the
+        driver's own real address-book restaurants once history
+        exists), combined:
+
+        - If any restaurant has a real, GPS-confirmed pickup location
+          (pickup_location_history -- same real geo-anchor
+          docs/location_profitability_map/PRD.md already established),
+          picks one AT RANDOM and uses its real averaged lat/lon, plus
+          its real learned wait time (restaurant_wait_history) and
+          deadhead distance (offer_distance_accuracy) where available --
+          the most personally relevant version. `payout` is NOT a real
+          recorded figure (this app doesn't persist one canonical
+          "the" payout per restaurant, only per individual offer) --
+          a plausible figure derived from the real distance, disclosed
+          as such via `payout_is_illustrative`, never presented as if
+          it were a real historical number.
+        - Otherwise (a driver with no real pickup history yet) picks
+          AT RANDOM from TUTORIAL_SYNTHETIC_ENVIRONMENTS, a small
+          built-in pool of made-up restaurants/distances/payouts/wait
+          times, so even a brand-new driver's first tutorial run has
+          real variety, not always the identical scenario.
+
+        Picked fresh (not seeded) on every call -- the driver asked for
+        variety across runs, not reproducibility.
+
+        base_lat/base_lon: the phone's real current location if known
+        (Java passes TripForegroundService.lastKnownLat/lastKnownLon
+        when hasValidLocation, else its own existing fixed fallback,
+        same pattern DeveloperTestingActivity.addTestStopNearby already
+        uses) -- doubles as the SIMULATED "start" point for the
+        tutorial's driving-to-pickup leg, matching how a real trip
+        actually starts from wherever the driver currently is, not a
+        floating abstract point.
+        """
+        real_restaurants = self.db.conn.execute("""
+            SELECT restaurant_name, AVG(lat) AS avg_lat, AVG(lon) AS avg_lon
+            FROM pickup_location_history GROUP BY restaurant_name
+        """).fetchall()
+
+        if real_restaurants:
+            row = random.choice(real_restaurants)
+            wait_row = self.db.conn.execute(
+                "SELECT avg_wait_minutes FROM restaurant_wait_history WHERE restaurant_name = ?",
+                (row["restaurant_name"],),
+            ).fetchone()
+            deadhead_row = self.db.conn.execute(
+                "SELECT AVG(actual_deadhead_km) AS avg_km FROM offer_distance_accuracy WHERE restaurant_name = ?",
+                (row["restaurant_name"],),
+            ).fetchone()
+            distance_km = (round(deadhead_row["avg_km"], 1)
+                           if deadhead_row and deadhead_row["avg_km"] else 5.0)
+            return json.dumps({
+                "source": "real",
+                "restaurant_name": row["restaurant_name"],
+                "start_lat": base_lat,
+                "start_lon": base_lon,
+                "dest_lat": round(row["avg_lat"], 6),
+                "dest_lon": round(row["avg_lon"], 6),
+                "distance_km": distance_km,
+                "payout": round(distance_km * 2.5, 2),
+                "payout_is_illustrative": True,
+                "avg_wait_minutes": (round(wait_row["avg_wait_minutes"], 1)
+                                      if wait_row and wait_row["avg_wait_minutes"] else 8.0),
+            })
+
+        profile = random.choice(TUTORIAL_SYNTHETIC_ENVIRONMENTS)
+        # Simple due-north offset (1 degree latitude ~= 111km) -- same
+        # order of approximation this codebase's own existing simulate
+        # methods already use (fixed 0.001-degree deltas with no real
+        # distance-aware math), not a claim of navigational precision.
+        return json.dumps({
+            "source": "synthetic",
+            "restaurant_name": profile["restaurant_name"],
+            "start_lat": base_lat,
+            "start_lon": base_lon,
+            "dest_lat": round(base_lat + profile["distance_km"] / 111.0, 6),
+            "dest_lon": base_lon,
+            "distance_km": profile["distance_km"],
+            "payout": profile["payout"],
+            "payout_is_illustrative": False,
+            "avg_wait_minutes": profile["avg_wait_minutes"],
+        })
+
     RESTAURANT_VISIT_HISTORY_LIMIT = 10
 
     def get_restaurant_visit_history(self, restaurant_name):
@@ -5316,6 +5547,10 @@ class DriveMonitorEngine:
         """
         self.trip_manager.add_pickup(restaurant_name, lat, lon, claimed_distance_km, score_snapshot_json,
                                       deadline_text, address, payout)
+
+    def discard_pending_pickup_and_stops(self):
+        """Wrapper -- see TripManager.discard_pending_pickup_and_stops for the real logic (docs/tutorial_mode/PRD.md ss5 P3)."""
+        self.trip_manager.discard_pending_pickup_and_stops()
 
     def update_pickup_coordinates(self, lat, lon):
         """

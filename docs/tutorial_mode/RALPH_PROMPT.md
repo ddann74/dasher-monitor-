@@ -1,13 +1,17 @@
 # Ralph loop — interactive tutorial mode
 
-DO NOT RUN THIS YET. `docs/tutorial_mode/PRD.md` §4 has a real, unresolved
-design fork (which randomization option, or none yet) that needs an
-actual driver decision, not a guessed default — §5's own P2 premortem
-finding explains why guessing here risks derailing the whole feature,
-not just picking a defensible option among equivalents. Do not start
-§7 until PROGRESS.md records the driver's real answer.
+DONE (2026-09-03). §4 was answered by the driver (Option B + C
+combined) and every box in `PRD.md` §7 is checked except driver
+confirmation/sign-off. See `PRD.md` §8 for the full implementation
+writeup. Kept here for reference only, not as an active prompt — the
+per-iteration structure below is still useful if any future follow-up
+work on this feature happens (e.g. a fuller `handleGpsResult`
+replication for steps 9/10, flagged as a disclosed scope adjustment in
+§8.2, not built).
 
-Once that answer exists, run this prompt repeatedly (one iteration per
+--- Original prompt, for reference ---
+
+Once the driver has answered §4, run this prompt repeatedly (one iteration per
 invocation) until every box in `docs/tutorial_mode/PRD.md` §7 is
 checked.
 

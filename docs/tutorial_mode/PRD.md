@@ -1,8 +1,7 @@
 # PRD: interactive tutorial mode (driver backlog #29)
 
-Status: DESIGNED, NOT implemented. One real open question (§4) needs a
-driver decision before any code — do not build the randomization piece
-from a guessed default.
+Status: IMPLEMENTED and tested (2026-09-03). §4 resolved: driver chose
+Option B + Option C combined (see §8 for the implementation writeup).
 
 ## 0. Where this ask came from
 
@@ -131,7 +130,22 @@ Every offer/trip row this simulation produces uses `is_test_data=1`
 (§1's already-established pattern) so it can never pollute real stats,
 Trip History, or calibration.
 
-## 4. Open question — randomized environments (NOT resolved, needs a driver decision)
+## 4. Randomized environments — RESOLVED (2026-09-03): Option B + C combined
+
+Driver chose both. Resolved into one combined design, implemented in
+§8: if the driver has any real `pickup_location_history` (Option C),
+pick one of their own real restaurants at random each run, using its
+real averaged lat/lon plus real learned wait/deadhead data where
+available. Otherwise (a brand-new driver, Option B's own stated
+fallback need), pick at random from a small built-in pool of synthetic
+profiles, each with its own distance so the simulated drive genuinely
+varies run to run. B's own flagged geofence risk (an offset landing
+already-arrived at simulation start) is avoided by construction — the
+simulated START point is always wherever the driver actually is right
+now (or a fixed fallback), and the destination is offset far enough
+away (§8) that the drive phase is never trivially zero-distance.
+
+Original options, preserved for reference:
 
 Driver asked for variety across tutorial runs instead of always the
 identical canned scenario. Three genuinely different shapes this could
@@ -214,21 +228,131 @@ make, not assumed here.
   `docs/screen_recording/PRD.md` §7.5, already documents this exact
   class of decision) not bundled into this PRD.
 
-## 7. Success criteria (nothing implemented yet)
+## 7. Success criteria
 
-- [ ] §4 answered by the driver (which option, or explicitly deferred
-      per P2's recommendation) before randomization work starts
-- [ ] New `TutorialActivity` + entry button on `MainActivity`
-- [ ] All 11 steps implemented, each driving REAL app code with
-      synthetic data (not a mockup of the resulting UI)
-- [ ] `blockedByLiveMonitoring()`-equivalent guard checked at entry AND
-      before each GPS-tick-chaining step (P1)
-- [ ] Every simulated offer/trip row uses `is_test_data=1`
-- [ ] Skip/exit available at every step, tested explicitly
-- [ ] Interrupted-tutorial cleanup verified (P3) — not assumed
-- [ ] Real executable test for whatever part of this is pure Python
-      (the underlying `parse_offer_screen`/`on_gps_update` calls
-      already have coverage elsewhere; this PRD's own test scope is
-      the sequencing/cleanup logic specifically)
+- [x] §4 answered by the driver — Option B + C combined
+- [x] New `TutorialActivity` + entry button on `MainActivity`
+- [x] All 11 steps implemented — see §8 for the one disclosed scope
+      adjustment (steps 9/10 use direct, real overlay/voice calls
+      rather than replicating `handleGpsResult`'s full state machine)
+- [x] `blockedByLiveMonitoring()`-equivalent guard checked at entry AND
+      before the GPS-tick-chaining step (P1)
+- [x] Every simulated offer/trip row uses `is_test_data=1` — confirmed,
+      `parse_offer_screen`'s own scoring path never writes to
+      `offer_outcomes` at all (only `record_offer_outcome`/
+      `record_offer_timeout` do, neither called by the tutorial)
+- [x] Skip/exit available at every step
+- [x] Interrupted-tutorial cleanup implemented and tested (P3) — new
+      `discard_pending_pickup_and_stops()`, called from both a clean
+      finish and `onDestroy()`
+- [x] Real executable test for the new pure-Python logic:
+      `get_tutorial_environment()` (7 cases) and
+      `discard_pending_pickup_and_stops()` (3 cases)
 - [ ] Driver confirms in real use
 - [ ] Driver sign-off
+
+## 8. Implementation writeup (2026-09-03)
+
+### 8.1 Randomization: Option B + C combined
+
+New `DriveMonitorEngine.get_tutorial_environment(base_lat, base_lon)`:
+queries `pickup_location_history` for any real restaurant (same real
+geo-anchor `docs/location_profitability_map/PRD.md` already
+established). If any exist, picks one at random, using its real
+averaged lat/lon plus real learned wait time
+(`restaurant_wait_history`) and deadhead distance
+(`offer_distance_accuracy`) where available — falling back to sane
+defaults (5.0 km, 8.0 min) if that specific restaurant has no learned
+wait/deadhead yet. Otherwise, picks at random from a new
+`TUTORIAL_SYNTHETIC_ENVIRONMENTS` pool (4 built-in profiles with
+distinct distances/payouts/wait-times). `base_lat`/`base_lon` (the
+phone's real current location if known, else the same fixed fallback
+`DeveloperTestingActivity.addTestStopNearby()` already uses) double as
+BOTH the synthetic destination's offset origin AND the simulated
+drive's start point — avoiding §4's flagged "already arrived at
+simulation start" risk by construction, since the destination (real or
+synthetic) is never the same point as the start.
+
+`payout` for a real-restaurant scenario is explicitly flagged
+(`payout_is_illustrative: true`) — this app has never persisted one
+canonical dollar figure per restaurant, only per individual offer, so a
+derived number (`distance_km * 2.5`) is used and disclosed as
+illustrative rather than presented as if it were a real historical
+payout.
+
+### 8.2 Scope adjustment found during implementation (disclosed, not silent)
+
+Re-reading `TripForegroundService.handleGpsResult` in full (to wire
+steps 9/10's navigation icon and approach-instruction overlay from real
+simulated GPS results, as originally envisioned in §3) found it's a
+large, side-effect-heavy state machine — mode/trip-state tracking, a
+scoped WakeLock, the hotspot-or-home/sweet-spot check,
+`notifyRateThisDelivery()` (which brings MainActivity to the
+foreground). Replicating this faithfully from `TutorialActivity` would
+be genuinely risky to get right, and `notifyRateThisDelivery()`
+specifically expects a REAL trip ID — firing it against fake data would
+be a real app-wide side effect a tutorial has no business causing.
+
+**Decision**: steps 9 (navigation icon) and 10 (approach-instruction
+overlay + voice) call `OverlayHelper`/`VoiceAnnouncer` DIRECTLY with
+illustrative content, driven by the tutorial's own step sequence rather
+than derived from a live simulated GPS stream. The overlay/voice code
+itself is real (the exact same `OverlayHelper.showNavigationIcon`/
+`showPersistentTappableMessage`/`VoiceAnnouncer.speak` a real delivery
+uses) — only the trigger is simplified. Matches this session's own
+established principle (first used in the Profitability Map's marker
+taps) of preferring lower-risk, already-proven APIs for the interactive
+part over a less-certain full replication.
+
+Step 8 (the drive itself) still uses the real, proven `on_gps_update` +
+`add_stop_to_buffer` chain (mirroring
+`DeveloperTestingActivity.simulateDriveAndArrival()` almost exactly,
+generalized to variable start/destination coordinates via linear
+interpolation over 10 ticks, then up to 80 arrival-detection ticks at
+the destination) — genuine real code, real arrival detection, on a
+background thread per the existing ANR precedent.
+
+### 8.3 Cleanup (P3)
+
+New `TripManager.discard_pending_pickup_and_stops()` (+
+`DriveMonitorEngine` wrapper): a plain reset of `self.pickup`/
+`self.stops`, deliberately NOT reusing `add_pickup`'s own overwrite path
+(which persists the outgoing pickup's job row for a real stacked order
+— a discarded tutorial pickup was never real and must never be
+persisted). Called from step 11's own "delivery complete" narration on
+a clean finish, and from `TutorialActivity.onDestroy()` for an
+interrupted exit (back button, Skip, or the OS reclaiming the
+Activity) — `pickupRegistered` tracks whether there's anything to
+discard, so a clean finish's own cleanup makes the `onDestroy()` path a
+no-op rather than double-discarding.
+
+### 8.4 Self-caught bug during implementation
+
+Both new/touched XML files (`AndroidManifest.xml`'s new `<activity>`
+comment, matching the exact same mistake already self-caught once in
+`docs/location_profitability_map/PRD.md`) initially used `--` as an
+em-dash inside an XML comment body — invalid XML. Caught by
+re-validating with `xml.etree.ElementTree.parse()` rather than trusting
+visual inspection, same discipline as before.
+
+### 8.5 Verification
+
+Same disclosed limitation as every Java-side PRD in this repo — no
+Android SDK/emulator/device.
+
+- `drive_monitor.py` recompiles cleanly.
+- Real Python test (`test_tutorial_environment.py`, 7 cases): synthetic
+  pool correctly used with no real history (confirmed real variation
+  across 20 calls, not always the same profile), correct start/dest
+  offset math; real restaurant correctly used once
+  `pickup_location_history` has any entry, with real lat/lon and real
+  learned wait/deadhead where available, sane defaults where not.
+- Real Python test (`test_tutorial_discard_pickup.py`, 3 cases):
+  discard clears both `pickup` and `stops`, confirmed no
+  `offer_distance_accuracy` row is ever persisted for a discarded fake
+  pickup, and the `DriveMonitorEngine` wrapper delegates correctly.
+- Brace/paren balance: `TutorialActivity.java` 44/44 braces, 213/213
+  parens; `MainActivity.java` 151/151 braces, 698/698 parens.
+  `AndroidManifest.xml`/`activity_tutorial.xml`/`activity_main.xml`/
+  `strings.xml` all re-validated as well-formed XML.
+- Re-ran the full existing scratchpad test suite — no regressions.
