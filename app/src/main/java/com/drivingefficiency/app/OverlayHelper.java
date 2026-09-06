@@ -3,8 +3,15 @@ package com.drivingefficiency.app;
 import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.PixelFormat;
+import android.graphics.Shader;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Handler;
@@ -73,6 +80,19 @@ public final class OverlayHelper {
      */
     public static void showMessage(Context context, String message, long durationMs, int backgroundColor,
                                     Runnable onTapAction) {
+        showMessage(context, message, durationMs, new ColorDrawable(backgroundColor), onTapAction);
+    }
+
+    /**
+     * Drawable-background overload -- same as the int-color version above,
+     * except the background can be anything a Drawable can render (e.g.
+     * stripedDrawable() below for the "Poor" Smart Score label), not just
+     * a flat color. The int-color overload just wraps its color in a
+     * ColorDrawable and calls this, so every existing caller is
+     * unaffected.
+     */
+    public static void showMessage(Context context, String message, long durationMs, Drawable background,
+                                    Runnable onTapAction) {
         if (!hasPermission(context) || message == null || message.isEmpty()) {
             return;
         }
@@ -88,7 +108,7 @@ public final class OverlayHelper {
         overlayView = new TextView(appContext);
         overlayView.setText(message);
         overlayView.setTextColor(Color.WHITE);
-        overlayView.setBackgroundColor(backgroundColor);
+        overlayView.setBackground(background);
         overlayView.setPadding(32, 24, 32, 24);
         overlayView.setTextSize(16f);
         if (onTapAction != null) {
@@ -734,5 +754,94 @@ public final class OverlayHelper {
             }
             hotspotOrHomeIconView = null;
         }
+    }
+
+    /**
+     * Driver-requested (2026-09-06): the Smart Score's 4 learned-quartile
+     * labels (SmartScoreEngine._label) each get one visually distinct
+     * background here -- green/orange/red for Excellent/Good/Fair, and a
+     * diagonal black-striped purple for "Poor" specifically (see
+     * stripedDrawable below), a deliberately louder warning treatment for
+     * the one label meant to stand out. Centralized here, not duplicated
+     * per call site, after this exact mapping was previously copy-pasted
+     * across DasherAccessibilityService/DeveloperTestingActivity/
+     * TutorialActivity/LocationProfitabilityMapActivity with a
+     * "kept in sync manually" comment -- real drift risk, not just
+     * untidiness (this file's own history has already accumulated a few
+     * "confirmed real bug" writeups for that exact class of mistake).
+     */
+    public static Drawable backgroundForScoreLabel(Context context, String label) {
+        if (isPoorScoreLabel(label)) {
+            return stripedDrawable(context, baseColorForScoreLabel(label), Color.BLACK);
+        }
+        return new ColorDrawable(baseColorForScoreLabel(label));
+    }
+
+    /**
+     * The plain base color behind each label -- factored out so a caller
+     * that needs a flat int (e.g. LocationProfitabilityMapActivity's
+     * GradientDrawable-oval markers, which can't take an arbitrary
+     * Drawable the way an overlay View can) still shares the exact same
+     * values as backgroundForScoreLabel above, rather than a second
+     * hand-copied color per label.
+     */
+    public static int baseColorForScoreLabel(String label) {
+        switch (label) {
+            case "Excellent":
+                return Color.parseColor("#CC2E7D32"); // green
+            case "Good":
+                return Color.parseColor("#CCEF6C00"); // orange
+            case "Fair":
+                return Color.parseColor("#CCC62828"); // red
+            default: // Poor
+                return Color.parseColor("#CC6A1B9A"); // purple base -- stripes drawn on top separately
+        }
+    }
+
+    public static boolean isPoorScoreLabel(String label) {
+        return !("Excellent".equals(label) || "Good".equals(label) || "Fair".equals(label));
+    }
+
+    /**
+     * Driver-requested (2026-09-06): a diagonal-striped background for
+     * the Smart Score's "Poor" label specifically, distinct from every
+     * other label's plain solid color -- deliberately a bold, hazard-
+     * tape-style pattern for the one label meant to stand out as a real
+     * warning. Drawn once onto a small tile (not the full badge size)
+     * and repeated via BitmapDrawable's own tile mode, so it renders
+     * correctly at whatever size the badge/marker actually is, the same
+     * way a real hazard-stripe texture would.
+     *
+     * Used by both DasherAccessibilityService's live offer badge (via
+     * OverlayHelper.showMessage's new Drawable overload above) and
+     * LocationProfitabilityMapActivity's map markers (drawn directly
+     * onto that screen's own small marker Canvas) -- shared here so the
+     * two don't drift into two different stripe patterns for the same
+     * meaning.
+     */
+    public static Drawable stripedDrawable(Context context, int baseColor, int stripeColor) {
+        float density = context.getResources().getDisplayMetrics().density;
+        int tileSize = (int) (24 * density);
+        int stripeWidth = (int) (8 * density);
+
+        Bitmap tile = Bitmap.createBitmap(tileSize, tileSize, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(tile);
+        canvas.drawColor(baseColor);
+
+        Paint stripePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        stripePaint.setColor(stripeColor);
+        stripePaint.setStyle(Paint.Style.STROKE);
+        stripePaint.setStrokeWidth(stripeWidth);
+
+        // Diagonal lines wide enough (and repeated with enough offset
+        // passes) that the 45-degree pattern tiles seamlessly with no
+        // visible seam at the tile edge.
+        for (int offset = -tileSize; offset <= tileSize * 2; offset += stripeWidth * 2) {
+            canvas.drawLine(offset, tileSize, offset + tileSize, 0, stripePaint);
+        }
+
+        BitmapDrawable drawable = new BitmapDrawable(context.getResources(), tile);
+        drawable.setTileModeXY(Shader.TileMode.REPEAT, Shader.TileMode.REPEAT);
+        return drawable;
     }
 }

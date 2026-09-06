@@ -123,7 +123,7 @@ public class LocationProfitabilityMapActivity extends AppCompatActivity {
                 Marker marker = new Marker(mapView);
                 marker.setPosition(new GeoPoint(lat, lon));
                 marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER);
-                marker.setIcon(new BitmapDrawable(getResources(), coloredDotBitmap(colorForLabel(entry.optString("label", "")))));
+                marker.setIcon(new BitmapDrawable(getResources(), coloredDotBitmap(entry.optString("label", ""))));
                 marker.setTitle(entry.optString("restaurant_name", "Unknown"));
                 marker.setOnMarkerClickListener((tappedMarker, map) -> {
                     showEntryDetail(entry);
@@ -158,40 +158,36 @@ public class LocationProfitabilityMapActivity extends AppCompatActivity {
     }
 
     /**
-     * Same 4-label->color mapping already used throughout this app
-     * (SmartScoreEngine._label's thresholds, DasherAccessibilityService.
-     * colorForLabel's exact hex values) -- reused directly rather than
-     * inventing a new palette for the same concept on this one screen.
-     */
-    private int colorForLabel(String label) {
-        switch (label) {
-            case "Excellent":
-                return Color.parseColor("#CC1B5E20");
-            case "Good":
-                return Color.parseColor("#CC43A047");
-            case "Fair":
-                return Color.parseColor("#CCF9A825");
-            default: // Poor
-                return Color.parseColor("#CCC62828");
-        }
-    }
-
-    /**
      * Same GradientDrawable-oval technique OverlayHelper.showStatusDot
      * already uses for a plain colored circle -- rendered to a small
      * Bitmap here since Marker.setIcon() needs a Drawable, not a live
-     * View the way a floating overlay does.
+     * View the way a floating overlay does. "Poor" additionally gets
+     * OverlayHelper's shared diagonal-stripe pattern drawn on top,
+     * clipped to the circle, matching the live offer badge's own
+     * treatment for the same label.
      */
-    private Bitmap coloredDotBitmap(int color) {
+    private Bitmap coloredDotBitmap(String label) {
         int sizePx = (int) (24 * getResources().getDisplayMetrics().density);
         GradientDrawable shape = new GradientDrawable();
         shape.setShape(GradientDrawable.OVAL);
-        shape.setColor(color);
+        shape.setColor(OverlayHelper.baseColorForScoreLabel(label));
         shape.setStroke(2, Color.WHITE);
         Bitmap bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
         shape.setBounds(0, 0, sizePx, sizePx);
         shape.draw(canvas);
+
+        if (OverlayHelper.isPoorScoreLabel(label)) {
+            android.graphics.Path circlePath = new android.graphics.Path();
+            circlePath.addOval(1, 1, sizePx - 1, sizePx - 1, android.graphics.Path.Direction.CW);
+            canvas.save();
+            canvas.clipPath(circlePath);
+            android.graphics.drawable.Drawable stripes =
+                    OverlayHelper.stripedDrawable(this, Color.TRANSPARENT, Color.BLACK);
+            stripes.setBounds(0, 0, sizePx, sizePx);
+            stripes.draw(canvas);
+            canvas.restore();
+        }
         return bitmap;
     }
 }

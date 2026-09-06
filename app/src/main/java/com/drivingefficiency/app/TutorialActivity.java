@@ -222,8 +222,12 @@ public class TutorialActivity extends AppCompatActivity {
                         + "into this one number and label. This is exactly what you'd see as a "
                         + "floating badge on a real offer -- shown for real below for a few seconds.",
                 finalScore, label));
+        // Self-caught: this used to hardcode the "Excellent" green regardless
+        // of the actual computed label -- wrong on any tutorial run that
+        // happened to land on a different label. See
+        // OverlayHelper.backgroundForScoreLabel -- centralized there.
         OverlayHelper.showMessage(this, String.format("Smart Score: %.0f/100 - %s", finalScore, label),
-                4000, android.graphics.Color.parseColor("#CC1B5E20"));
+                4000, OverlayHelper.backgroundForScoreLabel(this, label), null);
     }
 
     /** Step 7: "Accept" simulated -- real add_pickup call, badge clears, status dot goes green. */
