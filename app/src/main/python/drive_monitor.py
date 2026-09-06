@@ -154,6 +154,12 @@ LOCATION_PROFITABILITY_MIN_SAMPLES = 3
 PAY_TREND_DEFAULT_WEEKS = 8
 PAY_TREND_MIN_SAMPLES_PER_HALF = 3
 
+# docs/weather_pay_correlation/PRD.md -- same minimum-sample-count
+# pattern as every other learned/aggregated stat in this file, applied
+# per bucket (rain / no rain) so an early result with only 1-2 offers
+# in a bucket isn't presented as a real comparison yet.
+WEATHER_CORRELATION_MIN_SAMPLES = 3
+
 # docs/tutorial_mode/PRD.md ss4 -- driver chose Option B (varied
 # synthetic environments) + Option C (real address-book restaurants
 # once history exists), combined. This pool is Option B's fallback for
@@ -576,6 +582,24 @@ class Database:
             self.conn.execute("ALTER TABLE offer_outcomes ADD COLUMN hourly_rate REAL")
             self.conn.commit()
 
+        # Driver-requested (2026-09-06): "compare pay rate with weather."
+        # The live weather fetched for every offer's weather_score (see
+        # SmartScoreEngine.record_live_weather -- real, via Open-Meteo,
+        # already running on every offer) was previously used once for
+        # scoring, then discarded -- same pattern already fixed for
+        # pickup locations. Persisted here per-offer, alongside the exact
+        # payout/rate data it's meant to be compared against, rather than
+        # a separate periodic snapshot on its own timer (weather doesn't
+        # matter in the abstract, only in relation to a specific offer's
+        # pay). NULL for any offer recorded before this shipped, or when
+        # no fresh live weather was available at record time -- never
+        # backfilled or guessed.
+        if "weather_precip_mm" not in existing_columns:
+            self.conn.execute("ALTER TABLE offer_outcomes ADD COLUMN weather_precip_mm REAL")
+            self.conn.execute("ALTER TABLE offer_outcomes ADD COLUMN weather_wind_kmh REAL")
+            self.conn.execute("ALTER TABLE offer_outcomes ADD COLUMN weather_temp_c REAL")
+            self.conn.commit()
+
         # Migration for databases that predate auto-labeled parking
         # samples (see PARKING_AUTO_LABEL_* above) -- every row that
         # already existed was, by definition, a driver's own manual
@@ -980,6 +1004,28 @@ class SmartScoreEngine:
         }
         self._live_weather_timestamp = time.time()
 
+    def _get_live_weather_snapshot(self):
+        """
+        Returns (is_live, precipitation_mm, wind_speed_kmh, temperature_c).
+        is_live is False (and the other three None) when no fresh (<15
+        min) live weather data exists -- no API configured, no current
+        GPS fix yet, or the query failed. Factored out of _get_weather_score
+        so a caller that wants the raw values (not the derived 0-100
+        score) -- record_offer_outcome/record_offer_timeout, to persist a
+        weather snapshot alongside each offer, docs/weather_pay_
+        correlation/PRD.md -- shares the exact same freshness check
+        rather than duplicating it. Weather right now becomes meaningful
+        to keep once there's a specific offer's pay to compare it
+        against, even though it still isn't meaningful to keep in the
+        abstract (see record_live_weather's own "stored in memory only"
+        note, unchanged).
+        """
+        live_ts = getattr(self, "_live_weather_timestamp", None)
+        live = getattr(self, "_live_weather", None)
+        if live is None or live_ts is None or time.time() - live_ts > self.LIVE_WEATHER_FRESHNESS_SECONDS:
+            return False, None, None, None
+        return True, live["precipitation_mm"], live["wind_speed_kmh"], live["temperature_c"]
+
     def _get_weather_score(self):
         """
         Returns (score, is_live, precipitation_mm, wind_speed_kmh). If no
@@ -993,15 +1039,10 @@ class SmartScoreEngine:
         else (fog, road surface, temperature extremes) is currently
         factored in.
         """
-        live_ts = getattr(self, "_live_weather_timestamp", None)
-        live = getattr(self, "_live_weather", None)
-        if live is None or live_ts is None:
-            return 100.0, False, None, None
-        if time.time() - live_ts > self.LIVE_WEATHER_FRESHNESS_SECONDS:
+        is_live, precipitation_mm, wind_speed_kmh, _temp_c = self._get_live_weather_snapshot()
+        if not is_live:
             return 100.0, False, None, None
 
-        precipitation_mm = live["precipitation_mm"]
-        wind_speed_kmh = live["wind_speed_kmh"]
         score = 100.0
         if precipitation_mm is not None:
             score -= min(60.0, precipitation_mm * 15.0)
@@ -4475,14 +4516,21 @@ class DriveMonitorEngine:
         already captured in components_json. None for older callers that
         don't pass it (get_recent_shift_rate skips rows where this is
         NULL rather than treating a missing value as 0).
+
+        Also persists a weather snapshot (docs/weather_pay_correlation/
+        PRD.md) -- the same live weather already fetched for this
+        offer's weather_score, NULL if none was fresh at this exact
+        moment (see SmartScoreEngine._get_live_weather_snapshot).
         """
         outcome = "accepted" if accepted else "declined"
+        _is_live, precip_mm, wind_kmh, temp_c = self.smart_score._get_live_weather_snapshot()
         self.db.conn.execute("""
             INSERT INTO offer_outcomes
-                (restaurant_name, payout, distance_km, smart_score, accepted, outcome, timestamp, components_json, is_test_data, hourly_rate)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (restaurant_name, payout, distance_km, smart_score, accepted, outcome, timestamp, components_json, is_test_data, hourly_rate,
+                 weather_precip_mm, weather_wind_kmh, weather_temp_c)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (restaurant_name, payout, distance_km, smart_score, int(accepted), outcome, time.time(),
-              components_json, int(is_test_data), hourly_rate))
+              components_json, int(is_test_data), hourly_rate, precip_mm, wind_kmh, temp_c))
         self.db.conn.commit()
 
     def record_offer_timeout(self, restaurant_name, payout, distance_km, smart_score,
@@ -4506,13 +4554,17 @@ class DriveMonitorEngine:
 
         is_test_data: see record_offer_outcome's note above.
         hourly_rate: see record_offer_outcome's note above.
+        Also persists a weather snapshot: see record_offer_outcome's own
+        note above.
         """
+        _is_live, precip_mm, wind_kmh, temp_c = self.smart_score._get_live_weather_snapshot()
         self.db.conn.execute("""
             INSERT INTO offer_outcomes
-                (restaurant_name, payout, distance_km, smart_score, accepted, outcome, timestamp, components_json, is_test_data, hourly_rate)
-            VALUES (?, ?, ?, ?, 0, 'timed_out', ?, ?, ?, ?)
+                (restaurant_name, payout, distance_km, smart_score, accepted, outcome, timestamp, components_json, is_test_data, hourly_rate,
+                 weather_precip_mm, weather_wind_kmh, weather_temp_c)
+            VALUES (?, ?, ?, ?, 0, 'timed_out', ?, ?, ?, ?, ?, ?, ?)
         """, (restaurant_name, payout, distance_km, smart_score, time.time(), components_json, int(is_test_data),
-              hourly_rate))
+              hourly_rate, precip_mm, wind_kmh, temp_c))
         self.db.conn.commit()
 
     def record_pickup_unassigned_for_long_wait(self):
@@ -5173,6 +5225,60 @@ class DriveMonitorEngine:
             "recent_half": recent_half,
             "earlier_half": earlier_half,
             "trend": trend,
+        })
+
+    def get_weather_pay_correlation(self):
+        """
+        docs/weather_pay_correlation/PRD.md -- driver asked to "compare
+        pay rate with weather," originally by screenshotting a separate
+        weather app on a timer (not built -- see that PRD for why, and
+        for the real, already-running Open-Meteo integration used
+        instead). Buckets every offer with a real weather snapshot
+        (record_offer_outcome/record_offer_timeout, going forward only --
+        offers recorded before this shipped have NULL weather columns and
+        are excluded here, same as any other newly-added measurement in
+        this app) into "rain" vs. "no rain", using the same >0mm
+        threshold _get_weather_score already treats as meaningful.
+
+        Uses ALL scored offers (accepted, declined, timed out), not just
+        accepted -- same population choice as get_pay_trend/Address Book/
+        the profitability map, for the same reason: a fuller picture of
+        what was actually being OFFERED under each condition, not just
+        what was driven.
+        """
+        rows = self.db.conn.execute("""
+            SELECT payout, distance_km, hourly_rate, smart_score,
+                   weather_precip_mm, weather_wind_kmh, weather_temp_c
+            FROM offer_outcomes
+            WHERE is_test_data = 0 AND weather_precip_mm IS NOT NULL
+        """).fetchall()
+
+        def bucket_stats(bucket_rows):
+            rate_values = [r["payout"] / r["distance_km"] for r in bucket_rows
+                           if r["payout"] is not None and r["distance_km"] is not None and r["distance_km"] > 0]
+            hourly_values = [r["hourly_rate"] for r in bucket_rows if r["hourly_rate"] is not None]
+            score_values = [r["smart_score"] for r in bucket_rows if r["smart_score"] is not None]
+            wind_values = [r["weather_wind_kmh"] for r in bucket_rows if r["weather_wind_kmh"] is not None]
+            temp_values = [r["weather_temp_c"] for r in bucket_rows if r["weather_temp_c"] is not None]
+            return {
+                "sample_count": len(bucket_rows),
+                "avg_dollar_per_km": round(sum(rate_values) / len(rate_values), 2) if rate_values else None,
+                "avg_dollar_per_hr": round(sum(hourly_values) / len(hourly_values), 2) if hourly_values else None,
+                "avg_smart_score": round(sum(score_values) / len(score_values), 1) if score_values else None,
+                "avg_wind_kmh": round(sum(wind_values) / len(wind_values), 1) if wind_values else None,
+                "avg_temp_c": round(sum(temp_values) / len(temp_values), 1) if temp_values else None,
+            }
+
+        rain_rows = [r for r in rows if r["weather_precip_mm"] > 0]
+        no_rain_rows = [r for r in rows if r["weather_precip_mm"] == 0]
+
+        return json.dumps({
+            "total_samples": len(rows),
+            "rain": bucket_stats(rain_rows),
+            "no_rain": bucket_stats(no_rain_rows),
+            "min_required": WEATHER_CORRELATION_MIN_SAMPLES,
+            "has_enough_data": (len(rain_rows) >= WEATHER_CORRELATION_MIN_SAMPLES
+                                and len(no_rain_rows) >= WEATHER_CORRELATION_MIN_SAMPLES),
         })
 
     def get_tutorial_environment(self, base_lat, base_lon):
