@@ -464,8 +464,15 @@ public class TripForegroundService extends Service {
                 isScreenRecordingActive = false;
                 logDiagnostic("SCREEN_RECORDING", "Enabled, but no consent held (process likely "
                         + "restarted since it was last granted) - this trip will not be recorded");
-                raisePermissionRevokedAlert("Screen Recording",
-                        "Re-grant screen recording consent in Setup - this trip is not being recorded");
+                // Driver-requested (2026-09-06): this alert's own title/text
+                // deliberately avoids the word "recording" -- unlike the
+                // SCREEN_RECORDING diagnostic-log tag just above, which stays
+                // as-is for continuity with the driver's own past log
+                // exports, this notification is the one thing visible in the
+                // notification shade, so it uses the neutral "Trip Capture"
+                // name instead.
+                raisePermissionRevokedAlert("Trip Capture",
+                        "Re-grant consent in Setup - this trip's capture is not active");
             } else {
                 boolean typePromoted = startForegroundWithRecording(buildNotificationForMode("GENERAL"));
                 boolean started = false;
@@ -489,8 +496,8 @@ public class TripForegroundService extends Service {
                     // (it has the actual SecurityException message); this
                     // just raises the same loud alert used for every other
                     // revoked-permission case, so it's not silent.
-                    raisePermissionRevokedAlert("Screen Recording",
-                            "Re-grant screen recording consent in Setup - this trip is not being recorded");
+                    raisePermissionRevokedAlert("Trip Capture",
+                            "Re-grant consent in Setup - this trip's capture is not active");
                 } else {
                     // Was "see the preceding ERROR-level Android log" -- WRONG
                     // for two of ScreenRecordingController's own failure paths,
@@ -561,12 +568,56 @@ public class TripForegroundService extends Service {
                 lastLoggedAccessibility = hasAccessibility;
                 refreshStatusDot();
             }
+            checkTripCaptureHealth();
             updatePermissionAlertVibration();
             if (monitoringActive) {
                 accessibilityHeartbeatHandler.postDelayed(this, ACCESSIBILITY_HEARTBEAT_INTERVAL_MS);
             }
         }
     };
+
+    /**
+     * Driver-requested (2026-09-06), after a real diagnostic log showed
+     * "no consent held" firing 13 times over ~2.5 days: the two existing
+     * checks above only ever re-evaluate this at a trip/mode restart, not
+     * continuously -- something could silently die mid-trip (the same
+     * process-restart instability this whole log was about) and go
+     * unnoticed until the NEXT restart happens to check again. This runs
+     * on the same 15s cadence as the accessibility check just above, so
+     * the diagnostic log now has a standing, periodic record of whether
+     * capture is actually running, not just a snapshot taken at restart
+     * time. Edge-triggered like every other check here -- only fires the
+     * alert on the transition into "should be running but isn't," not
+     * every single tick while it stays broken.
+     */
+    private Boolean lastLoggedTripCaptureHealthy = null;
+
+    private void checkTripCaptureHealth() {
+        if (!ScreenRecordingController.isEnabled(this)) {
+            lastLoggedTripCaptureHealthy = null; // driver hasn't turned this on -- nothing to monitor
+            return;
+        }
+        boolean tripActive = "TRIP_ACTIVE".equals(engine.callAttr("get_state").toString());
+        if (!tripActive) {
+            lastLoggedTripCaptureHealthy = null; // nothing SHOULD be capturing right now -- not a failure to report
+            return;
+        }
+        boolean healthy = screenRecordingController.isRecording();
+        if (!java.util.Objects.equals(lastLoggedTripCaptureHealthy, healthy)) {
+            logDiagnostic("SCREEN_RECORDING", "Periodic capture health check: "
+                    + (healthy ? "running" : "NOT running"));
+            // Only alert on a genuine true -> false transition (capture WAS
+            // running, then silently stopped) -- not on null -> false,
+            // which is the ordinary "never started at all" case already
+            // covered by the reactive trip-start check above. Avoids a
+            // duplicate alert for the exact same underlying failure.
+            if (lastLoggedTripCaptureHealthy != null && lastLoggedTripCaptureHealthy && !healthy) {
+                raisePermissionRevokedAlert("Trip Capture",
+                        "Capture stopped running mid-trip - re-grant consent in Setup if this keeps happening");
+            }
+            lastLoggedTripCaptureHealthy = healthy;
+        }
+    }
 
     // Last known values, so periodic re-checks only log when something
     // actually CHANGES -- not a repeat of the same state every heartbeat.
@@ -827,13 +878,22 @@ public class TripForegroundService extends Service {
      * shared lastLogged* snapshots (the same staleness model
      * refreshStatusDot() already relies on for these same fields)
      * rather than forcing a fresh re-check from every call site.
+     *
+     * Also includes trip-capture health (2026-09-06): without this, an
+     * alert raised ONLY because capture stopped mid-trip (none of the 4
+     * permissions above actually missing) would have its vibration
+     * cancelled by the very next 15s heartbeat tick, since this check
+     * previously had no way to know capture was still broken -- the
+     * alarm would self-silence within 15 seconds regardless of whether
+     * the driver noticed or fixed anything.
      */
     private boolean anyCriticalPermissionMissing() {
         return monitoringActive && (
                 Boolean.FALSE.equals(lastLoggedLocation)
                 || Boolean.FALSE.equals(lastLoggedOverlay)
                 || Boolean.FALSE.equals(lastLoggedNotificationAccess)
-                || Boolean.FALSE.equals(lastLoggedAccessibility));
+                || Boolean.FALSE.equals(lastLoggedAccessibility)
+                || Boolean.FALSE.equals(lastLoggedTripCaptureHealthy));
     }
 
     /** Called after either heartbeat updates its permission snapshot --
