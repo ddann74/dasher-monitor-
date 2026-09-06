@@ -2545,6 +2545,18 @@ class TripManager:
             "timestamp": timestamp_ms / 1000.0,
             "extracted_instruction": instruction,
             "stop_id": stop_id,
+            # Driver-requested (2026-09-06): a chat-derived instruction was
+            # being spoken TWICE -- once at the 50m approach trigger (_check_
+            # approach_instruction) and again at arrival (_evaluate_arrivals'
+            # own instructions block), since both read the same self.messages
+            # list within the same still-unmoved _last_message_cutoff window.
+            # Marked True the first time EITHER trigger actually announces
+            # this specific message, so the other trigger skips it --
+            # deliberately per-message, not a shared cutoff advance, so this
+            # can't affect a DIFFERENT stop's messages in a multi-stop/batch
+            # trip (see this function's own stop_id matching for why that
+            # distinction matters here).
+            "instruction_announced": False,
         })
         return instruction
 
@@ -2807,12 +2819,22 @@ class TripManager:
             # stop_id when available, not just time window -- see
             # on_message for how stop_id gets assigned.
             arrival_stop_id = id(nearest)
-            instructions = [
-                m["extracted_instruction"] for m in self.messages
+            # Excludes messages already spoken at the 50m approach trigger
+            # (see on_message's own "instruction_announced" comment) -- both
+            # this radius and INSTRUCTION_READ_RADIUS_METERS are 50m, so
+            # without this a chat-derived instruction was being read aloud
+            # a second time here, moments after _check_approach_instruction
+            # already read it.
+            matched_messages = [
+                m for m in self.messages
                 if m["extracted_instruction"]
                 and self._last_message_cutoff < m["timestamp"] <= ts
                 and (m.get("stop_id") is None or m["stop_id"] == arrival_stop_id)
+                and not m["instruction_announced"]
             ]
+            for m in matched_messages:
+                m["instruction_announced"] = True
+            instructions = [m["extracted_instruction"] for m in matched_messages]
             self._last_message_cutoff = ts
             if instructions:
                 self.pending_arrival = {
@@ -2931,12 +2953,19 @@ class TripManager:
         if approaching_stop.get("delivery_instruction"):
             instructions.append(f"delivery_note: {approaching_stop['delivery_instruction']}")
 
-        instructions.extend([
-            m["extracted_instruction"] for m in self.messages
+        # Marked announced below so _evaluate_arrivals' own instructions
+        # block doesn't read and speak the SAME message again at arrival --
+        # see on_message's own comment on "instruction_announced".
+        matched_messages = [
+            m for m in self.messages
             if m["extracted_instruction"]
             and self._last_message_cutoff < m["timestamp"] <= ts
             and (m.get("stop_id") is None or m["stop_id"] == stop_id)
-        ])
+            and not m["instruction_announced"]
+        ]
+        for m in matched_messages:
+            m["instruction_announced"] = True
+        instructions.extend(m["extracted_instruction"] for m in matched_messages)
         if instructions:
             self._approach_instruction_shown_for_stop_ids.add(stop_id)
             self.pending_approach_instruction = {
