@@ -672,6 +672,13 @@ public class DasherAccessibilityService extends AccessibilityService {
                 if (TripForegroundService.isRunning) {
                     Intent pauseIntent = new Intent(this, TripForegroundService.class);
                     pauseIntent.setAction(TripForegroundService.ACTION_STOP_TRACKING);
+                    // Real diagnostic log, 2026-09-06: without this flag,
+                    // stopTracking()'s own manual-stop feedback fallback
+                    // fired here AND the natural GPS-driven completion path
+                    // fired again 3 seconds later for the same trip once
+                    // tracking resumed -- see EXTRA_AUTO_PAUSE_STOP's own
+                    // comment in TripForegroundService.
+                    pauseIntent.putExtra(TripForegroundService.EXTRA_AUTO_PAUSE_STOP, true);
                     startForegroundService(pauseIntent);
                     pausedByAutoDetection = true;
                     logDiagnostic("AUTO_PAUSE", "Dash Paused screen detected -- GPS tracking paused");

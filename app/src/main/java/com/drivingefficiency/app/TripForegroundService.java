@@ -56,6 +56,25 @@ public class TripForegroundService extends Service {
     public static final String ACTION_STOP_TRACKING = "com.drivingefficiency.app.STOP_TRACKING";
     public static final String ACTION_QUIT_COMPLETELY = "com.drivingefficiency.app.QUIT_COMPLETELY";
 
+    /**
+     * Set by DasherAccessibilityService's auto-pause detection (real
+     * diagnostic log, 2026-09-06): the Dash Paused screen briefly appearing
+     * and disappearing sends the SAME ACTION_STOP_TRACKING a genuine manual
+     * stop uses, so stopTracking()'s own "trip was active, fire the
+     * feedback prompt since no natural GPS-driven completion will ever
+     * come" fallback (see its own comment) fired there TOO -- even though
+     * GPS ticks resume seconds later and the natural completion path
+     * (further down in handleGpsResult) then fires ITS OWN feedback
+     * prompt for the same trip once the engine's state machine genuinely
+     * concludes it ended. Confirmed in the log: trip 32 got two
+     * "Requested feedback-page foreground" notifications 3 seconds apart.
+     * This extra lets stopTracking() tell the two cases apart and skip
+     * its own fallback specifically for an auto-pause stop, since that
+     * fallback's whole reason to exist (no more GPS ticks are coming) is
+     * false here -- they resume almost immediately.
+     */
+    public static final String EXTRA_AUTO_PAUSE_STOP = "auto_pause_stop";
+
     private static final String CHANNEL_ID = "trip_tracking_channel";
     private static final int NOTIFICATION_ID = 1;
     private static final long GPS_INTERVAL_MOVING_MS = 1000;   // 1 point/sec while driving
@@ -299,7 +318,8 @@ public class TripForegroundService extends Service {
         if (ACTION_START_TRACKING.equals(action)) {
             startTracking();
         } else if (ACTION_STOP_TRACKING.equals(action)) {
-            stopTracking();
+            boolean isAutoPauseStop = intent != null && intent.getBooleanExtra(EXTRA_AUTO_PAUSE_STOP, false);
+            stopTracking(isAutoPauseStop);
         } else if (ACTION_QUIT_COMPLETELY.equals(action)) {
             quitCompletely();
             return START_NOT_STICKY; // don't restart -- this is a deliberate full shutdown
@@ -367,7 +387,7 @@ public class TripForegroundService extends Service {
     private void quitCompletely() {
         logDiagnostic("SERVICE", "quitCompletely() called -- fully shutting down");
         if (monitoringActive) {
-            stopTracking();
+            stopTracking(false); // a genuine full shutdown, not an auto-pause -- fire the fallback feedback prompt as before
         }
         OverlayHelper.clearStatusDot(this);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -1187,11 +1207,12 @@ public class TripForegroundService extends Service {
         logDiagnostic("MEMORY", "onTrimMemory(level=" + level + ")");
     }
 
-    private void stopTracking() {
+    private void stopTracking(boolean isAutoPauseStop) {
         if (!monitoringActive) {
             return; // already idle
         }
-        logDiagnostic("SERVICE", "stopTracking() -- monitoring turned off");
+        logDiagnostic("SERVICE", "stopTracking() -- monitoring turned off"
+                + (isAutoPauseStop ? " (auto-pause)" : ""));
         // Fixes a real, confirmed bug: previously, a trip that was still
         // genuinely active (not yet parked long enough to naturally end)
         // got silently abandoned the moment monitoring stopped -- the GPS
@@ -1207,7 +1228,15 @@ public class TripForegroundService extends Service {
             // GPS ticks arrive once monitoring stops) -- fires the same
             // feedback notification here instead, so this path isn't
             // silently missed the way the automatic trigger was before.
-            if (wasTripActive) {
+            //
+            // EXCEPT for an auto-pause stop (see EXTRA_AUTO_PAUSE_STOP's own
+            // comment): GPS ticks resume within seconds there, so the
+            // natural completion path below WILL get its chance to fire --
+            // and confirmed via a real diagnostic log that it does, firing
+            // its own feedback prompt for the same trip 3 seconds after this
+            // one would have. Skipped here so only one prompt ever fires per
+            // trip instead of two.
+            if (wasTripActive && !isAutoPauseStop) {
                 notifyRateThisDelivery();
             }
         } catch (RuntimeException e) { // covers PyException too
