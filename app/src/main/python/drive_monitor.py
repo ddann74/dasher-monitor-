@@ -38,6 +38,21 @@ TRIP_STOP_SPEED_KMH = 1.0
 TRIP_STOP_HOLD_SECONDS = 60
 TRIP_END_PARK_SECONDS = 5 * 60
 ARRIVAL_GEOFENCE_METERS = 50
+
+# Driver-requested (2026-09-06), confirmed real via the driver's own data:
+# the SAME physical restaurant can show slightly different name text on
+# different offers ("McDonald's" vs "McDonalds AU", "KFC" vs "KFC Fairy
+# Meadow"), which silently fragments that one restaurant's learned wait
+# time/deadhead/parking/rate history across multiple Address Book entries
+# instead of one confident, combined one. Deliberately TIGHTER than
+# ARRIVAL_GEOFENCE_METERS -- that constant tolerates ordinary GPS noise
+# for "did I arrive," which is a much more forgiving question than "are
+# these two name strings actually the same building," where a food court
+# or strip mall could have genuinely different restaurants this close
+# together. See _canonicalize_restaurant_name for how this is used --
+# going forward only, per explicit request: existing, already-recorded
+# rows under a fragmented name are never rewritten or migrated.
+RESTAURANT_IDENTITY_MERGE_RADIUS_METERS = 25
 # "Getting close" radius for the RoadWarrior quick-navigation icon --
 # deliberately much larger than the tight 50m arrival geofence, since the
 # whole point is a heads-up WHILE STILL APPROACHING (to pull up navigation
@@ -3800,6 +3815,43 @@ class DriveMonitorEngine:
         """, (restaurant_name, gap_seconds, difficulty, time.time()))
         self.db.conn.commit()
 
+    def _canonicalize_restaurant_name(self, name, lat, lon):
+        """
+        docs/restaurant_identity_merge/PRD.md: if a DIFFERENT restaurant
+        name already has recorded pickups within RESTAURANT_IDENTITY_
+        MERGE_RADIUS_METERS of these coordinates, treat this as the same
+        physical restaurant and return that existing name instead --
+        this is what actually merges "McDonald's" and "McDonalds AU"
+        going forward, rather than letting a new arbitrary name variant
+        start yet another fragmented history. Returns `name` unchanged
+        if no close-enough match exists (the ordinary case: a genuinely
+        new or already-consistently-named restaurant).
+
+        Compares against each OTHER known name's AVERAGE recorded
+        location (same stability reasoning as get_tutorial_environment's
+        own AVG(lat)/AVG(lon) grouping) rather than any single past
+        reading, which could be a one-off GPS outlier. If more than one
+        existing name is within range (a real but rare case -- e.g. two
+        of this restaurant's own aliases both already exist), picks
+        whichever has the most samples, on the theory that the
+        best-established identity is the more trustworthy one to
+        consolidate into.
+        """
+        if name is None:
+            return name
+        rows = self.db.conn.execute("""
+            SELECT restaurant_name, AVG(lat) AS avg_lat, AVG(lon) AS avg_lon, COUNT(*) AS cnt
+            FROM pickup_location_history
+            WHERE restaurant_name != ?
+            GROUP BY restaurant_name
+        """, (name,)).fetchall()
+        best_match, best_count = None, -1
+        for row in rows:
+            distance = haversine_meters(lat, lon, row["avg_lat"], row["avg_lon"])
+            if distance <= RESTAURANT_IDENTITY_MERGE_RADIUS_METERS and row["cnt"] > best_count:
+                best_match, best_count = row["restaurant_name"], row["cnt"]
+        return best_match if best_match is not None else name
+
     def record_pickup_location(self, restaurant_name, lat, lon):
         """
         Starts persisting real, geocoded pickup coordinates going
@@ -3809,13 +3861,28 @@ class DriveMonitorEngine:
         kept anywhere. Needed before a real merchant "sweet spot" can
         ever be suggested -- can't be backfilled from anything recorded
         before this existed.
+
+        Canonicalizes the name first (see _canonicalize_restaurant_name)
+        and, when it resolves to an existing different name, updates the
+        CURRENT trip's own pickup state to match -- so every later
+        per-trip write for this same pickup (wait time at departure,
+        offer_distance_accuracy at trip end) also lands under the
+        merged, canonical name, not just this one row. Deliberately does
+        NOT touch offer_outcomes (recorded earlier, at accept/decline
+        time, before geocoding resolves, using whatever raw name Java
+        parsed off the offer screen directly) or any already-existing
+        row under the old name -- going forward only, per explicit
+        request.
         """
         if lat == 0.0 and lon == 0.0:
             return  # placeholder coordinates (no API key configured) -- not real data worth keeping
+        canonical_name = self._canonicalize_restaurant_name(restaurant_name, lat, lon)
+        if canonical_name != restaurant_name and self.trip_manager.pickup is not None:
+            self.trip_manager.pickup["restaurant_name"] = canonical_name
         self.db.conn.execute("""
             INSERT INTO pickup_location_history (restaurant_name, lat, lon, timestamp)
             VALUES (?, ?, ?, ?)
-        """, (restaurant_name, lat, lon, time.time()))
+        """, (canonical_name, lat, lon, time.time()))
         self.db.conn.commit()
 
     def _best_zone_from_pickup_rows(self, rows, min_samples):
