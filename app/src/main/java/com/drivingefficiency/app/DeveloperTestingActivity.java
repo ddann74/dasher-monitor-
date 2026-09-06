@@ -312,6 +312,7 @@ public class DeveloperTestingActivity extends AppCompatActivity {
 
                 Intent pauseIntent = new Intent(this, TripForegroundService.class);
                 pauseIntent.setAction(TripForegroundService.ACTION_STOP_TRACKING);
+                pauseIntent.putExtra(TripForegroundService.EXTRA_AUTO_PAUSE_STOP, true); // matches the real accessibility-service pause path exactly
                 startForegroundService(pauseIntent);
 
                 Toast.makeText(this, "is_dash_paused_screen() = " + isPaused
