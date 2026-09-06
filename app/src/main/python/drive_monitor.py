@@ -686,16 +686,36 @@ class SmartScoreEngine:
         hourly_rate as if pickup took zero minutes, for every offer.
         Falls back to drive-time-only (the original behavior) when
         restaurant_name isn't given, so this stays backward compatible.
+
+        Driver-reported (2026-09-06) "the hourly rate doesn't look right,"
+        CONFIRMED REAL GAP, second one found in this same function: the
+        offer screen's own distance_km is the DELIVERY leg only (pickup to
+        dropoff) -- it never includes deadhead, the drive from wherever you
+        are right now TO the pickup, which is real time you'll spend on
+        this offer before the delivery leg even starts. calculate() already
+        estimates this trip's deadhead_km a few lines below (for
+        deadhead_score), from the exact same restaurant_name, but that
+        estimate was never reused here either -- so every offer's hourly
+        rate assumed deadhead takes zero minutes, the same shape of bug as
+        the wait-time one above, just for a different leg. This is also
+        the likely reason estimated_hourly_rate has been running
+        systematically higher than actual_hourly_rate (see
+        get_distance_accuracy_summary/get_hourly_rate_accuracy): the real
+        elapsed time actual_hourly_rate is computed from always included
+        the real drive to the restaurant; the estimate never did.
         """
         if not distance_km or distance_km <= 0:
             return None
         speed_kmh, _, _ = self._learned_delivery_speed_kmh()
         drive_minutes = (distance_km / speed_kmh) * 60.0
         wait_minutes = 0.0
+        deadhead_minutes = 0.0
         if restaurant_name:
             avg_wait, _, _ = self._restaurant_wait_info(restaurant_name)
             wait_minutes = avg_wait
-        return max(5.0, drive_minutes + wait_minutes)
+            deadhead_km, _, _ = self._estimate_deadhead_km(restaurant_name)
+            deadhead_minutes = (deadhead_km / speed_kmh) * 60.0
+        return max(5.0, drive_minutes + wait_minutes + deadhead_minutes)
 
     def _learned_delivery_speed_kmh(self):
         """
