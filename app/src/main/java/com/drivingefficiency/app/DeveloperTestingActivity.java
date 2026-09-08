@@ -101,23 +101,9 @@ public class DeveloperTestingActivity extends AppCompatActivity {
                 String badgeText = String.format(
                         "Smart Score: %.0f/100 - %s\n$%.2f/km   $%.2f/hr%s",
                         finalScore, label, perKm, perHr, warningLine);
-                // Mirrors DasherAccessibilityService.colorForLabel() -- kept in
-                // sync manually since it's a small static color mapping.
-                int color;
-                switch (label) {
-                    case "Excellent":
-                        color = android.graphics.Color.parseColor("#CC1B5E20"); // deep green
-                        break;
-                    case "Good":
-                        color = android.graphics.Color.parseColor("#CC43A047"); // lighter green
-                        break;
-                    case "Fair":
-                        color = android.graphics.Color.parseColor("#CCF9A825"); // amber
-                        break;
-                    default:
-                        color = android.graphics.Color.parseColor("#CCC62828"); // red
-                }
-                OverlayHelper.showMessage(this, badgeText, 8000, color);
+                // See OverlayHelper.backgroundForScoreLabel -- centralized there.
+                OverlayHelper.showMessage(this, badgeText, 8000,
+                        OverlayHelper.backgroundForScoreLabel(this, label), null);
                 VoiceAnnouncer.speak(String.format("Smart score %d, %s. %.2f dollars per kilometer, "
                         + "%.2f dollars per hour", Math.round(finalScore), label, perKm, perHr));
                 engine.callAttr("add_pickup", parsed.optString("restaurant_name", ""),

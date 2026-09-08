@@ -41,6 +41,7 @@ public class TripHistoryActivity extends AppCompatActivity {
         Button restaurantVisitHistoryButton = findViewById(R.id.restaurantVisitHistoryButton);
         Button locationProfitabilityMapButton = findViewById(R.id.locationProfitabilityMapButton);
         Button payTrendButton = findViewById(R.id.payTrendButton);
+        Button weatherPayCorrelationButton = findViewById(R.id.weatherPayCorrelationButton);
 
         viewSummaryButton.setOnClickListener(v -> showLastTripSummary());
         viewTripHistoryButton.setOnClickListener(v -> showTripHistory());
@@ -58,6 +59,7 @@ public class TripHistoryActivity extends AppCompatActivity {
         locationProfitabilityMapButton.setOnClickListener(v ->
                 startActivity(new Intent(this, LocationProfitabilityMapActivity.class)));
         payTrendButton.setOnClickListener(v -> showPayTrend());
+        weatherPayCorrelationButton.setOnClickListener(v -> showWeatherPayCorrelation());
     }
 
     @Override
@@ -754,6 +756,76 @@ public class TripHistoryActivity extends AppCompatActivity {
             } catch (JSONException | PyException e) {
                 Toast.makeText(this, "Could not load pay trend: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
+        }
+
+        /**
+         * docs/weather_pay_correlation/PRD.md -- driver asked to "compare
+         * pay rate with weather." Reads the same live Open-Meteo weather
+         * already fetched for every offer's weather_score, now persisted
+         * alongside that offer's own pay data (record_offer_outcome/
+         * record_offer_timeout) instead of only ever used transiently.
+         * Going forward only -- offers recorded before this shipped have
+         * no weather columns and are excluded, same as any other newly
+         * added measurement in this app.
+         */
+        private void showWeatherPayCorrelation() {
+            try {
+                JSONObject result = new JSONObject(engine.callAttr("get_weather_pay_correlation").toString());
+                if (result.optInt("total_samples", 0) == 0) {
+                    new AlertDialog.Builder(this)
+                            .setTitle("Weather vs. Pay")
+                            .setMessage("No offers with a weather snapshot recorded yet -- this fills in as "
+                                    + "you see new offers going forward.")
+                            .setPositiveButton("OK", null)
+                            .show();
+                    return;
+                }
+
+                JSONObject rain = result.optJSONObject("rain");
+                JSONObject noRain = result.optJSONObject("no_rain");
+                StringBuilder body = new StringBuilder();
+                body.append("Your own recorded pay, split by whether it was raining at the moment each "
+                        + "offer came in.\n\n");
+
+                if (!result.optBoolean("has_enough_data", false)) {
+                    body.append(String.format("Not enough offers with a weather snapshot yet in both "
+                            + "conditions for a reliable comparison (need at least %d each way).\n\n",
+                            result.optInt("min_required", 3)));
+                }
+
+                body.append(String.format("Rain (%d offer%s):\n", rain.optInt("sample_count", 0),
+                        rain.optInt("sample_count", 0) == 1 ? "" : "s"));
+                body.append(weatherBucketLines(rain));
+                body.append("\n");
+                body.append(String.format("No rain (%d offer%s):\n", noRain.optInt("sample_count", 0),
+                        noRain.optInt("sample_count", 0) == 1 ? "" : "s"));
+                body.append(weatherBucketLines(noRain));
+
+                new AlertDialog.Builder(this)
+                        .setTitle("Weather vs. Pay")
+                        .setMessage(body.toString())
+                        .setPositiveButton("OK", null)
+                        .show();
+            } catch (JSONException | PyException e) {
+                Toast.makeText(this, "Could not load weather vs. pay: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        }
+
+        private String weatherBucketLines(JSONObject bucket) {
+            if (bucket == null || bucket.optInt("sample_count", 0) == 0) {
+                return "  no offers recorded\n";
+            }
+            StringBuilder lines = new StringBuilder();
+            lines.append(String.format("  %s\n",
+                    bucket.isNull("avg_dollar_per_km") ? "$/km n/a"
+                            : String.format("$%.2f/km", bucket.optDouble("avg_dollar_per_km"))));
+            lines.append(String.format("  %s\n",
+                    bucket.isNull("avg_dollar_per_hr") ? "$/hr n/a"
+                            : String.format("$%.2f/hr", bucket.optDouble("avg_dollar_per_hr"))));
+            lines.append(String.format("  %s\n",
+                    bucket.isNull("avg_smart_score") ? "Smart Score n/a"
+                            : String.format("Smart Score %.0f avg", bucket.optDouble("avg_smart_score"))));
+            return lines.toString();
         }
 
     /**

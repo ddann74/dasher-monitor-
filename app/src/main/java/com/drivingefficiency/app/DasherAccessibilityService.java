@@ -97,7 +97,7 @@ public class DasherAccessibilityService extends AccessibilityService {
     // reference itself indefinitely as the next tap's action.
     private String smartScoreBadgeCompactText = "";
     private String smartScoreBadgeExpandedText = "";
-    private int smartScoreBadgeColor = 0;
+    private android.graphics.drawable.Drawable smartScoreBadgeBackground;
     private boolean smartScoreBadgeExpanded = false;
     private double lastSeenPayout = -1;
     private double lastSeenDistanceKm = -1;
@@ -442,7 +442,7 @@ public class DasherAccessibilityService extends AccessibilityService {
         logDiagnostic("BADGE", smartScoreBadgeExpanded ? "Expanded to full breakdown" : "Collapsed to compact view");
         OverlayHelper.showMessage(this,
                 smartScoreBadgeExpanded ? smartScoreBadgeExpandedText : smartScoreBadgeCompactText,
-                0, smartScoreBadgeColor, this::toggleSmartScoreBadge);
+                0, smartScoreBadgeBackground, this::toggleSmartScoreBadge);
     }
 
     /**
@@ -981,9 +981,9 @@ public class DasherAccessibilityService extends AccessibilityService {
             // reference itself as the next tap's action.
             smartScoreBadgeCompactText = compactBadgeText;
             smartScoreBadgeExpandedText = expandedText.toString();
-            smartScoreBadgeColor = colorForLabel(label);
+            smartScoreBadgeBackground = backgroundForLabel(label);
             smartScoreBadgeExpanded = false;
-            OverlayHelper.showMessage(this, smartScoreBadgeCompactText, 0, smartScoreBadgeColor,
+            OverlayHelper.showMessage(this, smartScoreBadgeCompactText, 0, smartScoreBadgeBackground,
                     this::toggleSmartScoreBadge);
 
             String restaurantName = parsed.optString("restaurant_name", "");
@@ -1299,18 +1299,9 @@ public class DasherAccessibilityService extends AccessibilityService {
         }
     }
 
-    /** Green/amber/red matching the existing (previously unused) colors.xml scheme. */
-    private int colorForLabel(String label) {
-        switch (label) {
-            case "Excellent":
-                return android.graphics.Color.parseColor("#CC1B5E20"); // deep green
-            case "Good":
-                return android.graphics.Color.parseColor("#CC43A047"); // lighter green
-            case "Fair":
-                return android.graphics.Color.parseColor("#CCF9A825"); // amber
-            default:
-                return android.graphics.Color.parseColor("#CCC62828"); // red
-        }
+    /** See OverlayHelper.backgroundForScoreLabel -- centralized there so every screen that shows this stays in sync. */
+    private android.graphics.drawable.Drawable backgroundForLabel(String label) {
+        return OverlayHelper.backgroundForScoreLabel(this, label);
     }
 
     /**

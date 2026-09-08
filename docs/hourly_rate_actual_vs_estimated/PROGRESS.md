@@ -157,3 +157,52 @@ in one run. Hourly-rate-specific assertions confirmed:
 
 Remaining PRD §6 box: driver sign-off (never mine to check). No other
 boxes remain unchecked.
+
+## A third real gap found in the same function (2026-09-06)
+
+Driver reported "the hourly rate doesn't look right" for the live
+offer estimate specifically. Re-reading `estimate_minutes_from_
+distance` with that in mind found a second gap of the exact same shape
+as §4.A's wait-time fix, just for a different leg: the offer screen's
+own `distance_km` is the DELIVERY leg only (pickup to dropoff) -- it
+never includes deadhead, the drive from wherever the driver currently
+is TO the pickup. `calculate()` already estimates this same trip's
+deadhead_km a few lines below (via `_estimate_deadhead_km`, for
+`deadhead_score`), from the exact same `restaurant_name`, but that
+estimate was never reused for the TIME estimate either. Every live
+$/hr assumed deadhead takes zero minutes, for every offer -- the same
+mistake §4.A already fixed for wait time, just missed for this leg.
+
+This is also the most likely explanation for `get_hourly_rate_accuracy_
+summary()` (§4.B, above) showing `estimated_hourly_rate` running
+systematically higher than `actual_hourly_rate`: `actual_hourly_rate`
+is computed from real elapsed wall-clock time (`accepted_ts` to trip
+end), which always included the real drive to the restaurant; the
+estimate never did.
+
+**Fix**: `estimate_minutes_from_distance` now also adds
+`_estimate_deadhead_km(restaurant_name)` converted to minutes at the
+same learned delivery speed, exactly mirroring how wait_minutes was
+added in §4.A. Falls back to 0 added minutes when no deadhead history
+exists yet for any restaurant (a fresh install, or the very first few
+deliveries) -- same backward-compatible shape as every other learned
+estimate in this file.
+
+**Verification** (`test_hourly_rate_deadhead_time.py`, scratchpad,
+executed directly, 3 cases):
+1. No deadhead history anywhere -> estimate unchanged (30.0 min for a
+   10km delivery, matching the pre-existing default-speed/default-wait
+   math exactly).
+2. A restaurant with a real learned 6km deadhead -> estimate correctly
+   grows by the deadhead drive time (44.4 min), not left unchanged.
+3. Real-world payoff: a $20 offer that showed $40/hr under the old,
+   deadhead-blind estimate now correctly shows ~$27/hr once deadhead
+   time counts -- same offer, same payout, only the previously-ignored
+   leg now included.
+
+Re-ran `test_hourly_rate_wait_time.py` (§4.A's own test) unchanged --
+still passes, confirming this fix doesn't disturb the wait-time
+behavior it sits alongside. Full existing scratchpad suite re-run: no
+regressions (only the known, pre-existing, unrelated
+`test_dropoff_instruction_wiring.py` failure). `python3 -m py_compile
+drive_monitor.py` clean.
