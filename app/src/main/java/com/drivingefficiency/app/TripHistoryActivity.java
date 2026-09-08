@@ -1039,6 +1039,18 @@ public class TripHistoryActivity extends AppCompatActivity {
                             formatMinutesSeconds(phaseBreakdown.optDouble("wait_at_restaurant_seconds", 0)),
                             waitRatingSuffix));
                 }
+                // docs/store_wait_timer/PRD.md -- a driver-button-driven
+                // measured duration (tapping Dasher's own "Arrived at
+                // Store" then "Confirm Pickup"), deliberately separate
+                // from "Waiting at restaurant" just above (GPS-geofence-
+                // based). Top-level summary field, not inside
+                // phaseBreakdown -- omitted entirely (not shown as "0m
+                // 0s") for every trip before this shipped, or one where
+                // the driver's taps weren't detected.
+                if (!summary.isNull("store_wait_over_grace_seconds")) {
+                    body.append(String.format("Store wait beyond 1 min (measured): %s\n",
+                            formatMinutesSeconds(summary.optDouble("store_wait_over_grace_seconds", 0))));
+                }
                 if (!phaseBreakdown.isNull("driving_to_dropoff_seconds")) {
                     body.append(String.format("Driving to dropoff: %s\n",
                             formatMinutesSeconds(phaseBreakdown.optDouble("driving_to_dropoff_seconds", 0))));

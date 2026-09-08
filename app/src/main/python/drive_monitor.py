@@ -619,7 +619,16 @@ class Database:
         # will.
         trips_columns = [row["name"] for row in self.conn.execute("PRAGMA table_info(trips)")]
         for new_column in ("pickup_arrival_ts", "pickup_departure_ts", "dropoff_arrival_ts",
-                           "walking_confirmed_ts", "deadline_text", "pickup_address"):
+                           "walking_confirmed_ts", "deadline_text", "pickup_address",
+                           # docs/store_wait_timer/PRD.md -- measured seconds waited PAST
+                           # the 1-minute grace period after tapping Dasher's own "Arrived
+                           # at Store" button, stopped on "Confirm Pickup". A third, separate
+                           # signal from pickup_arrival_ts/pickup_departure_ts above (those
+                           # are GPS-geofence-based, not tied to the driver's own button
+                           # taps) and from the subjective merchant_wait_rating -- NULL for
+                           # every trip before this shipped, or one where the driver's tap
+                           # wasn't detected (see the PRD's own disclosed button-text risk).
+                           "store_wait_over_grace_seconds"):
             if new_column not in trips_columns:
                 col_type = "TEXT" if new_column in ("deadline_text", "pickup_address") else "REAL"
                 self.conn.execute(f"ALTER TABLE trips ADD COLUMN {new_column} {col_type}")
@@ -2398,7 +2407,21 @@ class TripManager:
         """
         if self.pickup and self.pickup["arrived_at"] is None:
             self.pickup["address"] = address
-        self._update_current_trip_text_column("pickup_address", address)
+        self._update_current_trip_column("pickup_address", address)
+
+    def record_store_wait_timer(self, over_grace_seconds):
+        """
+        docs/store_wait_timer/PRD.md -- called once on "Confirm Pickup",
+        but only when the driver's own timer actually became visible
+        (i.e. the 1-minute grace period after "Arrived at Store" had
+        already elapsed; DasherAccessibilityService never calls this for
+        a pickup confirmed WITHIN the grace period, since there's
+        nothing to persist there). A real, driver-button-driven measured
+        duration -- deliberately a separate column from the GPS-geofence
+        -based pickup_arrival_ts/pickup_departure_ts pair just above,
+        not a replacement for either.
+        """
+        self._update_current_trip_column("store_wait_over_grace_seconds", over_grace_seconds)
 
     def _evaluate_pickup(self, lat, lon, ts):
         """
@@ -2501,12 +2524,19 @@ class TripManager:
         if cursor.rowcount > 0:
             self._last_phase_capture_log = f"Captured {column_name} = {ts}"
 
-    def _update_current_trip_text_column(self, column_name, value):
+    def _update_current_trip_column(self, column_name, value):
         """
-        Same shape as _update_current_trip_phase_timestamp, for a text
-        value (currently only pickup_address) rather than a timestamp. A
-        no-op if no trip is currently active yet -- update_pickup_address
-        can resolve before departure, in which case _start_trip picks up
+        Same shape as _update_current_trip_phase_timestamp, for any
+        plain (non-timestamp) value -- text (pickup_address) or a real
+        number (store_wait_over_grace_seconds, docs/store_wait_timer/
+        PRD.md). SQLite doesn't enforce column typing, and this method
+        never inspects `value`'s type either, so one shared helper
+        covers both rather than a near-duplicate REAL-only twin
+        (previously named _update_current_trip_text_column, back when
+        pickup_address was its only caller -- renamed once a second,
+        differently-typed caller made the old name misleading). A no-op
+        if no trip is currently active yet -- update_pickup_address can
+        resolve before departure, in which case _start_trip picks up
         self.pickup["address"] directly instead.
         """
         self.db.conn.execute(
@@ -5559,6 +5589,12 @@ class DriveMonitorEngine:
             "was_interrupted": bool(row["was_interrupted"]),
             "offer_score_snapshot": offer_score_snapshot,
             "pickup_address": row["pickup_address"],
+            # docs/store_wait_timer/PRD.md -- driver-button-driven measured
+            # duration, deliberately separate from phase_breakdown's own
+            # GPS-geofence-based "wait_at_restaurant_seconds" below. None
+            # for every trip before this shipped, or one where "Arrived at
+            # Store"/"Confirm Pickup" weren't detected.
+            "store_wait_over_grace_seconds": row["store_wait_over_grace_seconds"],
             "phase_breakdown": phase_breakdown,
             "phase_timestamps": phase_timestamps,
             "job_count": job_count,
@@ -5788,6 +5824,16 @@ class DriveMonitorEngine:
         TripManager.update_pickup_address's doc.
         """
         self.trip_manager.update_pickup_address(address)
+
+    def record_store_wait_timer(self, over_grace_seconds):
+        """
+        docs/store_wait_timer/PRD.md -- called from
+        DasherAccessibilityService's "Confirm Pickup" click handler.
+        Thin wrapper, same pattern as update_pickup_address above --
+        TripManager owns the actual persistence.
+        """
+        self.trip_manager.record_store_wait_timer(over_grace_seconds)
+        return json.dumps({"recorded": True, "store_wait_over_grace_seconds": over_grace_seconds})
 
     def get_current_pickup_restaurant(self):
         """
