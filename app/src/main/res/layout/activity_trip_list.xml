@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- docs/trip_history_redesign/PRD.md ss3.5 - replaces
+     showTripHistoryFiltered()'s AlertDialog.setItems() picker. Same
+     ScrollView > LinearLayout shape as every other list-like screen in
+     this app; filter toggles + trip rows are both built at runtime by
+     TripListActivity (variable trip count), not declared statically
+     here. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/trip_history_teal_light">
+
+<LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <!-- All Trips / Dasher Only / General Only - same 3-way filter
+         showTripHistoryFiltered() already offers, as ToggleButtons
+         instead of a second AlertDialog. -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="12dp">
+
+        <ToggleButton
+            android:id="@+id/filterAllButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="6dp"
+            android:textOn="All Trips"
+            android:textOff="All Trips"
+            android:checked="true" />
+
+        <ToggleButton
+            android:id="@+id/filterDasherButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="6dp"
+            android:textOn="Dasher Only"
+            android:textOff="Dasher Only" />
+
+        <ToggleButton
+            android:id="@+id/filterGeneralButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textOn="General Only"
+            android:textOff="General Only" />
+    </LinearLayout>
+
+    <com.google.android.material.card.MaterialCardView
+        style="@style/Widget.MaterialComponents.CardView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        app:cardCornerRadius="6dp"
+        app:cardElevation="2dp"
+        app:cardBackgroundColor="@android:color/white">
+
+        <LinearLayout
+            android:id="@+id/tripRowsContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="4dp" />
+    </com.google.android.material.card.MaterialCardView>
+
+    <TextView
+        android:id="@+id/noTripsText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:gravity="center"
+        android:text="No completed trips match this filter."
+        android:textColor="#757575"
+        android:visibility="gone" />
+
+</LinearLayout>
+</ScrollView>

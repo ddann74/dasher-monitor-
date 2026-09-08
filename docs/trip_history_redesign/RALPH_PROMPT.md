@@ -1,13 +1,9 @@
 # Ralph loop -- Trip History redesign (detail screen + trip list)
 
-**BLOCKED until the driver answers `docs/trip_history_redesign/PRD.md`
-§5 #2** (the exact trigger for the feedback-chaining primary action in
-`TripDetailActivity`). Questions #1 and #3 are already resolved -- do
-not re-ask them. If you are running this prompt and #2 is still
-unanswered, stop and ask instead of guessing a default.
-
-Once answered, run this prompt repeatedly (one iteration per invocation)
-until every box in `docs/trip_history_redesign/PRD.md` §6 is checked.
+All 3 open questions in `docs/trip_history_redesign/PRD.md` §5 are
+resolved -- not blocked. Run this prompt repeatedly (one iteration per
+invocation) until every box in `docs/trip_history_redesign/PRD.md` §6
+is checked.
 
 ---
 

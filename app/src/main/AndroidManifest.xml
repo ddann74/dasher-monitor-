@@ -112,6 +112,24 @@
         <activity android:name=".LocationProfitabilityMapActivity" android:exported="false"
             android:theme="@style/Theme.DasherMonitor.TripHistory"
             android:parentActivityName=".TripHistoryActivity" />
+        <!-- docs/trip_history_redesign/PRD.md: replaces the old
+             AlertDialog.setItems() trip picker and the giant text-dump
+             AlertDialog respectively, both sub-screens of Trip
+             History, same theme reuse as LocationProfitabilityMapActivity
+             above. TripDetailActivity is also reached directly from
+             TripForegroundService.notifyRateThisDelivery() (right after
+             a real delivery completes) and from MainActivity; its
+             declared parent is TripListActivity since that's the most
+             common "browsing" path back, same as
+             LocationProfitabilityMapActivity's parent being
+             TripHistoryActivity even though it's really reached via a
+             button there. -->
+        <activity android:name=".TripListActivity" android:exported="false"
+            android:theme="@style/Theme.DasherMonitor.TripHistory"
+            android:parentActivityName=".TripHistoryActivity" />
+        <activity android:name=".TripDetailActivity" android:exported="false"
+            android:theme="@style/Theme.DasherMonitor.TripHistory"
+            android:parentActivityName=".TripListActivity" />
         <activity android:name=".TrustedContactsActivity" android:exported="false"
             android:theme="@style/Theme.DasherMonitor.TrustedContacts"
             android:parentActivityName=".MainActivity" />

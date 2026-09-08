@@ -1,0 +1,409 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- docs/trip_history_redesign/PRD.md ss3.1/ss3.2 - replaces the single
+     giant AlertDialog.setMessage() text block buildTripSummaryBody()
+     used to build, with real, scannable card sections. Same
+     ScrollView > LinearLayout root shape as activity_trip_history.xml
+     (this app's own established list/detail screen pattern) - no
+     RecyclerView, per the PRD's own non-goal.
+
+     Every MaterialCardView below sets app:cardCornerRadius/
+     app:cardElevation/app:cardBackgroundColor EXPLICITLY, and uses
+     style="@style/Widget.MaterialComponents.CardView" explicitly too -
+     this app's theme (Theme.DasherMonitor.TripHistory) extends
+     Theme.AppCompat.DayNight, not Theme.MaterialComponents, so the
+     card's OWN implicit default style (driven by a MaterialComponents
+     theme attribute this app's theme never defines) can't be trusted.
+     This is the first real use of any Material Components widget in
+     this codebase's layout XML (material:1.12.0 has been a Gradle
+     dependency, but nothing in res/layout has used it before) - a
+     real, disclosed elevated-risk area for a build/device to actually
+     confirm, not verifiable from here. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/trip_history_teal_light">
+
+<LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <!-- ===================== Original Offer Assessment ===================== -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/offerAssessmentCard"
+        style="@style/Widget.MaterialComponents.CardView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"
+        app:cardCornerRadius="6dp"
+        app:cardElevation="2dp"
+        app:cardBackgroundColor="@android:color/white">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="14dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Original Offer Assessment"
+                android:textColor="@color/trip_history_teal"
+                android:textStyle="bold"
+                android:textSize="12sp"
+                android:letterSpacing="0.03"
+                android:textAllCaps="true" />
+
+            <TextView
+                android:id="@+id/offerVerdictText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:textStyle="italic"
+                android:textSize="13sp"
+                android:textColor="#757575" />
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <TextView
+                    android:id="@+id/offerScoreNumberText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="28sp"
+                    android:textStyle="bold"
+                    android:textColor="#212121" />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:text="/100"
+                    android:textSize="13sp"
+                    android:textColor="#9E9E9E" />
+                <TextView
+                    android:id="@+id/offerScoreLabelPill"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:paddingTop="3dp"
+                    android:paddingBottom="3dp"
+                    android:textColor="@android:color/white"
+                    android:textStyle="bold"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <!-- 6 small stat tiles: $/km, $/hr, deadhead, pickup wait,
+                 traffic, weather - bound as one 2-column grid via
+                 GridLayout, matching this screen's overall "small
+                 stat tiles" treatment from the corrected mockup. -->
+            <GridLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:columnCount="3"
+                android:useDefaultMargins="false">
+
+                <LinearLayout style="@style/StatTile"><TextView style="@style/StatTileLabel" android:text="$/km" /><TextView android:id="@+id/statDollarPerKm" style="@style/StatTileValue" /></LinearLayout>
+                <LinearLayout style="@style/StatTile"><TextView style="@style/StatTileLabel" android:text="$/hr" /><TextView android:id="@+id/statDollarPerHr" style="@style/StatTileValue" /></LinearLayout>
+                <LinearLayout style="@style/StatTile"><TextView style="@style/StatTileLabel" android:text="Deadhead" /><TextView android:id="@+id/statDeadhead" style="@style/StatTileValue" /></LinearLayout>
+                <LinearLayout style="@style/StatTile"><TextView style="@style/StatTileLabel" android:text="Pickup wait" /><TextView android:id="@+id/statPickupWait" style="@style/StatTileValue" /></LinearLayout>
+                <LinearLayout style="@style/StatTile"><TextView style="@style/StatTileLabel" android:text="Traffic" /><TextView android:id="@+id/statTraffic" style="@style/StatTileValue" /></LinearLayout>
+                <LinearLayout style="@style/StatTile"><TextView style="@style/StatTileLabel" android:text="Weather" /><TextView android:id="@+id/statWeather" style="@style/StatTileValue" /></LinearLayout>
+            </GridLayout>
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+    <!-- ===================== Pickup Address ===================== -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/pickupAddressCard"
+        style="@style/Widget.MaterialComponents.CardView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"
+        app:cardCornerRadius="6dp"
+        app:cardElevation="2dp"
+        app:cardBackgroundColor="@android:color/white">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="14dp">
+            <TextView style="@style/CardTitle" android:text="Pickup Address" />
+            <TextView
+                android:id="@+id/pickupAddressText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:textSize="13sp"
+                android:textColor="#212121" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+    <!-- ===================== Store Wait Timer (docs/store_wait_timer) ===================== -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/storeWaitTimerCard"
+        style="@style/Widget.MaterialComponents.CardView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"
+        android:visibility="gone"
+        app:cardCornerRadius="6dp"
+        app:cardElevation="2dp"
+        app:cardBackgroundColor="@android:color/white">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="14dp">
+            <TextView style="@style/CardTitle" android:text="Store Wait Timer" />
+            <TextView
+                android:id="@+id/storeWaitTimerText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:padding="10dp"
+                android:background="#142c9c8f"
+                android:textSize="22sp"
+                android:textStyle="bold"
+                android:textColor="@color/trip_history_teal" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+    <!-- ===================== Full Time Detail ===================== -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/fullTimeDetailCard"
+        style="@style/Widget.MaterialComponents.CardView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"
+        app:cardCornerRadius="6dp"
+        app:cardElevation="2dp"
+        app:cardBackgroundColor="@android:color/white">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="14dp">
+            <TextView style="@style/CardTitle" android:text="Full Time Detail" />
+            <!-- Populated at runtime with one row per REAL captured
+                 phase_timestamps key - TripDetailActivity builds these
+                 rows programmatically (variable count, 0-6 rows) rather
+                 than declaring 6 fixed TextViews here, matching how the
+                 old text version only ever showed the timestamps that
+                 were actually captured. -->
+            <LinearLayout
+                android:id="@+id/fullTimeDetailRows"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="4dp" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+    <!-- ===================== Where The Time Went ===================== -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/whereTimeWentCard"
+        style="@style/Widget.MaterialComponents.CardView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"
+        app:cardCornerRadius="6dp"
+        app:cardElevation="2dp"
+        app:cardBackgroundColor="@android:color/white">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="14dp">
+            <TextView style="@style/CardTitle" android:text="Where The Time Went" />
+
+            <!-- Stacked-order warning - driver backlog #26 follow-up,
+                 docs/deadhead_stacked_order_baseline/PRD.md Part 2B.
+                 Hidden unless job_count > 1. -->
+            <TextView
+                android:id="@+id/stackedOrderWarningText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:layout_marginBottom="8dp"
+                android:padding="9dp"
+                android:background="#17ef6c00"
+                android:textSize="11.5sp"
+                android:textColor="#8a4c00"
+                android:visibility="gone" />
+
+            <!-- One row per REAL captured phase, built at runtime same
+                 as Full Time Detail above (0-5 rows: driving to pickup,
+                 waiting at restaurant, driving to dropoff, parking to
+                 walking, completing dropoff). -->
+            <LinearLayout
+                android:id="@+id/phaseBreakdownRows"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+    <!-- ===================== Deadline ===================== -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/deadlineCard"
+        style="@style/Widget.MaterialComponents.CardView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"
+        android:visibility="gone"
+        app:cardCornerRadius="6dp"
+        app:cardElevation="2dp"
+        app:cardBackgroundColor="@android:color/white">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="14dp">
+            <TextView style="@style/CardTitle" android:text="Deadline" />
+            <TextView
+                android:id="@+id/deadlineText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:textSize="13sp"
+                android:textColor="#212121" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+    <!-- ===================== Trip Stats (includes Major Delays, per driver's answer) ===================== -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/tripStatsCard"
+        style="@style/Widget.MaterialComponents.CardView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"
+        app:cardCornerRadius="6dp"
+        app:cardElevation="2dp"
+        app:cardBackgroundColor="@android:color/white">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="14dp">
+            <TextView style="@style/CardTitle" android:text="Trip Stats" />
+            <LinearLayout android:id="@+id/tripStatsRows" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="4dp" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+    <!-- ===================== Safety Events ===================== -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/safetyEventsCard"
+        style="@style/Widget.MaterialComponents.CardView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"
+        android:visibility="gone"
+        app:cardCornerRadius="6dp"
+        app:cardElevation="2dp"
+        app:cardBackgroundColor="@android:color/white">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="14dp">
+            <TextView style="@style/CardTitle" android:text="Safety Events" />
+            <LinearLayout android:id="@+id/safetyEventsRows" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="4dp" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+    <!-- ===================== Stops ===================== -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/stopsCard"
+        style="@style/Widget.MaterialComponents.CardView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"
+        android:visibility="gone"
+        app:cardCornerRadius="6dp"
+        app:cardElevation="2dp"
+        app:cardBackgroundColor="@android:color/white">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="14dp">
+            <TextView style="@style/CardTitle" android:text="Stops" />
+            <LinearLayout android:id="@+id/stopsRows" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="4dp" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+    <!-- ===================== Customer Instructions ===================== -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/instructionsCard"
+        style="@style/Widget.MaterialComponents.CardView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"
+        android:visibility="gone"
+        app:cardCornerRadius="6dp"
+        app:cardElevation="2dp"
+        app:cardBackgroundColor="@android:color/white">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="14dp">
+            <TextView style="@style/CardTitle" android:text="Customer Instructions" />
+            <LinearLayout android:id="@+id/instructionsRows" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="4dp" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+    <!-- ===================== Your Rating ===================== -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/yourRatingCard"
+        style="@style/Widget.MaterialComponents.CardView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp"
+        android:visibility="gone"
+        app:cardCornerRadius="6dp"
+        app:cardElevation="2dp"
+        app:cardBackgroundColor="@android:color/white">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="14dp">
+            <TextView style="@style/CardTitle" android:text="Your Rating" />
+            <TextView
+                android:id="@+id/yourRatingText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:textSize="13sp"
+                android:textColor="#212121" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+    <!-- ===================== Primary action ===================== -->
+    <!-- docs/trip_history_redesign/PRD.md ss3.4/ss5#2 - the ONE control
+         that closes this screen. Label + behavior set at runtime by
+         TripDetailActivity depending on EXTRA_PROMPT_FEEDBACK_ON_CLOSE:
+         "Rate This Delivery" (shows the feedback dialog, then finishes)
+         when true, "Done" (just finishes) otherwise. The system back
+         button/gesture also just finishes, with no feedback prompt
+         either way - resolved per PRD ss5#2, not left ambiguous. -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/primaryActionButton"
+        style="@style/Widget.MaterialComponents.Button"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:backgroundTint="@color/trip_history_teal"
+        android:textColor="@android:color/white"
+        android:text="Done" />
+
+</LinearLayout>
+</ScrollView>
