@@ -208,3 +208,41 @@ doesn't double-prompt later at Stop Monitoring, that the trip list
 filters correctly, and that General-mode trips never show a rating
 prompt. Per PRD §6, these and final sign-off are the driver's own to
 confirm, not checked here.
+
+## Real CI failure on PR #38, fixed (2026-09-08)
+
+CI's `build` check failed: `javac` reported 5 `cannot find symbol`
+errors, all `formatMinutesSeconds` calls inside `MainActivity.
+showFeedbackDialog()`'s own embedded "where the time went" recap block
+(lines 691-707) -- the exact redundant-but-deliberately-untouched block
+this doc's own earlier entry already discloses. Root cause: when
+`formatMinutesSeconds`/`friendlyEventTypeLabel` were deleted from
+`MainActivity.java` alongside `buildTripSummaryBody()`, only that one
+method's usage was checked, not the whole file's -- `showFeedbackDialog`
+had its own separate, un-noticed call site for `formatMinutesSeconds`
+that survived the deletion pass and broke the build. Brace/paren
+balance (this repo's usual verification for Java-only PRs, since no
+Android SDK is available here) cannot catch a missing-symbol error --
+a real, disclosed gap in that verification method for THIS specific
+kind of mistake (removing a still-used helper), confirmed the hard way
+via a real CI failure rather than caught locally.
+
+**Fix**: restored `formatMinutesSeconds` in `MainActivity.java` (byte
+-identical to the version still in `TripDetailActivity.java`) rather
+than touching `showFeedbackDialog`'s body -- keeps the fix minimal and
+consistent with the earlier decision not to edit that method further.
+`friendlyEventTypeLabel` was confirmed to have zero other call sites in
+`MainActivity.java` (re-checked directly this time, not assumed) -- its
+deletion was correct as-is.
+
+**Verification tightened for this fix specifically**: re-ran the full
+brace/paren + XML well-formedness suite on every touched file, AND
+additionally cross-checked every `populateX`/`addRow`/`format*`/
+`friendly*` method call in the two brand-new files
+(`TripDetailActivity.java`, `TripListActivity.java`) against a real
+local definition -- all resolve correctly, no second instance of this
+mistake found. `javac 21.0.10` is available in this environment but a
+full compile still isn't possible without the Android SDK (no
+`ANDROID_HOME`/`local.properties`) -- the real compiler error came from
+GitHub Actions' CI log, not a local build; disclosed here rather than
+implied this environment can now fully verify compilation.

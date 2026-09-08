@@ -881,4 +881,18 @@ public class MainActivity extends AppCompatActivity {
             return row;
         }
 
+    /**
+     * Real CI failure fixed here (PR #38): this is still used by
+     * showFeedbackDialog()'s own embedded "where the time went" recap
+     * (see that method's own doc -- now redundant with TripDetailActivity's
+     * card but deliberately left untouched, per docs/trip_history_redesign/
+     * PROGRESS.md) -- deleting it alongside buildTripSummaryBody() was
+     * wrong; that method was never its only caller in this file.
+     */
+    private String formatMinutesSeconds(double totalSeconds) {
+        int rounded = (int) Math.round(Math.abs(totalSeconds));
+        int minutes = rounded / 60;
+        int seconds = rounded % 60;
+        return minutes > 0 ? minutes + "m " + seconds + "s" : seconds + "s";
+    }
 }
