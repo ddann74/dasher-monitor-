@@ -118,6 +118,120 @@ public class DasherAccessibilityService extends AccessibilityService {
     private final android.os.Handler timeoutHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private Runnable pendingTimeoutRunnable = null;
 
+    // docs/store_wait_timer/PRD.md -- driver-requested (2026-09-08): "a
+    // timer that starts 1 minute after i press arrived at store and
+    // stops when i press confirm pickup". A third, separate signal from
+    // the existing GPS-geofence-based pickup_arrival_ts/pickup_departure_ts
+    // (drive_monitor.py) and the subjective merchant_wait_rating -- this
+    // one is driven by the driver's own two button taps. Button text is
+    // the driver's own literal wording from the request, NOT confirmed
+    // against a real screenshot (see the PRD's own ss3) -- if wrong,
+    // this simply never fires, silently; the diagnostic log lines below
+    // are what would confirm or correct that from a future real log.
+    private static final long STORE_WAIT_GRACE_PERIOD_MS = 60_000;
+    private static final long STORE_WAIT_TIMER_TICK_MS = 1000;
+    private Long arrivedAtStoreTapMs = null;
+    private boolean storeWaitTimerVisible = false;
+    private final android.os.Handler storeWaitTimerHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable storeWaitTimerStartRunnable = null;
+    private final Runnable storeWaitTimerTickRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (arrivedAtStoreTapMs == null) {
+                return; // stopped/cancelled since this tick was scheduled
+            }
+            long overGraceMs = System.currentTimeMillis() - arrivedAtStoreTapMs - STORE_WAIT_GRACE_PERIOD_MS;
+            OverlayHelper.showStoreWaitTimer(DasherAccessibilityService.this, formatStoreWaitTimer(overGraceMs));
+            storeWaitTimerHandler.postDelayed(this, STORE_WAIT_TIMER_TICK_MS);
+        }
+    };
+
+    private String formatStoreWaitTimer(long elapsedMs) {
+        long totalSeconds = Math.max(0, elapsedMs / 1000);
+        long minutes = totalSeconds / 60;
+        long seconds = totalSeconds % 60;
+        return String.format(java.util.Locale.US, "Waiting: %d:%02d", minutes, seconds);
+    }
+
+    /**
+     * "Arrived at Store" tapped -- starts the 1-minute grace period.
+     * Nothing is shown or logged unless the grace period actually
+     * elapses before "Confirm Pickup" (see stopStoreWaitTimer) -- a
+     * quick in-and-out pickup shouldn't show a timer for a wait that
+     * never really happened.
+     */
+    private void startStoreWaitGracePeriod() {
+        cancelStoreWaitTimer(); // defensive -- clears any stale prior arrival that was never confirmed
+        arrivedAtStoreTapMs = System.currentTimeMillis();
+        logDiagnostic("STORE_WAIT", "Arrived at Store tapped -- grace period started ("
+                + (STORE_WAIT_GRACE_PERIOD_MS / 1000) + "s)");
+        storeWaitTimerStartRunnable = () -> {
+            storeWaitTimerVisible = true;
+            storeWaitTimerHandler.post(storeWaitTimerTickRunnable);
+            logDiagnostic("STORE_WAIT", "Grace period elapsed -- timer now visible");
+        };
+        storeWaitTimerHandler.postDelayed(storeWaitTimerStartRunnable, STORE_WAIT_GRACE_PERIOD_MS);
+    }
+
+    /**
+     * "Confirm Pickup" tapped -- always cancels the pending grace-period
+     * start first, so a pickup confirmed WITHIN the first minute shows
+     * and persists nothing at all. If the timer had already become
+     * visible (grace period genuinely elapsed), stops it, clears the
+     * overlay, and persists the measured over-grace duration -- silently
+     * (no voice/toast), per the driver's own explicit choice.
+     */
+    private void stopStoreWaitTimer() {
+        if (storeWaitTimerStartRunnable != null) {
+            storeWaitTimerHandler.removeCallbacks(storeWaitTimerStartRunnable);
+            storeWaitTimerStartRunnable = null;
+        }
+        storeWaitTimerHandler.removeCallbacks(storeWaitTimerTickRunnable);
+
+        if (arrivedAtStoreTapMs == null) {
+            return; // Confirm Pickup with no matching Arrived tap this session -- nothing to record
+        }
+
+        if (storeWaitTimerVisible) {
+            double overGraceSeconds = Math.max(0.0,
+                    (System.currentTimeMillis() - arrivedAtStoreTapMs - STORE_WAIT_GRACE_PERIOD_MS) / 1000.0);
+            OverlayHelper.clearStoreWaitTimer(this);
+            try {
+                String resultJson = engine.callAttr("record_store_wait_timer", overGraceSeconds).toString();
+                logDiagnostic("STORE_WAIT", "Confirm Pickup tapped -- over-grace wait "
+                        + Math.round(overGraceSeconds) + "s. " + resultJson);
+            } catch (RuntimeException e) { // covers PyException too
+                logDiagnostic("ERROR", "record_store_wait_timer exception: "
+                        + android.util.Log.getStackTraceString(e));
+            }
+        } else {
+            logDiagnostic("STORE_WAIT", "Confirm Pickup tapped within the 1-minute grace period -- no over-grace wait");
+        }
+
+        arrivedAtStoreTapMs = null;
+        storeWaitTimerVisible = false;
+    }
+
+    /**
+     * Cancels any in-progress store-wait timer (pending grace-period
+     * start, running tick loop, and the visible overlay if any) without
+     * persisting anything -- used when there's no real "Confirm Pickup"
+     * coming for this pickup at all (an unassign; see the click handler)
+     * or defensively before starting a fresh grace period.
+     */
+    private void cancelStoreWaitTimer() {
+        if (storeWaitTimerStartRunnable != null) {
+            storeWaitTimerHandler.removeCallbacks(storeWaitTimerStartRunnable);
+            storeWaitTimerStartRunnable = null;
+        }
+        storeWaitTimerHandler.removeCallbacks(storeWaitTimerTickRunnable);
+        if (storeWaitTimerVisible) {
+            OverlayHelper.clearStoreWaitTimer(this);
+        }
+        arrivedAtStoreTapMs = null;
+        storeWaitTimerVisible = false;
+    }
+
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
@@ -616,6 +730,15 @@ public class DasherAccessibilityService extends AccessibilityService {
                                 logDiagnostic("ERROR", "record_pickup_unassigned_for_long_wait exception: "
                                         + android.util.Log.getStackTraceString(e));
                             }
+                            // docs/store_wait_timer/PRD.md ss5 P4 -- an unassign means
+                            // no "Confirm Pickup" is ever coming for this pickup, so any
+                            // in-progress store-wait timer needs to be cancelled here
+                            // too, not just left running/leaked.
+                            cancelStoreWaitTimer();
+                        } else if (clicked.equalsIgnoreCase("Arrived at Store")) {
+                            startStoreWaitGracePeriod();
+                        } else if (clicked.equalsIgnoreCase("Confirm Pickup")) {
+                            stopStoreWaitTimer();
                         }
                     }
                 }

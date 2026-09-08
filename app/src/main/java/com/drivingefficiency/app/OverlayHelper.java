@@ -334,6 +334,86 @@ public final class OverlayHelper {
         }
     }
 
+    private static TextView storeWaitTimerView;
+    private static final int STORE_WAIT_TIMER_COLOR = Color.parseColor("#CCEF6C00"); // same amber as the "Good" Smart Score badge
+
+    /**
+     * docs/store_wait_timer/PRD.md -- a small persistent counter shown
+     * only once the 1-minute grace period after tapping Dasher's own
+     * "Arrived at Store" button has elapsed (the caller decides WHEN to
+     * show it; this method just renders/updates whatever text it's
+     * given). Positioned top-END, deliberately away from the status dot
+     * (top-START) and the message bubble/instruction overlay (centered),
+     * so none of this app's existing overlays collide with it.
+     *
+     * Calling this again while already showing just updates the existing
+     * view's text in place (no remove/re-add) -- this is meant to be
+     * called once a second while the timer runs, and removing/re-adding
+     * a WindowManager view every second would be wasteful and could
+     * flicker.
+     */
+    public static void showStoreWaitTimer(Context context, String text) {
+        if (!hasPermission(context)) {
+            return;
+        }
+        if (storeWaitTimerView != null) {
+            storeWaitTimerView.setText(text);
+            return;
+        }
+        Context appContext = context.getApplicationContext();
+        WindowManager windowManager =
+                (WindowManager) appContext.getSystemService(Context.WINDOW_SERVICE);
+        if (windowManager == null) {
+            return;
+        }
+
+        TextView view = new TextView(appContext);
+        view.setText(text);
+        view.setTextColor(Color.WHITE);
+        view.setBackgroundColor(STORE_WAIT_TIMER_COLOR);
+        view.setPadding(24, 16, 24, 16);
+        view.setTextSize(14f);
+
+        int overlayType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                : WindowManager.LayoutParams.TYPE_PHONE;
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+                overlayType, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                PixelFormat.TRANSLUCENT);
+        params.gravity = Gravity.TOP | Gravity.END;
+        params.y = (int) (80 * appContext.getResources().getDisplayMetrics().density);
+
+        // Same disclosed hardening as showStatusDot -- addView() is a
+        // real, documented source of runtime exceptions on some OEMs/OS
+        // versions, so this can't be left unguarded either.
+        try {
+            windowManager.addView(view, params);
+            storeWaitTimerView = view;
+        } catch (RuntimeException e) {
+            FallbackLogger.log(context, "ERROR", "showStoreWaitTimer addView failed: "
+                    + android.util.Log.getStackTraceString(e));
+        }
+    }
+
+    public static void clearStoreWaitTimer(Context context) {
+        if (storeWaitTimerView == null) {
+            return;
+        }
+        Context appContext = context.getApplicationContext();
+        WindowManager windowManager =
+                (WindowManager) appContext.getSystemService(Context.WINDOW_SERVICE);
+        if (windowManager != null) {
+            try {
+                windowManager.removeView(storeWaitTimerView);
+            } catch (IllegalArgumentException ignored) {
+                // View was already removed.
+            }
+        }
+        storeWaitTimerView = null;
+    }
+
     /**
      * Three states that each mean something actionable -- deliberately
      * NOT a 4th "solid red = idle" state, since that communicated nothing
