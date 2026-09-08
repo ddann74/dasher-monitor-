@@ -4,7 +4,6 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.os.Bundle;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
@@ -43,8 +42,13 @@ public class TripHistoryActivity extends AppCompatActivity {
         Button payTrendButton = findViewById(R.id.payTrendButton);
         Button weatherPayCorrelationButton = findViewById(R.id.weatherPayCorrelationButton);
 
+        // docs/trip_history_redesign/PRD.md -- both now launch real
+        // Activities (TripDetailActivity/TripListActivity) instead of
+        // building an AlertDialog in-place, same shape as
+        // locationProfitabilityMapButton below.
         viewSummaryButton.setOnClickListener(v -> showLastTripSummary());
-        viewTripHistoryButton.setOnClickListener(v -> showTripHistory());
+        viewTripHistoryButton.setOnClickListener(v ->
+                startActivity(new Intent(this, TripListActivity.class)));
         viewDistanceAccuracyButton.setOnClickListener(v -> showDistanceAccuracy());
         viewHourlyRateAccuracyButton.setOnClickListener(v -> showHourlyRateAccuracy());
         addressBookButton.setOnClickListener(v -> showAddressBook());
@@ -174,10 +178,29 @@ public class TripHistoryActivity extends AppCompatActivity {
             }
         }
 
+    /**
+     * docs/trip_history_redesign/PRD.md ss3.4 -- launches
+     * TripDetailActivity WITHOUT EXTRA_PROMPT_FEEDBACK_ON_CLOSE, pure
+     * viewing. A Dasher trip reached this way (manually, via this
+     * button) was already prompted for feedback at the moment it
+     * actually completed (TripForegroundService.notifyRateThisDelivery),
+     * or never applies (General mode) -- re-prompting here would risk a
+     * confusing double-prompt for the same trip.
+     */
     private void showLastTripSummary() {
             try {
                 JSONObject summary = new JSONObject(engine.callAttr("get_last_trip_summary").toString());
-                showTripSummaryDialog("Last Trip Summary", summary);
+                if (!summary.optBoolean("found", false)) {
+                    new AlertDialog.Builder(this)
+                            .setTitle("Last Trip Summary")
+                            .setMessage("No completed trips yet.")
+                            .setPositiveButton("OK", null)
+                            .show();
+                    return;
+                }
+                Intent intent = new Intent(this, TripDetailActivity.class);
+                intent.putExtra(TripDetailActivity.EXTRA_TRIP_ID, summary.optInt("trip_id", -1));
+                startActivity(intent);
             } catch (JSONException | PyException e) {
                 new AlertDialog.Builder(this)
                         .setTitle("Last Trip Summary")
@@ -828,411 +851,4 @@ public class TripHistoryActivity extends AppCompatActivity {
             return lines.toString();
         }
 
-    /**
-     * Driver backlog #9 (docs/driver_backlog_2026_09_03/PRD.md):
-     * "separate dasher and general trips from the report" -- trip.mode
-     * was already returned by get_trip_history() and already shown as a
-     * suffix on each row's own label, but there was no way to filter the
-     * list down to just one mode. A simple up-front chooser, filtered
-     * client-side (the full list is already in memory either way) --
-     * no Python change needed.
-     */
-    private void showTripHistory() {
-            String[] modeChoices = {"All Trips", "Dasher Only", "General Only"};
-            new AlertDialog.Builder(this)
-                    .setTitle("Trip History")
-                    .setItems(modeChoices, (dialog, which) -> {
-                        String modeFilter = which == 1 ? "DASHER" : which == 2 ? "GENERAL" : null;
-                        showTripHistoryFiltered(modeFilter);
-                    })
-                    .setNegativeButton("Cancel", null)
-                    .show();
-        }
-
-    /** modeFilter: null shows all trips; "DASHER" or "GENERAL" shows only that mode. */
-    private void showTripHistoryFiltered(String modeFilter) {
-            try {
-                JSONObject history = new JSONObject(engine.callAttr("get_trip_history").toString());
-                JSONArray allTrips = history.optJSONArray("trips");
-                if (allTrips == null || allTrips.length() == 0) {
-                    new AlertDialog.Builder(this)
-                            .setTitle("Trip History")
-                            .setMessage("No completed trips yet.")
-                            .setPositiveButton("OK", null)
-                            .show();
-                    return;
-                }
-
-                java.util.List<JSONObject> trips = new java.util.ArrayList<>();
-                for (int i = 0; i < allTrips.length(); i++) {
-                    JSONObject trip = allTrips.optJSONObject(i);
-                    if (trip == null) {
-                        continue;
-                    }
-                    String tripMode = "DASHER".equals(trip.optString("mode", "GENERAL")) ? "DASHER" : "GENERAL";
-                    if (modeFilter == null || modeFilter.equals(tripMode)) {
-                        trips.add(trip);
-                    }
-                }
-                if (trips.isEmpty()) {
-                    new AlertDialog.Builder(this)
-                            .setTitle("Trip History")
-                            .setMessage("No completed trips match this filter.")
-                            .setPositiveButton("OK", null)
-                            .show();
-                    return;
-                }
-
-                String[] labels = new String[trips.size()];
-                int[] tripIds = new int[trips.size()];
-                java.text.SimpleDateFormat dateFormat =
-                        new java.text.SimpleDateFormat("MMM d, h:mm a", java.util.Locale.getDefault());
-                for (int i = 0; i < trips.size(); i++) {
-                    JSONObject trip = trips.get(i);
-                    tripIds[i] = trip.optInt("trip_id", -1);
-                    long startTimeMs = (long) (trip.optDouble("start_time", 0) * 1000);
-                    String dateLabel = dateFormat.format(new java.util.Date(startTimeMs));
-                    String mode = "DASHER".equals(trip.optString("mode", "GENERAL")) ? "Dasher" : "General";
-                    labels[i] = String.format("%s -- %.1f km -- %.0f%% -- %s",
-                            dateLabel, trip.optDouble("distance_km", 0),
-                            trip.optDouble("composite_score", 0), mode);
-                }
-
-                new AlertDialog.Builder(this)
-                        .setTitle("Trip History (tap for detail)")
-                        .setItems(labels, (dialog, which) -> showTripSummaryById(tripIds[which]))
-                        .setNegativeButton("Close", null)
-                        .show();
-            } catch (JSONException | PyException e) {
-                Toast.makeText(this, "Could not load trip history: " + e.getMessage(),
-                        Toast.LENGTH_LONG).show();
-            }
-        }
-
-    private void showTripSummaryById(int tripId) {
-            try {
-                JSONObject summary = new JSONObject(
-                        engine.callAttr("get_trip_summary_by_id", tripId).toString());
-                showTripSummaryDialog("Trip Summary", summary);
-            } catch (JSONException | PyException e) {
-                Toast.makeText(this, "Could not load trip: " + e.getMessage(), Toast.LENGTH_LONG).show();
-            }
-        }
-
-    /** Shared dialog body builder -- used by both the last-trip button and trip history. */
-        private void showTripSummaryDialog(String title, JSONObject summary) {
-            if (!summary.optBoolean("found", false)) {
-                new AlertDialog.Builder(this)
-                        .setTitle(title)
-                        .setMessage("No completed trips yet.")
-                        .setPositiveButton("OK", null)
-                        .show();
-                return;
-            }
-
-            StringBuilder body = buildTripSummaryBody(summary);
-
-            new AlertDialog.Builder(this)
-                    .setTitle(title)
-                    .setMessage(body.toString())
-                    .setPositiveButton("OK", null)
-                    .show();
-        }
-
-    /** Shared by showTripSummaryDialog() and showLastTripSummaryThenPromptFeedback(). */
-        private StringBuilder buildTripSummaryBody(JSONObject summary) {
-            StringBuilder body = new StringBuilder();
-            String tripMode = summary.optString("mode", "GENERAL");
-            body.append("Mode: ").append("DASHER".equals(tripMode) ? "Dasher Delivery" : "General Driving").append("\n\n");
-
-            JSONObject offerSnapshot = summary.optJSONObject("offer_score_snapshot");
-            // Hoisted above offerSnapshot's own block, and above its usual
-            // "Where The Time Went" section below (driver backlog #8,
-            // docs/driver_backlog_2026_09_03/PRD.md), so the "Deadhead"
-            // line right below can show a time alongside the existing km
-            // figure, using the same JSONObject the phase breakdown itself
-            // reads later -- fetched once, not twice.
-            JSONObject phaseBreakdown = summary.optJSONObject("phase_breakdown");
-            if (offerSnapshot != null) {
-                body.append("--- Original Offer Assessment ---\n");
-                body.append(offerSnapshot.optString("verdict_sentence", "")).append("\n\n");
-                body.append(String.format("Smart Score: %.0f/100 - %s\n",
-                        offerSnapshot.optDouble("final_score", 0), offerSnapshot.optString("label", "")));
-                body.append(String.format("$/km: $%.2f   $/hr: $%.2f\n",
-                        offerSnapshot.optDouble("base_rate_per_km", 0), offerSnapshot.optDouble("hourly_rate", 0)));
-                // Deadhead TIME added alongside the existing km figure
-                // (driver backlog #8). Reuses phase_breakdown's own
-                // "driving_to_pickup_seconds" -- for the single/first-job
-                // scope phase_breakdown already documents (see its own
-                // Python-side comment), driving-to-pickup time IS the
-                // deadhead leg's time, not a separately-tracked value; not
-                // shown for a job phase_breakdown couldn't capture (no
-                // pickup this trip, or an older trip predating it).
-                String deadheadTimeSuffix = (phaseBreakdown != null
-                        && !phaseBreakdown.isNull("driving_to_pickup_seconds"))
-                        ? " (" + formatMinutesSeconds(phaseBreakdown.optDouble("driving_to_pickup_seconds", 0)) + ")"
-                        : "";
-                body.append(String.format("Deadhead: %.1f km%s\n", offerSnapshot.optDouble("deadhead_km", 0), deadheadTimeSuffix));
-                body.append(String.format("Pickup wait: %.0f min\n", offerSnapshot.optDouble("restaurant_wait_minutes", 0)));
-                // Raw ratio added alongside the existing High/Low label
-                // (driver backlog #14) -- only ever present when
-                // traffic_risk_source was "live" (a real Google Maps
-                // Distance Matrix result), since that's the only source
-                // with an actual ratio behind it; the zone/personal/
-                // generic sources are binary flags with nothing numeric
-                // to show, so this is correctly omitted for those rather
-                // than showing a fabricated number.
-                String trafficRatioSuffix = offerSnapshot.isNull("traffic_ratio") ? ""
-                        : String.format(" (%.0f%% of typical)", offerSnapshot.optDouble("traffic_ratio", 1.0) * 100.0);
-                body.append("Traffic: ").append(offerSnapshot.optString("traffic_risk", ""))
-                        .append(trafficRatioSuffix).append("\n");
-                body.append("Weather: ").append(offerSnapshot.optString("weather", "")).append("\n\n");
-            }
-
-            // Real street address for the pickup, not just the restaurant
-            // name -- previously never captured or shown anywhere.
-            String pickupAddress = summary.optString("pickup_address", "");
-            if (!pickupAddress.isEmpty()) {
-                body.append("Pickup address: ").append(pickupAddress).append("\n\n");
-            }
-
-            // Phase-by-phase timing breakdown: where did the time
-            // actually go for THIS delivery, not just a learned average.
-            // Any phase not captured (no walking detected, no pickup this
-            // trip, or an older trip from before this existed) is simply
-            // omitted rather than guessed at. (phaseBreakdown itself is
-            // fetched above, before offerSnapshot's own block -- see that
-            // declaration's comment.)
-            if (phaseBreakdown != null && phaseBreakdown.length() > 0) {
-                body.append("--- Where The Time Went ---\n");
-                // Driver backlog #26 follow-up (2026-09-03, docs/driver_
-                // backlog_2026_09_03/PRD.md): driver said some of these
-                // numbers don't look accurate. A real, already-documented
-                // reason this can happen for a stacked/batch order (2+
-                // jobs in one trip) is a known limitation, not fixed here:
-                // docs/deadhead_stacked_order_baseline/PRD.md Part 2B --
-                // pickup/dropoff phase timestamps can mix data from
-                // different jobs for that case, and the real fix is
-                // explicitly blocked pending a real stacked-order dropoff
-                // screenshot. job_count (from the same summary JSON) lets
-                // this screen warn honestly rather than presenting a
-                // possibly-mixed number as if it were reliable.
-                int jobCount = summary.optInt("job_count", 0);
-                if (jobCount > 1) {
-                    body.append("⚠️ This trip had ").append(jobCount)
-                            .append(" stacked orders -- the breakdown below may mix timestamps "
-                                    + "from different jobs (known limitation, not yet fixed).\n");
-                }
-                if (!phaseBreakdown.isNull("driving_to_pickup_seconds")) {
-                    body.append(String.format("Driving to pickup: %s\n",
-                            formatMinutesSeconds(phaseBreakdown.optDouble("driving_to_pickup_seconds", 0))));
-                }
-                if (!phaseBreakdown.isNull("wait_at_restaurant_seconds")) {
-                    // Wait-time RATING added alongside the duration (driver
-                    // backlog #8) -- feedback_merchant_wait was already
-                    // returned in this same summary JSON
-                    // (drive_monitor.py's get_trip_summary), just never
-                    // surfaced in this view before.
-                    String waitRating = summary.optString("feedback_merchant_wait", "");
-                    String waitRatingSuffix = waitRating.isEmpty() ? "" : " (rated: " + waitRating + ")";
-                    body.append(String.format("Waiting at restaurant: %s%s\n",
-                            formatMinutesSeconds(phaseBreakdown.optDouble("wait_at_restaurant_seconds", 0)),
-                            waitRatingSuffix));
-                }
-                // docs/store_wait_timer/PRD.md -- a driver-button-driven
-                // measured duration (tapping Dasher's own "Arrived at
-                // Store" then "Confirm Pickup"), deliberately separate
-                // from "Waiting at restaurant" just above (GPS-geofence-
-                // based). Top-level summary field, not inside
-                // phaseBreakdown -- omitted entirely (not shown as "0m
-                // 0s") for every trip before this shipped, or one where
-                // the driver's taps weren't detected.
-                if (!summary.isNull("store_wait_over_grace_seconds")) {
-                    body.append(String.format("Store wait beyond 1 min (measured): %s\n",
-                            formatMinutesSeconds(summary.optDouble("store_wait_over_grace_seconds", 0))));
-                }
-                if (!phaseBreakdown.isNull("driving_to_dropoff_seconds")) {
-                    body.append(String.format("Driving to dropoff: %s\n",
-                            formatMinutesSeconds(phaseBreakdown.optDouble("driving_to_dropoff_seconds", 0))));
-                }
-                if (!phaseBreakdown.isNull("parking_to_walking_seconds")) {
-                    body.append(String.format("Parking to walking: %s\n",
-                            formatMinutesSeconds(phaseBreakdown.optDouble("parking_to_walking_seconds", 0))));
-                }
-                if (!phaseBreakdown.isNull("completing_dropoff_seconds")) {
-                    body.append(String.format("Completing dropoff: %s\n",
-                            formatMinutesSeconds(phaseBreakdown.optDouble("completing_dropoff_seconds", 0))));
-                }
-                body.append("\n");
-
-                // Raw clock times behind the durations above (driver
-                // backlog #26 follow-up) -- lets an inaccurate-looking
-                // duration actually be diagnosed ("wait was 45 min" is
-                // hard to sanity-check; "arrived 2:03pm, left 2:48pm"
-                // isn't). Only real, captured timestamps are shown -- a
-                // key simply isn't present in phase_timestamps if that
-                // moment was never captured (see Python-side comment).
-                JSONObject phaseTimestamps = summary.optJSONObject("phase_timestamps");
-                if (phaseTimestamps != null && phaseTimestamps.length() > 0) {
-                    java.text.SimpleDateFormat clockFormat =
-                            new java.text.SimpleDateFormat("h:mm:ss a", java.util.Locale.getDefault());
-                    body.append("Full time detail:\n");
-                    String[][] clockLabels = {
-                            {"trip_start_ts", "Trip started"},
-                            {"pickup_arrival_ts", "Arrived at pickup"},
-                            {"pickup_departure_ts", "Left pickup"},
-                            {"dropoff_arrival_ts", "Arrived at dropoff"},
-                            {"walking_confirmed_ts", "Walking confirmed"},
-                            {"trip_end_ts", "Trip ended"},
-                    };
-                    for (String[] entry : clockLabels) {
-                        if (!phaseTimestamps.isNull(entry[0])) {
-                            long tsMs = (long) (phaseTimestamps.optDouble(entry[0], 0) * 1000);
-                            body.append("   ").append(entry[1]).append(": ")
-                                    .append(clockFormat.format(new java.util.Date(tsMs))).append("\n");
-                        }
-                    }
-                    body.append("\n");
-                }
-
-                // Same phases as a share of this trip's total elapsed time
-                // (end_time - start_time) -- shows which phase actually ate
-                // the shift, not just its raw duration. Omitted entirely,
-                // not guessed, if the total itself isn't available (older
-                // trip missing either timestamp) -- same "omit rather than
-                // guess" rule as the phase breakdown above.
-                double totalTripSeconds = summary.optDouble("end_time", 0) - summary.optDouble("start_time", 0);
-                if (totalTripSeconds > 0) {
-                    body.append("As % of total trip time:\n");
-                    if (!phaseBreakdown.isNull("driving_to_pickup_seconds")) {
-                        body.append(String.format("Driving to pickup: %s\n",
-                                formatPercentOfTotal(phaseBreakdown.optDouble("driving_to_pickup_seconds", 0), totalTripSeconds)));
-                    }
-                    if (!phaseBreakdown.isNull("wait_at_restaurant_seconds")) {
-                        body.append(String.format("Waiting at restaurant: %s\n",
-                                formatPercentOfTotal(phaseBreakdown.optDouble("wait_at_restaurant_seconds", 0), totalTripSeconds)));
-                    }
-                    if (!phaseBreakdown.isNull("driving_to_dropoff_seconds")) {
-                        body.append(String.format("Driving to dropoff: %s\n",
-                                formatPercentOfTotal(phaseBreakdown.optDouble("driving_to_dropoff_seconds", 0), totalTripSeconds)));
-                    }
-                    if (!phaseBreakdown.isNull("parking_to_walking_seconds")) {
-                        body.append(String.format("Parking to walking: %s\n",
-                                formatPercentOfTotal(phaseBreakdown.optDouble("parking_to_walking_seconds", 0), totalTripSeconds)));
-                    }
-                    if (!phaseBreakdown.isNull("completing_dropoff_seconds")) {
-                        body.append(String.format("Completing dropoff: %s\n",
-                                formatPercentOfTotal(phaseBreakdown.optDouble("completing_dropoff_seconds", 0), totalTripSeconds)));
-                    }
-                    body.append("\n");
-                }
-            }
-            JSONObject deadlineComparison = summary.optJSONObject("deadline_comparison");
-            if (deadlineComparison != null) {
-                boolean wasLate = deadlineComparison.optBoolean("was_late", false);
-                double diffSeconds = Math.abs(deadlineComparison.optDouble("seconds_relative_to_deadline", 0));
-                body.append(String.format("Deadline was %s -- %s by %s\n\n",
-                        deadlineComparison.optString("deadline_text", ""),
-                        wasLate ? "LATE" : "on time, with", formatMinutesSeconds(diffSeconds)));
-            }
-
-            body.append(String.format("Distance: %.2f km\n", summary.optDouble("distance_km", 0)));
-            body.append(String.format("Time efficiency: %.0f%%\n", summary.optDouble("time_efficiency_score", 0)));
-            body.append(String.format("Safety score: %.0f%%\n", summary.optDouble("safety_score", 0)));
-            body.append(String.format("Stops completed: %.0f%%\n", summary.optDouble("geofence_hit_ratio", 0)));
-            body.append(String.format("Overall score: %.0f%%\n", summary.optDouble("composite_score", 0)));
-            body.append(String.format("Est. fuel cost: $%.2f\n\n", summary.optDouble("fuel_cost_estimate", 0)));
-
-            // Safety events (harsh braking/acceleration, speeding) and major
-            // delays were already being recorded into the database every
-            // trip -- feeding into the safety score -- but were never shown
-            // anywhere until now.
-            JSONObject eventCounts = summary.optJSONObject("event_counts");
-            if (eventCounts != null && eventCounts.length() > 0) {
-                body.append("Safety events:\n");
-                java.util.Iterator<String> keys = eventCounts.keys();
-                while (keys.hasNext()) {
-                    String eventType = keys.next();
-                    int count = eventCounts.optInt(eventType, 0);
-                    body.append("\u2022 ").append(friendlyEventTypeLabel(eventType))
-                            .append(": ").append(count).append("\n");
-                }
-                body.append("\n");
-            }
-            int delayCount = summary.optInt("delay_count", 0);
-            if (delayCount > 0) {
-                int totalDelaySeconds = summary.optInt("total_delay_seconds", 0);
-                body.append(String.format("Major delays: %d (%d min total)\n\n",
-                        delayCount, totalDelaySeconds / 60));
-            }
-
-            JSONArray stops = summary.optJSONArray("stops");
-            if (stops != null && stops.length() > 0) {
-                body.append("Stops:\n");
-                for (int i = 0; i < stops.length(); i++) {
-                    JSONObject stop = stops.optJSONObject(i);
-                    if (stop != null) {
-                        String address = stop.optString("address", "(no address)");
-                        boolean matched = stop.optBoolean("matched", false);
-                        body.append("\u2022 ").append(address)
-                                .append(matched ? " -- reached" : " -- not reached")
-                                .append("\n");
-                    }
-                }
-                body.append("\n");
-            }
-
-            JSONArray instructions = summary.optJSONArray("instructions");
-            if (instructions != null && instructions.length() > 0) {
-                body.append("Customer instructions during this trip:\n");
-                for (int i = 0; i < instructions.length(); i++) {
-                    JSONObject instr = instructions.optJSONObject(i);
-                    if (instr != null) {
-                        body.append("\u2022 ").append(VoiceAnnouncer.friendlyCategoryLabel(
-                                instr.optString("extracted", ""))).append("\n");
-                    }
-                }
-            } else {
-                body.append("No customer instructions were captured this trip.");
-            }
-
-            Integer feedbackRating = summary.isNull("feedback_rating") ? null : summary.optInt("feedback_rating");
-            if (feedbackRating != null) {
-                body.append("\n\nYour rating: ").append(feedbackRating).append("/5");
-                String feedbackNotes = summary.optString("feedback_notes", "");
-                if (!feedbackNotes.isEmpty()) {
-                    body.append(" -- \"").append(feedbackNotes).append("\"");
-                }
-            }
-
-            return body;
-        }
-
-    /** Formats a raw seconds value as a human-readable "Xm Ys" or "Ys" string for the phase breakdown. */
-        private String formatMinutesSeconds(double totalSeconds) {
-            int rounded = (int) Math.round(Math.abs(totalSeconds));
-            int minutes = rounded / 60;
-            int seconds = rounded % 60;
-            return minutes > 0 ? minutes + "m " + seconds + "s" : seconds + "s";
-        }
-
-    /** Formats a phase duration as a rounded percentage of the trip's total elapsed time, for the "As % of total trip time" section. */
-        private String formatPercentOfTotal(double phaseSeconds, double totalSeconds) {
-            long pct = Math.round((phaseSeconds / totalSeconds) * 100);
-            return pct + "%";
-        }
-
-    /** Maps raw event_type strings from the events table to readable labels. */
-        private String friendlyEventTypeLabel(String eventType) {
-            switch (eventType) {
-                case "harsh_brake":
-                    return "Harsh braking";
-                case "harsh_accel":
-                    return "Harsh acceleration";
-                case "speeding":
-                    return "Speeding";
-                default:
-                    return eventType;
-            }
-        }
 }

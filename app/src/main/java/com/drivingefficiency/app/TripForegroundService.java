@@ -1055,13 +1055,19 @@ public class TripForegroundService extends Service {
      * AppNotificationListenerService.launchDasherApp()'s proven
      * Background Activity Launch (BAL) workaround -- a background Service
      * genuinely can't show the feedback AlertDialog itself, but it CAN
-     * reliably bring MainActivity to the foreground (which already shows
-     * that dialog automatically via auto_show_feedback_trip_id, see
-     * MainActivity.onCreate), the same way launchDasherApp already does
-     * for a new offer. Reasonable to auto-launch here, unlike an offer
-     * arriving mid-drive: this only fires once a delivery is actually
-     * marked complete, which requires the driver to already be
-     * interacting with their phone.
+     * reliably bring an Activity to the foreground, the same way
+     * launchDasherApp already does for a new offer. Reasonable to
+     * auto-launch here, unlike an offer arriving mid-drive: this only
+     * fires once a delivery is actually marked complete, which requires
+     * the driver to already be interacting with their phone.
+     *
+     * Retargeted (docs/trip_history_redesign/PRD.md ss3.4, driver's own
+     * correction): previously brought MainActivity straight to the
+     * feedback dialog via auto_show_feedback_trip_id, with no trip
+     * summary ever shown. Now brings TripDetailActivity to the
+     * foreground instead -- the driver's actual "what just happened"
+     * moment -- whose "Rate This Delivery" button relaunches
+     * MainActivity with that same extra afterward.
      */
     private void notifyRateThisDelivery() {
         try {
@@ -1088,8 +1094,18 @@ public class TripForegroundService extends Service {
                 return;
             }
 
-            Intent intent = new Intent(this, MainActivity.class);
-            intent.putExtra("auto_show_feedback_trip_id", tripId);
+            // docs/trip_history_redesign/PRD.md ss3.4 -- previously
+            // targeted MainActivity directly with auto_show_feedback_
+            // trip_id, which jumped straight to the star-rating dialog
+            // with no trip summary ever shown. Now opens TripDetailActivity
+            // first (the actual full detail screen), whose "Rate This
+            // Delivery" button relaunches MainActivity with that same
+            // extra afterward -- everything below this (the BAL-exemption
+            // overlay/direct-launch/full-screen-intent fallback chain) is
+            // otherwise UNCHANGED, only the target class differs.
+            Intent intent = new Intent(this, TripDetailActivity.class);
+            intent.putExtra(TripDetailActivity.EXTRA_TRIP_ID, tripId);
+            intent.putExtra(TripDetailActivity.EXTRA_PROMPT_FEEDBACK_ON_CLOSE, true);
             intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
 
             // Same BAL exemption launchDasherApp relies on: an app
@@ -1502,14 +1518,14 @@ public class TripForegroundService extends Service {
                 // only ever appeared if manually navigated to via Last
                 // Trip Summary. Fires on the same natural trip-end
                 // transition. A background service can't show a dialog
-                // directly, so this brings MainActivity to the foreground
-                // instead (docs/feedback_page_direct/PRD.md), which shows
-                // the actual (already-working) feedback dialog via its
-                // existing auto_show_feedback_trip_id handling. Stale
-                // comment fixed here too: this used to (incorrectly) say
-                // "opens TripHistoryActivity" -- notifyRateThisDelivery()
-                // has always actually targeted MainActivity (see its own
-                // comment for the real build-error history behind that).
+                // directly, so this brings TripDetailActivity to the
+                // foreground instead (docs/feedback_page_direct/PRD.md,
+                // retargeted from MainActivity by docs/
+                // trip_history_redesign/PRD.md ss3.4 -- see
+                // notifyRateThisDelivery()'s own updated comment), which
+                // shows the trip's full detail first, then the actual
+                // (already-working) feedback dialog if its "Rate This
+                // Delivery" button is tapped.
                 if ("TRIP_ACTIVE".equals(lastKnownTripState) && "IDLE".equals(tripState)) {
                     notifyRateThisDelivery();
                 }

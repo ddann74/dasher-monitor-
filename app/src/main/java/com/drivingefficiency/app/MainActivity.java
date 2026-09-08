@@ -55,12 +55,15 @@ public class MainActivity extends AppCompatActivity {
             VoiceAnnouncer.init(this);
             attemptTrustedContactsAutoRecovery();
 
-            // Opened via the "Rate this delivery" notification -- shows
-            // the existing, already-working feedback dialog immediately,
-            // rather than requiring the manual Last Trip Summary -> OK
-            // path. Fixed a real, confirmed build error here: this was
-            // originally (incorrectly) added to TripHistoryActivity,
-            // but showFeedbackDialog actually lives in MainActivity.
+            // Reached via TripDetailActivity's "Rate This Delivery"
+            // button (docs/trip_history_redesign/PRD.md ss3.4) -- shows
+            // the existing, already-working feedback dialog immediately.
+            // Previously reached directly from the "Rate this delivery"
+            // notification/BAL launch itself
+            // (TripForegroundService.notifyRateThisDelivery), before
+            // TripDetailActivity existed to show the trip's full detail
+            // first; this handling is kept, not deleted, since it's
+            // still the real entry point, just one hop later now.
             int autoShowFeedbackTripId = getIntent().getIntExtra("auto_show_feedback_trip_id", -1);
             if (autoShowFeedbackTripId >= 0) {
                 showFeedbackDialog(autoShowFeedbackTripId);
@@ -611,22 +614,25 @@ public class MainActivity extends AppCompatActivity {
         }
 
     /**
-         * Used specifically right after "Stop Monitoring" -- shows the trip
-         * summary, then (once dismissed) prompts for your own rating and
-         * optional notes on that trip. This is the actual data collection
-         * for eventually checking whether the Smart Score's predictions
-         * track what you consider a good delivery -- see
-         * save_trip_feedback()'s docstring for the honest scope note on what
-         * this does and doesn't do yet.
+         * Used specifically right after "Stop Monitoring" -- shows the last
+         * trip's detail via TripDetailActivity, for reference.
+         *
+         * docs/trip_history_redesign/PRD.md ss3.4 (revised during
+         * implementation, driver's own correction): this used to ALSO
+         * chain into showFeedbackDialog() on dismiss -- but "Stop
+         * Monitoring" can fire long after the actual last delivery
+         * completed, and by then a real Dasher trip was already prompted
+         * for feedback at the moment it actually finished
+         * (TripForegroundService.notifyRateThisDelivery(), which now
+         * launches TripDetailActivity directly with
+         * EXTRA_PROMPT_FEEDBACK_ON_CLOSE=true). Chaining feedback here
+         * too would risk a confusing double-prompt for the same trip --
+         * launched here WITHOUT that extra, pure viewing.
          */
         private void showLastTripSummaryThenPromptFeedback() {
             try {
                 JSONObject summary = new JSONObject(engine.callAttr("get_last_trip_summary").toString());
                 if (!summary.optBoolean("found", false)) {
-                    // showTripSummaryDialog() moved to TripHistoryActivity
-                    // along with the rest of the trip-browsing screen --
-                    // this simple "nothing to show" case is inlined here
-                    // directly rather than reaching across activities for it.
                     new AlertDialog.Builder(this)
                             .setTitle("Last Trip Summary")
                             .setMessage("No completed trips yet.")
@@ -634,20 +640,9 @@ public class MainActivity extends AppCompatActivity {
                             .show();
                     return;
                 }
-                int tripId = summary.optInt("trip_id", -1);
-                boolean isDasherTrip = "DASHER".equals(summary.optString("mode", ""));
-
-                StringBuilder body = buildTripSummaryBody(summary);
-
-                new AlertDialog.Builder(this)
-                        .setTitle("Last Trip Summary")
-                        .setMessage(body.toString())
-                        .setPositiveButton("OK", (dialog, which) -> {
-                            if (tripId >= 0 && isDasherTrip) {
-                                showFeedbackDialog(tripId);
-                            }
-                        })
-                        .show();
+                Intent intent = new Intent(this, TripDetailActivity.class);
+                intent.putExtra(TripDetailActivity.EXTRA_TRIP_ID, summary.optInt("trip_id", -1));
+                startActivity(intent);
             } catch (JSONException | PyException e) {
                 Toast.makeText(this, "Could not load trip summary.", Toast.LENGTH_LONG).show();
             }
@@ -671,10 +666,13 @@ public class MainActivity extends AppCompatActivity {
             // docs/feedback_dialog_phase_timings/PRD.md ss4A -- this dialog
             // is the one actually shown automatically right after a real
             // delivery (see auto_show_feedback_trip_id in onCreate), but it
-            // never showed any context about the trip itself, even though
-            // the exact same phase-by-phase breakdown already displays
-            // correctly in buildTripSummaryBody for the separate MANUAL
-            // "Last Trip Summary" flow. Uses get_trip_summary_by_id (not
+            // never showed any context about the trip itself. NOW REDUNDANT
+            // (docs/trip_history_redesign/PRD.md ss3.4, disclosed there,
+            // not fixed here): TripDetailActivity's own "Where The Time
+            // Went" card already shows this exact breakdown one screen
+            // earlier on this same flow -- left as a small, low-cost
+            // duplication rather than risk editing this method further.
+            // Uses get_trip_summary_by_id (not
             // get_last_trip_summary) since this dialog is always given a
             // specific tripId by its caller -- correct regardless of which
             // of the two real call sites invoked it. Degrades silently to
@@ -883,163 +881,18 @@ public class MainActivity extends AppCompatActivity {
             return row;
         }
 
-    /** Shared by showTripSummaryDialog() and showLastTripSummaryThenPromptFeedback(). */
-        private StringBuilder buildTripSummaryBody(JSONObject summary) {
-            StringBuilder body = new StringBuilder();
-            String tripMode = summary.optString("mode", "GENERAL");
-            body.append("Mode: ").append("DASHER".equals(tripMode) ? "Dasher Delivery" : "General Driving").append("\n\n");
-
-            JSONObject offerSnapshot = summary.optJSONObject("offer_score_snapshot");
-            if (offerSnapshot != null) {
-                body.append("--- Original Offer Assessment ---\n");
-                body.append(offerSnapshot.optString("verdict_sentence", "")).append("\n\n");
-                body.append(String.format("Smart Score: %.0f/100 - %s\n",
-                        offerSnapshot.optDouble("final_score", 0), offerSnapshot.optString("label", "")));
-                body.append(String.format("$/km: $%.2f   $/hr: $%.2f\n",
-                        offerSnapshot.optDouble("base_rate_per_km", 0), offerSnapshot.optDouble("hourly_rate", 0)));
-                body.append(String.format("Deadhead: %.1f km\n", offerSnapshot.optDouble("deadhead_km", 0)));
-                body.append(String.format("Pickup wait: %.0f min\n", offerSnapshot.optDouble("restaurant_wait_minutes", 0)));
-                body.append("Traffic: ").append(offerSnapshot.optString("traffic_risk", "")).append("\n");
-                body.append("Weather: ").append(offerSnapshot.optString("weather", "")).append("\n\n");
-            }
-
-            // Real street address for the pickup, not just the restaurant
-            // name -- previously never captured or shown anywhere.
-            String pickupAddress = summary.optString("pickup_address", "");
-            if (!pickupAddress.isEmpty()) {
-                body.append("Pickup address: ").append(pickupAddress).append("\n\n");
-            }
-
-            // Phase-by-phase timing breakdown: where did the time
-            // actually go for THIS delivery, not just a learned average.
-            // Any phase not captured (no walking detected, no pickup this
-            // trip, or an older trip from before this existed) is simply
-            // omitted rather than guessed at.
-            JSONObject phaseBreakdown = summary.optJSONObject("phase_breakdown");
-            if (phaseBreakdown != null && phaseBreakdown.length() > 0) {
-                body.append("--- Where The Time Went ---\n");
-                if (!phaseBreakdown.isNull("driving_to_pickup_seconds")) {
-                    body.append(String.format("Driving to pickup: %s\n",
-                            formatMinutesSeconds(phaseBreakdown.optDouble("driving_to_pickup_seconds", 0))));
-                }
-                if (!phaseBreakdown.isNull("wait_at_restaurant_seconds")) {
-                    body.append(String.format("Waiting at restaurant: %s\n",
-                            formatMinutesSeconds(phaseBreakdown.optDouble("wait_at_restaurant_seconds", 0))));
-                }
-                if (!phaseBreakdown.isNull("driving_to_dropoff_seconds")) {
-                    body.append(String.format("Driving to dropoff: %s\n",
-                            formatMinutesSeconds(phaseBreakdown.optDouble("driving_to_dropoff_seconds", 0))));
-                }
-                if (!phaseBreakdown.isNull("parking_to_walking_seconds")) {
-                    body.append(String.format("Parking to walking: %s\n",
-                            formatMinutesSeconds(phaseBreakdown.optDouble("parking_to_walking_seconds", 0))));
-                }
-                if (!phaseBreakdown.isNull("completing_dropoff_seconds")) {
-                    body.append(String.format("Completing dropoff: %s\n",
-                            formatMinutesSeconds(phaseBreakdown.optDouble("completing_dropoff_seconds", 0))));
-                }
-                body.append("\n");
-            }
-            JSONObject deadlineComparison = summary.optJSONObject("deadline_comparison");
-            if (deadlineComparison != null) {
-                boolean wasLate = deadlineComparison.optBoolean("was_late", false);
-                double diffSeconds = Math.abs(deadlineComparison.optDouble("seconds_relative_to_deadline", 0));
-                body.append(String.format("Deadline was %s -- %s by %s\n\n",
-                        deadlineComparison.optString("deadline_text", ""),
-                        wasLate ? "LATE" : "on time, with", formatMinutesSeconds(diffSeconds)));
-            }
-
-            body.append(String.format("Distance: %.2f km\n", summary.optDouble("distance_km", 0)));
-            body.append(String.format("Time efficiency: %.0f%%\n", summary.optDouble("time_efficiency_score", 0)));
-            body.append(String.format("Safety score: %.0f%%\n", summary.optDouble("safety_score", 0)));
-            body.append(String.format("Stops completed: %.0f%%\n", summary.optDouble("geofence_hit_ratio", 0)));
-            body.append(String.format("Overall score: %.0f%%\n", summary.optDouble("composite_score", 0)));
-            body.append(String.format("Est. fuel cost: $%.2f\n\n", summary.optDouble("fuel_cost_estimate", 0)));
-
-            // Safety events (harsh braking/acceleration, speeding) and major
-            // delays were already being recorded into the database every
-            // trip -- feeding into the safety score -- but were never shown
-            // anywhere until now.
-            JSONObject eventCounts = summary.optJSONObject("event_counts");
-            if (eventCounts != null && eventCounts.length() > 0) {
-                body.append("Safety events:\n");
-                java.util.Iterator<String> keys = eventCounts.keys();
-                while (keys.hasNext()) {
-                    String eventType = keys.next();
-                    int count = eventCounts.optInt(eventType, 0);
-                    body.append("\u2022 ").append(friendlyEventTypeLabel(eventType))
-                            .append(": ").append(count).append("\n");
-                }
-                body.append("\n");
-            }
-            int delayCount = summary.optInt("delay_count", 0);
-            if (delayCount > 0) {
-                int totalDelaySeconds = summary.optInt("total_delay_seconds", 0);
-                body.append(String.format("Major delays: %d (%d min total)\n\n",
-                        delayCount, totalDelaySeconds / 60));
-            }
-
-            JSONArray stops = summary.optJSONArray("stops");
-            if (stops != null && stops.length() > 0) {
-                body.append("Stops:\n");
-                for (int i = 0; i < stops.length(); i++) {
-                    JSONObject stop = stops.optJSONObject(i);
-                    if (stop != null) {
-                        String address = stop.optString("address", "(no address)");
-                        boolean matched = stop.optBoolean("matched", false);
-                        body.append("\u2022 ").append(address)
-                                .append(matched ? " -- reached" : " -- not reached")
-                                .append("\n");
-                    }
-                }
-                body.append("\n");
-            }
-
-            JSONArray instructions = summary.optJSONArray("instructions");
-            if (instructions != null && instructions.length() > 0) {
-                body.append("Customer instructions during this trip:\n");
-                for (int i = 0; i < instructions.length(); i++) {
-                    JSONObject instr = instructions.optJSONObject(i);
-                    if (instr != null) {
-                        body.append("\u2022 ").append(VoiceAnnouncer.friendlyCategoryLabel(
-                                instr.optString("extracted", ""))).append("\n");
-                    }
-                }
-            } else {
-                body.append("No customer instructions were captured this trip.");
-            }
-
-            Integer feedbackRating = summary.isNull("feedback_rating") ? null : summary.optInt("feedback_rating");
-            if (feedbackRating != null) {
-                body.append("\n\nYour rating: ").append(feedbackRating).append("/5");
-                String feedbackNotes = summary.optString("feedback_notes", "");
-                if (!feedbackNotes.isEmpty()) {
-                    body.append(" -- \"").append(feedbackNotes).append("\"");
-                }
-            }
-
-            return body;
-        }
-
-    /** Formats a raw seconds value as a human-readable "Xm Ys" or "Ys" string for the phase breakdown. */
-        private String formatMinutesSeconds(double totalSeconds) {
-            int rounded = (int) Math.round(Math.abs(totalSeconds));
-            int minutes = rounded / 60;
-            int seconds = rounded % 60;
-            return minutes > 0 ? minutes + "m " + seconds + "s" : seconds + "s";
-        }
-
-    /** Maps raw event_type strings from the events table to readable labels. */
-        private String friendlyEventTypeLabel(String eventType) {
-            switch (eventType) {
-                case "harsh_brake":
-                    return "Harsh braking";
-                case "harsh_accel":
-                    return "Harsh acceleration";
-                case "speeding":
-                    return "Speeding";
-                default:
-                    return eventType;
-            }
-        }
+    /**
+     * Real CI failure fixed here (PR #38): this is still used by
+     * showFeedbackDialog()'s own embedded "where the time went" recap
+     * (see that method's own doc -- now redundant with TripDetailActivity's
+     * card but deliberately left untouched, per docs/trip_history_redesign/
+     * PROGRESS.md) -- deleting it alongside buildTripSummaryBody() was
+     * wrong; that method was never its only caller in this file.
+     */
+    private String formatMinutesSeconds(double totalSeconds) {
+        int rounded = (int) Math.round(Math.abs(totalSeconds));
+        int minutes = rounded / 60;
+        int seconds = rounded % 60;
+        return minutes > 0 ? minutes + "m " + seconds + "s" : seconds + "s";
+    }
 }
