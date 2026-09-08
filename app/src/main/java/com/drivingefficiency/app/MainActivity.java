@@ -166,7 +166,45 @@ public class MainActivity extends AppCompatActivity {
                     startActivity(new Intent(this, TutorialActivity.class)));
 
             updateStatusText();
+            maybeShowOemAutostartNudge();
         }
+
+    /**
+     * Real gap, confirmed by two separate real diagnostic logs (823
+     * accessibility reconnects in one 2.5-day session; 17 app crashes in
+     * another, both root-caused to OPPO/ColorOS aggressive background
+     * management): PermissionsActivity's existing OEM guidance dialog
+     * (docs/watchdog_reliability/PRD.md's own §1 finding 6) only ever
+     * fires REACTIVELY -- when accessibility happens to already be off
+     * AND the driver happens to visit that screen. A driver who hasn't
+     * had it revoked yet this session gets no warning at all before the
+     * first blackout, even on a phone this app already knows (via
+     * OemBackgroundHelper.isKnownAggressiveOem()) is a documented
+     * offender. Shown once ever (not on every launch) via a SharedPreferences
+     * flag, right here at the app's one guaranteed entry point, so a
+     * known-aggressive-OEM driver is prompted to fix autostart/protected-
+     * apps settings BEFORE relying on monitoring for a real shift, not
+     * only after it's already failed once.
+     *
+     * Reuses the exact same dialog PermissionsActivity's button already
+     * shows (OemBackgroundHelper.showAutostartGuidanceDialog) -- same
+     * honest limitation as that existing mitigation: this cannot confirm
+     * the driver actually completes the OEM-side toggle (no cross-vendor
+     * query API exists), and does not itself prevent an OS/OEM kill; it
+     * only gets the existing, already-correct guidance in front of the
+     * driver earlier.
+     */
+    private void maybeShowOemAutostartNudge() {
+        if (!OemBackgroundHelper.isKnownAggressiveOem()) {
+            return;
+        }
+        android.content.SharedPreferences prefs = getSharedPreferences("dasher_monitor_prefs", MODE_PRIVATE);
+        if (prefs.getBoolean("oem_autostart_nudge_shown", false)) {
+            return;
+        }
+        prefs.edit().putBoolean("oem_autostart_nudge_shown", true).apply();
+        OemBackgroundHelper.showAutostartGuidanceDialog(this);
+    }
 
     @Override
     protected void onResume() {

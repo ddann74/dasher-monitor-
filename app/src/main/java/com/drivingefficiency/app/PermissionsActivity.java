@@ -551,19 +551,7 @@ public class PermissionsActivity extends AppCompatActivity {
      * that doesn't mention the OEM-specific gate at all.
      */
     private void showOemBackgroundGuidance() {
-        new AlertDialog.Builder(this)
-                .setTitle(OemBackgroundHelper.displayName() + " Device Detected")
-                .setMessage(OemBackgroundHelper.guidanceText())
-                .setPositiveButton("Open Settings", (dialog, which) -> {
-                    boolean openedOemScreen = OemBackgroundHelper.openAutostartSettings(this);
-                    if (!openedOemScreen) {
-                        Toast.makeText(this, "Couldn't find the dedicated settings screen on this "
-                                + "device/OS version -- opened the app's general settings instead.",
-                                Toast.LENGTH_LONG).show();
-                    }
-                })
-                .setNegativeButton("Not Now", null)
-                .show();
+        OemBackgroundHelper.showAutostartGuidanceDialog(this);
     }
 
     /**
