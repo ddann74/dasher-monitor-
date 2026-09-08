@@ -1,23 +1,42 @@
-# PRD: Trip History detail redesign (replace the text-dump dialog with real views)
+# PRD: Trip History redesign (replace the text-dump dialog with real views)
 
-Status: SCOPED, not implemented -- driver asked to scope this into a
-PRD, per this repo's usual convention for a genuinely new subsystem
-(same "large item" treatment as `location_profitability_map` and
-`tutorial_mode` from `docs/driver_backlog_2026_09_03/PRD.md` §6 got).
-Not started without driver confirmation on §5's open questions -- same
-guardrail those two PRDs followed.
+Status: SCOPED, not implemented -- driver answered 2 of the 3 original
+open questions directly (§5), and corrected a real, mistaken assumption
+in this PRD's first draft about WHEN the feedback prompt should chain
+in (§3.4, rewritten below). One open question remains (§5 #2) before
+implementation starts, same "large item, scope first" discipline this
+repo used for the location profitability map and tutorial mode.
 
 ## 0. Origin
 
 Driver asked to see a mockup of "the layout for all the data collected
 in trip and history." First pass used an unrelated dark/cyan visual
 identity and an invented display typeface -- driver said it "looks
-nothing like mine" and asked for it to be identical. Corrected against
-this app's REAL theme resources (`res/values/colors.xml`,
-`themes.xml`'s `Theme.DasherMonitor.TripHistory`, and the real
-`OverlayHelper` Smart Score palette) rather than guessed at a second
-time -- see the mockup artifact for the corrected version. Driver then
-asked to scope the actual redesign (not just the mockup) into a PRD.
+nothing like mine," corrected against the app's REAL theme resources
+(`Theme.DasherMonitor.TripHistory`: teal, light-teal background, real
+`values-night` dark variants -- see the mockup artifact). Driver then
+asked to scope the real redesign into a PRD.
+
+First PRD draft asked 3 open questions. Driver answered:
+1. **Major delays** -> fold into the Trip Stats card (matches this
+   PRD's own recommendation). Resolved, see §3.2.
+2. **Done button vs. back gesture for the feedback-chaining trigger**
+   -- NOT yet answered; still open, see §5.
+3. **Redesign the trip picker too?** -> "design it" -- yes, now IN
+   scope. See §3.5 (new).
+
+Driver also corrected a real mistake in the first draft's design: §3.4
+originally chained the feedback prompt to the "Stop Monitoring" flow
+(`MainActivity.showLastTripSummaryThenPromptFeedback()`), because that
+was the only chained summary-then-feedback call site this PRD's
+investigation had traced. Driver's correction: "it should come up
+after i press complete delivery not stop monitoring." Re-investigated
+(§1) and found the ACTUAL "delivery completed" trigger is a separate,
+pre-existing mechanism (`TripForegroundService.notifyRateThisDelivery()`)
+that today skips any summary entirely and jumps straight to the star-
+rating dialog -- a real, different integration point than the one
+originally designed against. §3.4 below is rewritten around the
+correct trigger.
 
 ## 1. Investigation
 
@@ -25,117 +44,123 @@ asked to scope the actual redesign (not just the mockup) into a PRD.
   plain-text string shown in a single `AlertDialog.setMessage()` --
   is duplicated, nearly verbatim, in BOTH `TripHistoryActivity.java`
   (line 943) and `MainActivity.java` (line 887). Not previously
-  flagged anywhere in this repo's docs. A real, confirmed instance of
-  the "kept in sync manually" drift risk this codebase has hit before
-  (e.g. the Smart Score color duplication fixed in `docs/
-  smart_score_quartile_colors/PRD.md`).
+  flagged anywhere in this repo's docs.
 - `com.google.android.material:material:1.12.0` is ALREADY a Gradle
-  dependency (`app/build.gradle`) -- `MaterialCardView` is available
-  with ZERO new dependency. Confirmed via `build.gradle`'s real
-  `dependencies` block.
-- No `RecyclerView` usage exists anywhere in this codebase today --
-  every list-like screen (`activity_trip_history.xml` included) uses
-  the same `ScrollView > LinearLayout` pattern with static children.
-  The detail screen's design below follows that SAME established
-  pattern (a `ScrollView` of stacked `MaterialCardView` sections) rather
-  than introducing `RecyclerView`, a real new dependency and a new
-  pattern this codebase doesn't otherwise use -- consistent with this
-  repo's own preference for reusing established patterns over adding
-  new ones without a stated need.
+  dependency -- `MaterialCardView` is available with ZERO new
+  dependency. No `RecyclerView` exists anywhere in this codebase today;
+  every list-like screen uses `ScrollView > LinearLayout` with static
+  children -- this PRD's designs (including the now-in-scope trip list,
+  §3.5) follow that same established pattern rather than introducing a
+  new one.
 - `Theme.DasherMonitor.TripHistory` (teal `#00897B` / `#00695C`, light
   tint `#E0F2F1`, real `values-night` dark variants) already exists and
-  is already applied to `TripHistoryActivity` in the manifest -- the
-  new Activity this PRD adds reuses this exact theme, not a new one.
-- **The one real integration hazard, found by tracing every call site**:
-  `MainActivity.showLastTripSummaryThenPromptFeedback()` (fired right
-  after "Stop Monitoring") shows the trip summary, and its `AlertDialog`
-  `setPositiveButton("OK", ...)` callback THEN calls `showFeedbackDialog
-  (tripId)` -- but only if `tripId >= 0 && isDasherTrip`. Replacing the
-  `AlertDialog` with a separate Activity means this sequencing (summary
-  dismissed -> feedback dialog appears) has to be re-threaded
-  deliberately; see §3.4. This is the one piece of this redesign that
-  is NOT simply "move the same text into cards" -- everything else is.
+  is already applied to `TripHistoryActivity` -- reused as-is, not
+  redesigned.
+- **There are TWO, not one, existing "show the trip summary" call
+  sites that matter here -- tracing both was necessary to place the
+  feedback-chaining logic correctly:**
+  1. `MainActivity.showLastTripSummaryThenPromptFeedback()`, fired when
+     the driver taps "Stop Monitoring." Shows `get_last_trip_summary`
+     via `buildTripSummaryBody`, and its `AlertDialog` "OK" button THEN
+     calls `showFeedbackDialog(tripId)` -- but only if
+     `tripId >= 0 && isDasherTrip`. This is a **driver-initiated,
+     end-of-shift action** -- it can fire long after the actual last
+     delivery completed, and for a trip that (per the finding below)
+     may already have been rated.
+  2. `TripForegroundService.notifyRateThisDelivery()` (lines
+     1066-1162, `docs/feedback_page_direct/PRD.md`), fired automatically
+     the instant a real delivery completes (called from two places in
+     `TripForegroundService`: natural GPS-driven completion, and the
+     auto-pause-adjacent completion path). This is the ACTUAL "I just
+     finished a delivery" moment. Today it does NOT show any summary at
+     all -- it uses a Background-Activity-Launch workaround (an overlay
+     tap-through, or a full-screen-intent notification as fallback,
+     mirroring `AppNotificationListenerService.launchDasherApp()`'s
+     already-proven mechanism) to bring `MainActivity` to the
+     foreground with `auto_show_feedback_trip_id` set, which
+     `MainActivity.onCreate()` reads and calls `showFeedbackDialog()`
+     DIRECTLY -- no trip summary is ever shown on this path today.
+  Driver's correction (§0) means mechanism 2, not mechanism 1, is where
+  `TripDetailActivity` (and its feedback-chaining) belongs. See §3.4.
 
 ## 2. Definition of "functional"
 
-- [ ] Tapping a trip in the trip picker, or "Last Trip Summary," or the
-      auto-shown "Rate this delivery" flow, opens a real `TripDetail
-      Activity` (not an `AlertDialog`) themed with `Theme.DasherMonitor.
-      TripHistory` (teal app bar, light-teal background, matching every
-      other screen already using this theme).
+- [ ] Completing a real delivery (`notifyRateThisDelivery()`'s existing
+      trigger conditions, unchanged) opens `TripDetailActivity` --
+      themed `Theme.DasherMonitor.TripHistory` -- showing that trip's
+      full detail, with a clear primary action that then shows the
+      feedback dialog (exact mechanism per §5 #2's answer) before
+      returning to normal use.
+- [ ] "Stop Monitoring" still shows the last trip's detail via the same
+      `TripDetailActivity`, for reference -- but does NOT re-trigger the
+      feedback prompt (see §3.4's reasoning: that trip was already
+      prompted for at the moment it actually completed, or never
+      applies because it wasn't a Dasher trip).
+- [ ] Tapping a trip in the (now redesigned, §3.5) trip list also opens
+      `TripDetailActivity` for that trip, no feedback prompt.
 - [ ] Every field `buildTripSummaryBody()` currently renders is shown,
-      organized into the same card sections the corrected mockup
+      organized into the card sections the corrected mockup
       demonstrates: Original Offer Assessment, Pickup Address, Store
       Wait Timer (when present), Full Time Detail, Where The Time Went,
-      Deadline, Trip Stats, Safety Events, Stops, Customer Instructions,
-      Your Rating -- each card omitted entirely when its underlying data
-      is null/empty, same "omit rather than show empty" rule the text
-      version already follows.
+      Deadline, Trip Stats (now including Major Delays, per driver's
+      answer), Safety Events, Stops, Customer Instructions, Your Rating
+      -- each card omitted entirely when its underlying data is
+      null/empty.
 - [ ] The stacked-order warning (`job_count > 1`) still shows, in the
       Where The Time Went card.
-- [ ] The post-"Stop Monitoring" flow still prompts for feedback at the
-      right moment for a Dasher-mode trip, matching current behavior
-      exactly (see §3.4) -- not silently dropped or delayed to a
-      confusing moment.
-- [ ] The two existing `buildTripSummaryBody()` copies (`MainActivity`,
-      `TripHistoryActivity`) are deleted, not left as dead code --
-      both real call sites now launch the same `TripDetailActivity`
-      instead.
+- [ ] The trip picker (`showTripHistoryFiltered()`) becomes a real
+      `TripListActivity` screen -- filter chips (All/Dasher/General) +
+      a scrollable list of trip rows (date, distance, mode, composite
+      score, colored per the real Smart Score-adjacent teal accent) --
+      matching the corrected mockup's "01" panel, tapping a row opens
+      `TripDetailActivity`.
+- [ ] The three duplicated/scattered pieces this replaces are deleted,
+      not left as dead code: both `buildTripSummaryBody()` copies, and
+      `showTripHistoryFiltered()`'s `AlertDialog.setItems()` body.
 
 Non-goals (explicit):
-- The trip PICKER (`showTripHistoryFiltered()`'s plain `AlertDialog.
-  setItems()` list) is NOT redesigned here -- the corrected mockup
-  deliberately leaves it as-is, annotated "not part of the redesign."
-  It's a real, working, low-friction native picker; nothing evidenced
-  it needs replacing. A future PRD if the driver wants it.
 - The other five Trip History report dialogs (Rejected Offers Report,
   Pay Trend, Address Book, Weather vs. Pay, Restaurant Visit History)
-  are NOT touched -- each is its own separate `AlertDialog`, not part of
-  `buildTripSummaryBody()`, and none was flagged as a problem. A
-  separate PRD each, if ever wanted -- not assumed in scope here just
-  because the mockup's "more reports" strip showed them for context.
-- No new library (`RecyclerView`, a charting package, etc.) -- see §1's
-  own reasoning.
+  are NOT touched -- none was flagged as a problem, none was part of
+  the driver's "design it" answer (which was specifically about the
+  trip picker). A separate PRD each, if ever wanted.
+- No new library (`RecyclerView`, a charting package, etc.).
 - No change to what data is collected or how it's computed
-  (`drive_monitor.py` untouched) -- this is a presentation-layer
-  redesign only, moving already-correct data into real views.
+  (`drive_monitor.py` untouched) -- presentation-layer only.
+- `notifyRateThisDelivery()`'s own trigger conditions (DASHER mode
+  only, valid `trip_id`, the BAL-launch/overlay/full-screen-intent
+  fallback chain) are NOT changed -- only WHAT it launches changes
+  (`TripDetailActivity` instead of `MainActivity` going straight to the
+  feedback dialog).
 
 ## 3. Design
 
 ### 3.1 New files
 
 - `app/src/main/res/layout/activity_trip_detail.xml` -- `ScrollView >
-  LinearLayout` (vertical, matching `activity_trip_history.xml`'s own
-  established shape) containing one `MaterialCardView` per section from
-  §2, each with a fixed `android:id` per bound field (`view_offer_score`,
-  `view_offer_verdict`, etc.) so `TripDetailActivity` can bind by
-  `findViewById`, the same explicit style every other Activity in this
-  codebase already uses (no data-binding/view-binding library currently
-  in this project -- not introduced here either, consistent with §2's
-  "no new library" non-goal).
+  LinearLayout` of `MaterialCardView` sections (matching
+  `activity_trip_history.xml`'s established shape), one fixed
+  `android:id` per bound field.
 - `app/src/main/java/com/drivingefficiency/app/TripDetailActivity.java`
-  -- reads a required `trip_id` int extra, calls
-  `engine.callAttr("get_trip_summary_by_id", tripId)`, and populates
-  each card's views. Themed `Theme.DasherMonitor.TripHistory` in the
-  manifest, same as `TripHistoryActivity`.
+  -- reads a required `trip_id` int extra and an optional
+  `EXTRA_PROMPT_FEEDBACK_ON_CLOSE` boolean extra, calls
+  `get_trip_summary_by_id`, populates every card. Themed
+  `Theme.DasherMonitor.TripHistory`.
+- `app/src/main/res/layout/activity_trip_list.xml` +
+  `TripListActivity.java` -- see §3.5.
 
 ### 3.2 Card-by-card field mapping
-
-Directly transcribed from the CURRENT `buildTripSummaryBody()` (both
-copies are identical field-for-field, confirmed by diffing them), so
-this is a reorganization, not a redesign of what's shown:
 
 | Card | Source fields |
 |---|---|
 | Original Offer Assessment | `offer_score_snapshot.{verdict_sentence, final_score, label, base_rate_per_km, hourly_rate, deadhead_km, restaurant_wait_minutes, traffic_risk, traffic_ratio, weather}` + `phase_breakdown.driving_to_pickup_seconds` (deadhead time) |
 | Pickup Address | `pickup_address` |
-| Store Wait Timer | `store_wait_over_grace_seconds` (card omitted entirely when null -- most trips today, until the store-wait-timer feature accumulates real data) |
+| Store Wait Timer | `store_wait_over_grace_seconds` (card omitted when null) |
 | Full Time Detail | `phase_timestamps.*` |
-| Where The Time Went | `phase_breakdown.*` + `job_count` (stacked-order warning) + the "as % of total trip time" line already computed from `start_time`/`end_time` |
+| Where The Time Went | `phase_breakdown.*` + `job_count` (stacked-order warning) + "as % of total trip time" |
 | Deadline | `deadline_comparison.{deadline_text, was_late, seconds_relative_to_deadline}` |
-| Trip Stats | `distance_km, time_efficiency_score, safety_score, geofence_hit_ratio, composite_score, fuel_cost_estimate` |
+| Trip Stats | `distance_km, time_efficiency_score, safety_score, geofence_hit_ratio, composite_score, fuel_cost_estimate`, **plus** `delay_count, total_delay_seconds` (folded in here per driver's answer -- own row, "Major delays: N (M min)", omitted when `delay_count == 0`, not a separate card) |
 | Safety Events | `event_counts` |
-| Major delays | `delay_count, total_delay_seconds` (own small card or folded into Trip Stats -- open question, §5) |
 | Stops | `stops[]` |
 | Customer Instructions | `instructions[]` |
 | Your Rating | `feedback_rating, feedback_notes` |
@@ -143,132 +168,134 @@ this is a reorganization, not a redesign of what's shown:
 ### 3.3 Score label colors
 
 The score pill in Original Offer Assessment reuses `OverlayHelper.
-baseColorForScoreLabel(label)`/`isPoorScoreLabel(label)`/
-`stripedDrawable(...)` directly -- these are already public static
-methods built for exactly this purpose (`docs/
-smart_score_quartile_colors/PRD.md`), not reimplemented.
+baseColorForScoreLabel(label)` / `isPoorScoreLabel(label)` /
+`stripedDrawable(...)` directly -- not reimplemented.
 
-### 3.4 The feedback-chaining problem (§1's one real hazard)
+### 3.4 Feedback chaining -- corrected per driver's answer
 
-Recommended approach: `TripDetailActivity` gains an optional boolean
-extra, `EXTRA_PROMPT_FEEDBACK_ON_CLOSE`. A single primary action
-control at the bottom of the scroll content (a `MaterialButton`, "Done"
--- not relying on the toolbar back arrow, so there's one unambiguous
-moment this fires, matching the current `AlertDialog`'s single "OK"
-button exactly) does what the OK button's callback currently does:
-if the extra is true AND the trip's mode is DASHER, shows the existing
-feedback dialog (`showFeedbackDialog`'s logic, moved -- not copied a
-third time -- into `TripDetailActivity` or a small shared helper) before
-calling `finish()`.
-`MainActivity.showLastTripSummaryThenPromptFeedback()` becomes: fetch
-`get_last_trip_summary` (unchanged), then `startActivity` with
-`EXTRA_PROMPT_FEEDBACK_ON_CLOSE = true` instead of building an
-`AlertDialog`. `TripHistoryActivity`'s two call sites
-(`showTripSummaryById`, and the button behind "Last Trip Summary")
-launch the same Activity with the extra `false` (or omitted) -- browsing
-history should never surprise-prompt for feedback.
-The system back button/gesture still just closes the screen with no
-feedback prompt, matching how dismissing an `AlertDialog` by tapping
-outside it today also skips the OK-only callback -- consistent, not a
-regression.
+**The trigger is `TripForegroundService.notifyRateThisDelivery()`, not
+"Stop Monitoring."** That method's own existing gating (DASHER mode
+only, valid `trip_id`) is untouched -- only its TARGET changes:
+
+- The `Intent` it builds currently targets `MainActivity` with
+  `auto_show_feedback_trip_id`. Change the target to
+  `TripDetailActivity`, with `trip_id` and
+  `EXTRA_PROMPT_FEEDBACK_ON_CLOSE = true` set. The existing BAL
+  -exemption launch sequence (overlay-tap-through attempt, direct
+  `startActivity` attempt, full-screen-intent notification fallback) is
+  otherwise UNCHANGED -- this PRD only changes which Activity class
+  that already-proven mechanism opens.
+- `TripDetailActivity` shows the full trip detail (the driver's actual
+  "what just happened" moment -- this is now the primary screen a
+  driver sees right after completing a delivery, not a secondary
+  reference view). A primary action control (exact form per §5 #2)
+  triggers `showFeedbackDialog`-equivalent logic (moved into
+  `TripDetailActivity`, not copied a third time) only when
+  `EXTRA_PROMPT_FEEDBACK_ON_CLOSE` is true.
+- `MainActivity.showLastTripSummaryThenPromptFeedback()` (Stop
+  Monitoring) and `TripListActivity`'s row-tap (§3.5) both launch
+  `TripDetailActivity` WITHOUT `EXTRA_PROMPT_FEEDBACK_ON_CLOSE` (or
+  explicitly `false`) -- pure viewing. Reasoning: by the time either of
+  those fires, a real Dasher trip was either already prompted for via
+  `notifyRateThisDelivery()` at the moment it actually completed, or
+  never gets prompted at all (General mode) -- re-prompting from either
+  of these would risk a confusing double-prompt for the same trip.
+- `MainActivity.onCreate()`'s existing `auto_show_feedback_trip_id`
+  extra handling is deleted, not left as dead/unreachable code, once
+  `notifyRateThisDelivery()` no longer sends it.
+
+### 3.5 Trip list redesign (now in scope, driver said "design it")
+
+Replaces `showTripHistoryFiltered()`'s `AlertDialog.setItems()`.
+`TripListActivity` (themed `Theme.DasherMonitor.TripHistory`): the
+same `ScrollView > LinearLayout` pattern, filter chips (All Trips /
+Dasher Only / General Only -- same three options + same client-side
+filtering `showTripHistoryFiltered()` already does, just re-rendered
+as real `Chip`/`ToggleButton` views instead of a second `AlertDialog`),
+and one row per trip (date/time, distance, mode, composite score) --
+matching the corrected mockup's "01" panel. Tapping a row launches
+`TripDetailActivity` with that `trip_id`, no feedback extra (§3.4).
+`get_trip_history()` (Python, unchanged) already returns everything
+this needs -- no Python change for this piece either.
 
 ## 4. Premortem
 
-- **P1 -- the feedback-chaining re-thread (§3.4) is gotten wrong**,
-  either firing the feedback dialog when it shouldn't (browsing old
-  General-mode trips) or silently dropping it after Stop Monitoring
-  (the actual, currently-working case this whole flow exists for).
-  Mitigation: §3.4's design keeps the exact same two-condition gate
-  (`tripId >= 0 && isDasherTrip`) verbatim, just relocated -- and this
-  is flagged as the single highest-risk piece of the whole PRD, not
-  buried in the field-mapping table.
+- **P1 -- the feedback-chaining rework (§3.4) is gotten wrong a second
+  time.** This PRD already had to be corrected once on exactly this
+  point. Mitigation: §3.4 is now anchored to the real trigger
+  (`notifyRateThisDelivery()`), traced end-to-end including both of its
+  call sites in `TripForegroundService`, not assumed from one call site
+  alone. The ralph loop's own first move on this box should be
+  re-reading `notifyRateThisDelivery()` in full again, not trusting
+  this summary.
 - **P2 -- a field silently dropped during the reorg.** §3.2's table was
-  built by reading the CURRENT `buildTripSummaryBody()` field-by-field,
-  not from memory -- the ralph loop's own first checklist item (§6)
-  should be a literal side-by-side diff of the table against the
-  current method before writing any layout XML, to catch anything this
-  first pass missed.
-- **P3 -- MaterialCardView behaves differently than expected under
-  `Theme.AppCompat.DayNight`** (the app's actual theme parent, not
-  `Theme.MaterialComponents` -- `material:1.12.0` is a dependency, but
-  the THEME itself was never switched to a Material Components base).
-  Real, disclosed risk: some Material widgets assume a
-  `Theme.MaterialComponents.*` parent for their default styling and can
-  render with unexpected attributes (wrong corner radius, missing
-  elevation) under plain AppCompat. Needs an explicit style override on
-  the `MaterialCardView` (`app:cardCornerRadius`, `app:cardElevation`
-  set directly in the layout XML, not left to theme defaults) rather
-  than assumed to look right automatically -- called out explicitly so
-  the ralph loop doesn't skip it as "just works."
-- **P4 -- no Android SDK/emulator in this environment, same as every
-  other Java/XML PRD in this repo.** A layout this size (11+ cards) has
-  real, elevated risk of a subtle XML mistake (a missing `android:id`,
-  a card that doesn't actually render due to a `ScrollView` nesting
-  bug) that only code review can catch, not a build. Flagged, not
-  solved -- the ralph loop's own verification section should be
-  unusually thorough here (XML well-formedness checks via
-  `xml.etree.ElementTree`, and a manual trace of every `findViewById`
-  call against the layout's real ids) given the size.
-- **P5 -- scope creep into the picker or the other 5 report dialogs.**
-  §2's non-goals are explicit for a reason -- the ralph loop must not
-  "while I'm in here" touch either, even though they're visually
-  adjacent and use the same theme.
+  built by reading the CURRENT `buildTripSummaryBody()` field-by-field.
+  The ralph loop's first checklist item should re-diff it against the
+  live method before writing any layout XML.
+- **P3 -- MaterialCardView under `Theme.AppCompat.DayNight` (not a
+  `Theme.MaterialComponents.*` parent) can render with unexpected
+  defaults** (wrong corner radius, missing elevation). Needs explicit
+  `app:cardCornerRadius`/`app:cardElevation` on every card, not left to
+  theme defaults.
+- **P4 -- no Android SDK/emulator in this environment.** A change this
+  size (3 new files, 2 deleted methods, `TripForegroundService`'s
+  BAL-launch intent retargeted) has real risk of a subtle mistake only
+  a build/device could catch. Verification stays code review + XML
+  well-formedness + a manual `findViewById`-to-layout cross-check, same
+  disclosed limitation as every other Java/XML PRD here -- but flagged
+  as elevated risk for THIS PRD specifically given the BAL-launch retarget
+  (§3.4) is exactly the kind of Android-version/OEM-sensitive mechanism
+  this repo has been burned by before (`AppNotificationListenerService.
+  launchDasherApp`'s own class docs).
+- **P5 -- scope creep into the other 5 report dialogs.** Still
+  explicitly out of scope (§2) even though `TripListActivity` (§3.5)
+  makes them visually adjacent to more redesigned screens now than the
+  first draft had.
 
-## 5. Open questions (driver confirmation needed before implementation)
+## 5. Open questions
 
-1. **Major delays**: fold into the Trip Stats card, or its own small
-   card? No strong reason either way -- recommend folding into Trip
-   Stats (it's a single line today, doesn't warrant its own card), but
-   this is a real judgment call, not resolved here.
-2. **The "Done" button vs. relying on the toolbar back arrow** (§3.4):
-   recommended because it's the one unambiguous moment to hook the
-   feedback-prompt logic, matching the AlertDialog's single OK button.
-   Alternative: keep only the back arrow, and always show the feedback
-   prompt on `onPause()`/`finish()` when the extra is set, regardless
-   of how the screen was left (back gesture, system back button, or a
-   button) -- simpler in one sense, but fires on a swipe-back gesture
-   too, not just a deliberate tap the way OK currently requires. No
-   default assumed -- driver's call.
-3. Does the driver want this to also replace `TripHistoryActivity`'s
-   trip PICKER (§2 non-goal) as a follow-up once this ships, or leave
-   it as the plain `AlertDialog` list indefinitely? Not blocking this
-   PRD either way, but worth knowing before the ralph loop finishes, in
-   case a shared component (e.g. a reusable card style) would be worth
-   designing for both up front rather than only this screen.
+1. ~~Major delays: fold into Trip Stats or own card?~~ **RESOLVED --
+   fold into Trip Stats**, per driver's answer. See §3.2.
+2. **Still open**: the primary action in `TripDetailActivity` that
+   triggers the feedback dialog when `EXTRA_PROMPT_FEEDBACK_ON_CLOSE`
+   is true -- an explicit button (e.g. "Rate This Delivery" / "Done"),
+   or firing on `onPause()`/back-gesture regardless of how the screen
+   is left? Recommended: an explicit button, same reasoning as the
+   first draft (one unambiguous moment, matching how a stray back-swipe
+   shouldn't surprise-launch a rating dialog) -- now MORE relevant
+   since §3.4's correction makes this the primary post-delivery screen,
+   not a secondary one. Driver's call.
+3. ~~Redesign the trip picker too?~~ **RESOLVED -- yes.** See §3.5.
 
 ## 6. Success criteria (ralph-loop checklist)
 
-- [ ] §3.2's field-mapping table re-verified line-by-line against the
-      CURRENT `buildTripSummaryBody()` before any layout XML is written
-      (P2)
-- [ ] `activity_trip_detail.xml` created: `ScrollView > LinearLayout` of
-      `MaterialCardView` sections, `Theme.DasherMonitor.TripHistory`
-      applied, explicit `app:cardCornerRadius`/`app:cardElevation` set
-      (not left to theme defaults, per P3)
-- [ ] `TripDetailActivity.java` created: reads `trip_id` extra, calls
-      `get_trip_summary_by_id`, binds every field from §3.2's table,
-      each card hidden (not empty) when its data is null/absent
+- [ ] §3.2's field-mapping table re-verified against the CURRENT
+      `buildTripSummaryBody()` before any layout XML is written (P2)
+- [ ] `notifyRateThisDelivery()` re-read in full again before touching
+      its intent-building code (P1)
+- [ ] `activity_trip_detail.xml` + `TripDetailActivity.java` created
+      per §3.1/§3.2, `Theme.DasherMonitor.TripHistory` applied, explicit
+      `app:cardCornerRadius`/`app:cardElevation` on every card (P3)
 - [ ] Score pill reuses `OverlayHelper.baseColorForScoreLabel`/
-      `isPoorScoreLabel`/`stripedDrawable` directly -- not reimplemented
-- [ ] §3.4's feedback-chaining design implemented per the driver's
-      answer to open question #2 -- `EXTRA_PROMPT_FEEDBACK_ON_CLOSE`
-      gate matches the CURRENT `tripId >= 0 && isDasherTrip` condition
-      exactly
-- [ ] `MainActivity.showLastTripSummaryThenPromptFeedback()` and
-      `TripHistoryActivity`'s two call sites updated to launch
-      `TripDetailActivity` instead of building an `AlertDialog`
-- [ ] Both existing `buildTripSummaryBody()` copies deleted (not left
-      as dead code)
-- [ ] `AndroidManifest.xml`: `TripDetailActivity` declared with
-      `Theme.DasherMonitor.TripHistory`, parented under
-      `TripHistoryActivity`/`MainActivity` per Android's standard
-      up-navigation convention
-- [ ] XML well-formedness check (`xml.etree.ElementTree`) on the new
-      layout; every `findViewById` call in `TripDetailActivity`
-      cross-checked against a real id in the layout (P4)
-- [ ] Driver confirms on-device: every card shows the right data for a
-      real trip, the stacked-order warning still appears when expected,
-      and the post-Stop-Monitoring feedback prompt still fires at the
-      right moment for a Dasher trip (not General, not trip-history
-      browsing)
+      `isPoorScoreLabel`/`stripedDrawable` directly
+- [ ] §3.4 implemented per §5 #2's answer once given:
+      `notifyRateThisDelivery()`'s intent retargeted to
+      `TripDetailActivity` with `EXTRA_PROMPT_FEEDBACK_ON_CLOSE=true`;
+      `MainActivity.onCreate()`'s `auto_show_feedback_trip_id` handling
+      deleted
+- [ ] `MainActivity.showLastTripSummaryThenPromptFeedback()` updated to
+      launch `TripDetailActivity` WITHOUT the feedback extra
+- [ ] `activity_trip_list.xml` + `TripListActivity.java` created per
+      §3.5; `showTripHistoryFiltered()`'s `AlertDialog` body replaced
+      with a launch of this Activity
+- [ ] Both existing `buildTripSummaryBody()` copies deleted
+- [ ] `AndroidManifest.xml`: `TripDetailActivity` and `TripListActivity`
+      declared with `Theme.DasherMonitor.TripHistory`
+- [ ] XML well-formedness check on both new layouts; every
+      `findViewById` cross-checked against a real id (P4)
+- [ ] Driver confirms on-device: completing a real delivery opens the
+      new detail screen directly (not the old star-rating-only dialog),
+      rating from there works and doesn't double-prompt later at Stop
+      Monitoring; the trip list filters and opens the right trip;
+      General-mode trips never show a rating prompt
 - [ ] Driver sign-off
