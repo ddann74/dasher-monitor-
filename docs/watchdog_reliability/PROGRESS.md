@@ -85,3 +85,89 @@ kept it alive) and whether a third blackout, if one occurs, is shorter
 or self-recovers via the watchdog's restart attempt rather than
 requiring a manual reopen. Final user sign-off is the only remaining
 PRD §6 box.
+
+## Proactive first-launch OEM nudge (2026-09-08)
+
+Driver asked directly to "fix the OEM background-killing issue." Two
+more real diagnostic logs since the above (823 accessibility reconnects
+in one 2.5-day session; 17 uncaught-crash occurrences in another --
+both root-caused separately, see `docs/dash_monitoring_awareness/
+PROGRESS.md`'s latest entry for the crash) confirmed this is real and
+ongoing on this driver's own OPPO CPH2591, on top of everything already
+built here. Re-read this PRD's own §2 and non-goals first: eliminating
+the underlying OS/OEM kill from app code isn't achievable (no such API
+exists) and was never this PRD's claim -- so "fix" here means closing
+the largest remaining REACHABLE gap, not promising the kill stops.
+
+**Gap found, not previously covered by anything in this PRD or
+`docs/watchdog_reliability`**: `PermissionsActivity`'s existing OEM
+guidance dialog (`OemBackgroundHelper.showAutostartGuidanceDialog`,
+originally a private duplicate inline in that Activity) only ever fires
+REACTIVELY -- gated on `!hasAccessibility`, so it only shows when
+accessibility happens to already be off AND the driver happens to visit
+that specific screen. A driver on a known-aggressive-OEM device who
+hasn't hit a revocation yet THIS session gets zero warning before the
+first blackout, even though the app already knows
+(`OemBackgroundHelper.isKnownAggressiveOem()`) this phone is a
+documented offender before anything goes wrong.
+
+**Fix**: added a one-time proactive nudge, `MainActivity.
+maybeShowOemAutostartNudge()`, called at the end of `onCreate()` --
+the app's one guaranteed entry point, unlike `PermissionsActivity`
+which the driver may never open at all if nothing's visibly broken yet.
+Gated on `isKnownAggressiveOem()` AND a `SharedPreferences` flag
+(`oem_autostart_nudge_shown`, `dasher_monitor_prefs` -- same prefs file
+`MainActivity` already uses elsewhere) so it shows exactly once ever,
+not on every launch -- a driver who dismisses it isn't nagged again.
+
+**Centralized rather than duplicated**: the dialog itself
+(title/message/Open Settings/Not Now) was previously written inline,
+once, as a private method in `PermissionsActivity`. Since `MainActivity`
+now needs the identical dialog, moved it into `OemBackgroundHelper.
+showAutostartGuidanceDialog(Context)` -- a static method both Activities
+now call -- rather than hand-copying the same `AlertDialog.Builder`
+block a second time. `PermissionsActivity.showOemBackgroundGuidance()`
+is now a one-line delegate; its own existing reactive trigger
+(`!hasAccessibility && isKnownAggressiveOem()`, checked every time that
+screen resumes) and its always-visible manual button are both untouched.
+
+**Honestly scoped, not oversold**: same disclosed limitation as
+`OemBackgroundHelper` and this PRD's own §1 finding 6 already state --
+there is no cross-vendor Android API to confirm the driver actually
+completes the OEM-side toggle after tapping "Open Settings," and this
+does not itself prevent the OS from killing the process. It only gets
+the existing, already-correct guidance in front of the driver earlier
+(before the first real blackout, not only after), and does so exactly
+once so it doesn't become noise on every app open.
+
+### Verification
+
+Same disclosed limitation as every Java-only change in this repo -- no
+Android SDK/emulator/device.
+
+- Brace/paren balance: `OemBackgroundHelper.java` 33/33 braces, 151/151
+  parens; `PermissionsActivity.java` 75/75 braces, 407/407 parens;
+  `MainActivity.java` 154/154 braces, 718/718 parens.
+- Confirmed `OemBackgroundHelper` is package-private (`final class`, no
+  modifier) and both callers (`MainActivity`, `PermissionsActivity`) are
+  in the same `com.drivingefficiency.app` package -- no visibility
+  change needed.
+- Confirmed `PermissionsActivity`'s `AlertDialog`/`Toast` imports are
+  still used elsewhere in that file (31 remaining references) after
+  removing its own inline copy of this dialog -- no now-unused import
+  left behind.
+- Confirmed the new nudge only ever fires from `onCreate()` (once per
+  process's first-ever launch on a matching device, per the persisted
+  flag), not from `onResume()` -- won't re-show on every foreground
+  the way `PermissionsActivity`'s reactive check intentionally does.
+- Traced `getSharedPreferences("dasher_monitor_prefs", MODE_PRIVATE)`
+  against the one other existing usage in `MainActivity` (line ~358) --
+  same file/mode, no collision risk on the key name
+  (`oem_autostart_nudge_shown` is new, unused elsewhere).
+
+Remaining: on-device confirmation the dialog actually appears once, at
+the right moment, without visually colliding with anything else
+`onCreate()` does (blocked, no device) -- and, same as this PRD's
+original §4a, whether this measurably reduces the next field log's
+kill/reconnect count is only answerable from a future real log, not
+from here. Driver sign-off.

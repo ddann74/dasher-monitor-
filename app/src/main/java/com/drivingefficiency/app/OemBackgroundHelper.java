@@ -1,5 +1,6 @@
 package com.drivingefficiency.app;
 
+import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
 import android.content.Context;
@@ -7,6 +8,7 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
+import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -199,5 +201,28 @@ final class OemBackgroundHelper {
         fallback.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         context.startActivity(fallback);
         return false;
+    }
+
+    /**
+     * The shared guidance dialog, previously duplicated only in
+     * PermissionsActivity's own private showOemBackgroundGuidance() --
+     * centralized here now that MainActivity needs the identical dialog
+     * too (see its first-launch proactive nudge), rather than a second
+     * hand-copied AlertDialog with the same title/message/buttons.
+     */
+    static void showAutostartGuidanceDialog(Context context) {
+        new AlertDialog.Builder(context)
+                .setTitle(displayName() + " Device Detected")
+                .setMessage(guidanceText())
+                .setPositiveButton("Open Settings", (dialog, which) -> {
+                    boolean openedOemScreen = openAutostartSettings(context);
+                    if (!openedOemScreen) {
+                        Toast.makeText(context, "Couldn't find the dedicated settings screen on this "
+                                        + "device/OS version -- opened the app's general settings instead.",
+                                Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNegativeButton("Not Now", null)
+                .show();
     }
 }
