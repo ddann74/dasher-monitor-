@@ -214,7 +214,49 @@ public class TripForegroundService extends Service {
         // correctly shows nothing (idle, Dasher closed) or flashing red
         // (idle, but Dasher happens to already be open) depending on
         // DasherAccessibilityService's independently-tracked state.
-        startForegroundLocationOnly(buildIdleNotification());
+        //
+        // CONFIRMED REAL CRASH (2026-09-08, real driver diagnostic log,
+        // 17 occurrences over ~30 hours, every single one immediately
+        // preceded by a DRIVING_DETECTION auto-start log line): this call
+        // used to be unguarded, and on Android 14+ (targetSdk 34) it can
+        // throw SecurityException here -- not at the startForegroundService()
+        // call site in DasherAccessibilityService/DrivingDetectionReceiver
+        // (which already try/catch that call), but ONE STEP LATER, inside
+        // this service's own onCreate(), which the OS invokes on a fresh
+        // process after startForegroundService() already returned
+        // successfully. Android 14 additionally requires the CALLER of
+        // startForegroundService() to be in an "eligible state" (a visible
+        // activity, a notification tap, BOOT_COMPLETED, etc.) before a
+        // location-type foreground service is allowed to actually go
+        // foreground -- a plain background BroadcastReceiver (Activity
+        // Recognition's driving-detected callback, or the accessibility
+        // service noticing Dasher open) never qualifies. Because that
+        // check happens here, not at the receiver's call site, the
+        // receiver's own try/catch can never see it -- it was crashing
+        // the entire app process instead, every time the driver got in
+        // the car without opening Dasher first.
+        //
+        // No known way to make this specific auto-start path itself
+        // Android-14-eligible without a user tap (a real platform
+        // restriction, not a bug in this app's permission checks --
+        // ACCESS_FINE_LOCATION and FOREGROUND_SERVICE_LOCATION are both
+        // already granted at other times in the same log). So this
+        // degrades to the same "monitoring didn't start, go check the
+        // app" alert raiseMonitoringNotActiveAlert() already exists for
+        // (its own doc already anticipated background-start rejection --
+        // just not this specific, later failure point), instead of taking
+        // the whole app down.
+        try {
+            startForegroundLocationOnly(buildIdleNotification());
+        } catch (SecurityException e) {
+            logDiagnostic("ERROR", "startForegroundLocationOnly() rejected -- "
+                    + "background auto-start likely lacked an Android 14 FGS-location "
+                    + "eligibility exemption: " + android.util.Log.getStackTraceString(e));
+            raiseMonitoringNotActiveAlert(this, "foreground service start rejected by the OS");
+            serviceExists = false;
+            stopSelf();
+            return;
+        }
         refreshStatusDot();
     }
 

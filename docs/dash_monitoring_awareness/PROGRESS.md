@@ -89,3 +89,87 @@ Remaining PRD §6 boxes: on-device confirmation (blocked -- no Android
 emulator/device available in this environment; per §6's own note, the
 actual trigger condition is an OS-level background-start rejection
 that can't be forced from a code review alone) and driver sign-off.
+
+## Real gap found on-device: this alert never fired, the whole app crashed instead (2026-09-08)
+
+The "blocked, no device to confirm the trigger condition" note above
+turned out to matter: a real diagnostic log (`dasher_monitor_full_
+history19.txt`, Sept 6-7, uploaded 2026-09-08) had **17** occurrences
+of the app's uncaught-exception handler firing, all sharing the
+identical stack trace:
+
+```
+java.lang.RuntimeException: Unable to create service ...TripForegroundService:
+java.lang.SecurityException: Starting FGS with type location ... targetSDK=34
+requires permissions: ... and the app must be in the eligible
+state/exemptions to access the foreground only permission
+    at TripForegroundService.startForegroundLocationOnly(TripForegroundService.java:254)
+    at TripForegroundService.onCreate(TripForegroundService.java:217)
+```
+
+All 17 were immediately preceded, at the identical timestamp, by
+`DRIVING_DETECTION: Auto-started monitoring from detected driving
+motion` -- i.e. every single one was `DrivingDetectionReceiver`'s
+auto-start path, and only that path (never the accessibility-service
+or Dash-Paused-resume auto-starts also covered above).
+
+Root cause this PRD's original investigation didn't anticipate: on
+Android 14 (this driver's phone reports `sdk=35`), the
+"eligible state/exemption" check for a location-type foreground
+service is enforced **inside the service's own `onCreate()`**, at the
+`startForeground(..., FOREGROUND_SERVICE_TYPE_LOCATION)` call itself
+-- not at the `Context.startForegroundService()` call site the way
+`ForegroundServiceStartNotAllowedException` (the case this PRD already
+handles, both here and in `DrivingDetectionReceiver`'s own inner
+try/catch) is. `startForegroundService()` returns successfully (the OS
+does create the process and call `onCreate()`); the rejection only
+surfaces one step later, inside that fresh process, on a call stack
+`DrivingDetectionReceiver`'s try/catch can never see. Because nothing
+caught it there, it was an uncaught `SecurityException` on the main
+thread -- taking the entire app process down, not just failing to
+start monitoring. `raiseMonitoringNotActiveAlert` -- built by this
+exact PRD specifically for "auto-start didn't result in monitoring
+actually running" -- never got a chance to fire for this case.
+
+Fixed by wrapping the `startForegroundLocationOnly()` call in
+`TripForegroundService.onCreate()` itself in `try/catch
+(SecurityException)`: on catch, logs the failure, calls
+`raiseMonitoringNotActiveAlert(this, "foreground service start
+rejected by the OS")` (the exact existing alert, now finally reachable
+for this failure point), sets `serviceExists = false`, and
+`stopSelf()`s cleanly instead of leaving the process to crash.
+`onDestroy()` was checked and is safe to run against the
+mostly-uninitialized state this abort path leaves (`engine` is already
+assigned earlier in `onCreate()`; every other cleanup call in
+`onDestroy()` is already a checked no-op when nothing was started).
+
+Honest limit, not silently worked around: there is no way to make
+`DrivingDetectionReceiver`'s auto-start itself Android-14-eligible
+without a user tap -- a real platform restriction (a location-type FGS
+cannot be background-started from a plain `BroadcastReceiver` with no
+visible activity, regardless of what permissions are already granted),
+not a bug in this app's own permission checks. This fix stops the
+crash and makes the already-designed fallback alert actually fire; it
+does not attempt to make driving-motion auto-start silently succeed
+when Dasher was never opened -- that would need a different mechanism
+entirely (e.g. a tappable notification, which itself carries the
+needed exemption), not requested and not built here.
+
+### Verification
+
+Same no-emulator constraint as the rest of this PRD:
+- Brace/paren balance on `TripForegroundService.java` confirmed
+  balanced (207/207 braces, 947/947 parens) after the edit.
+- Traced `onDestroy()`'s full body against this abort path: every
+  cleanup call in it (`force_end_trip` behind `engine != null`,
+  `screenRecordingController.isRecording()`, handler
+  `removeCallbacks`, `stopPermissionAlertVibration`,
+  `releaseTripWakeLock`) is already guarded to be a safe no-op when
+  nothing was started, so calling `stopSelf()` this early in
+  `onCreate()` does not risk a second exception during teardown.
+- Confirmed via `grep -n "CRASH:"` against the uploaded log that all
+  17 occurrences share the byte-identical exception message and stack
+  trace (only the `ProcessRecord` hash/pid differ), and that every one
+  is immediately preceded by a `DRIVING_DETECTION` auto-start log line
+  at the same timestamp -- ruling out any other trigger path before
+  writing the fix.
