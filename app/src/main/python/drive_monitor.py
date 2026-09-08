@@ -4134,37 +4134,96 @@ class DriveMonitorEngine:
             "distance_km": round(distance_km, 2),
         })
 
-    def get_parking_difficulty_rating(self, restaurant_name):
+    @staticmethod
+    def _score_parking_difficulty(rows):
         """
-        Returns this restaurant's learned parking-difficulty rating,
-        gated on PARKING_DIFFICULTY_MIN_SAMPLES confirmed samples for
-        THIS specific restaurant -- same mapping pattern as personal
-        calibration's overall_rating_map: easy=0, normal=50, difficult=100,
-        averaged across every sample recorded for this location (both
-        auto-labeled -- see PARKING_AUTO_LABEL_* -- and driver-confirmed;
-        manual_sample_count/auto_sample_count below disclose the split
-        rather than presenting a mostly-guessed rating as fully confirmed).
+        docs/parking_zone_map/PRD.md -- the actual scoring logic behind
+        get_parking_difficulty_rating, extracted so a second caller
+        (get_parking_difficulty_zones, scoring every restaurant at once
+        for the map) can reuse it exactly rather than carrying a second,
+        driftable copy of the same three-line formula. `rows`: any
+        iterable of sqlite Rows with `difficulty`/`source` columns (the
+        exact shape a `SELECT difficulty, source FROM
+        parking_difficulty_feedback ...` query already returns). Same
+        mapping pattern as personal calibration's overall_rating_map:
+        easy=0, normal=50, difficult=100, averaged across every sample
+        (both auto-labeled -- see PARKING_AUTO_LABEL_* -- and
+        driver-confirmed; manual_sample_count/auto_sample_count disclose
+        the split rather than presenting a mostly-guessed rating as
+        fully confirmed).
         """
         difficulty_map = {"easy": 0.0, "normal": 50.0, "difficult": 100.0}
-        rows = self.db.conn.execute(
-            "SELECT difficulty, source FROM parking_difficulty_feedback WHERE restaurant_name = ?",
-            (restaurant_name,),
-        ).fetchall()
         scores = [difficulty_map[r["difficulty"]] for r in rows if r["difficulty"] in difficulty_map]
         if len(scores) < PARKING_DIFFICULTY_MIN_SAMPLES:
-            return json.dumps({
+            return {
                 "has_rating": False, "sample_count": len(scores),
                 "min_required": PARKING_DIFFICULTY_MIN_SAMPLES,
-            })
+            }
         avg_score = sum(scores) / len(scores)
         label = "Easy" if avg_score < 33 else "Difficult" if avg_score > 66 else "Normal"
         manual_count = sum(1 for r in rows if r["source"] == "manual")
-        return json.dumps({
+        return {
             "has_rating": True, "sample_count": len(scores),
             "avg_score": round(avg_score, 1), "label": label,
             "manual_sample_count": manual_count,
             "auto_sample_count": len(scores) - manual_count,
-        })
+        }
+
+    def get_parking_difficulty_rating(self, restaurant_name):
+        """
+        Returns this restaurant's learned parking-difficulty rating,
+        gated on PARKING_DIFFICULTY_MIN_SAMPLES confirmed samples for
+        THIS specific restaurant. Scoring itself lives in
+        _score_parking_difficulty (see its own doc) -- this method is
+        now just the query plus the json.dumps wrapper.
+        """
+        rows = self.db.conn.execute(
+            "SELECT difficulty, source FROM parking_difficulty_feedback WHERE restaurant_name = ?",
+            (restaurant_name,),
+        ).fetchall()
+        return json.dumps(self._score_parking_difficulty(rows))
+
+    def get_parking_difficulty_zones(self):
+        """
+        docs/parking_zone_map/PRD.md -- real per-restaurant parking-
+        difficulty zones for ParkingZoneMapActivity's satellite map.
+        Mirrors get_location_profitability()'s own join/loop shape
+        exactly (GROUP BY restaurant_name over pickup_location_history
+        for the GPS anchor, then a per-restaurant lookup) -- reused
+        here for a different metric, not a new query pattern.
+
+        HONEST SCOPE BOUNDARY, same as get_location_profitability's own:
+        a restaurant needs BOTH a real pickup_location_history row (the
+        only GPS anchor this app has) AND at least
+        PARKING_DIFFICULTY_MIN_SAMPLES real parking-difficulty samples
+        to be plotted. Either gap means it's silently omitted, not
+        shown with a guessed color.
+        """
+        location_rows = self.db.conn.execute("""
+            SELECT restaurant_name, AVG(lat) AS avg_lat, AVG(lon) AS avg_lon
+            FROM pickup_location_history GROUP BY restaurant_name
+        """).fetchall()
+
+        entries = []
+        for row in location_rows:
+            difficulty_rows = self.db.conn.execute(
+                "SELECT difficulty, source FROM parking_difficulty_feedback WHERE restaurant_name = ?",
+                (row["restaurant_name"],),
+            ).fetchall()
+            score = self._score_parking_difficulty(difficulty_rows)
+            if not score["has_rating"]:
+                continue
+            entries.append({
+                "restaurant_name": row["restaurant_name"],
+                "lat": round(row["avg_lat"], 6),
+                "lon": round(row["avg_lon"], 6),
+                "avg_score": score["avg_score"],
+                "label": score["label"],
+                "sample_count": score["sample_count"],
+                "manual_sample_count": score["manual_sample_count"],
+                "auto_sample_count": score["auto_sample_count"],
+            })
+        return json.dumps({"entries": entries})
 
     def get_canned_replies_json(self):
         """Returns all canned replies, in their user-defined order."""

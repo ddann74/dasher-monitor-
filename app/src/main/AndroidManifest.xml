@@ -112,6 +112,11 @@
         <activity android:name=".LocationProfitabilityMapActivity" android:exported="false"
             android:theme="@style/Theme.DasherMonitor.TripHistory"
             android:parentActivityName=".TripHistoryActivity" />
+        <!-- docs/parking_zone_map/PRD.md: a sub-screen of Trip History,
+             same theme reuse as LocationProfitabilityMapActivity above. -->
+        <activity android:name=".ParkingZoneMapActivity" android:exported="false"
+            android:theme="@style/Theme.DasherMonitor.TripHistory"
+            android:parentActivityName=".TripHistoryActivity" />
         <!-- docs/trip_history_redesign/PRD.md: replaces the old
              AlertDialog.setItems() trip picker and the giant text-dump
              AlertDialog respectively, both sub-screens of Trip

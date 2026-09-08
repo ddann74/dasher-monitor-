@@ -39,6 +39,7 @@ public class TripHistoryActivity extends AppCompatActivity {
         Button rejectedOffersReportButton = findViewById(R.id.rejectedOffersReportButton);
         Button restaurantVisitHistoryButton = findViewById(R.id.restaurantVisitHistoryButton);
         Button locationProfitabilityMapButton = findViewById(R.id.locationProfitabilityMapButton);
+        Button parkingZoneMapButton = findViewById(R.id.parkingZoneMapButton);
         Button payTrendButton = findViewById(R.id.payTrendButton);
         Button weatherPayCorrelationButton = findViewById(R.id.weatherPayCorrelationButton);
 
@@ -62,6 +63,10 @@ public class TripHistoryActivity extends AppCompatActivity {
         // rather than a show*() method on this Activity.
         locationProfitabilityMapButton.setOnClickListener(v ->
                 startActivity(new Intent(this, LocationProfitabilityMapActivity.class)));
+        // docs/parking_zone_map/PRD.md - same shape as
+        // locationProfitabilityMapButton immediately above.
+        parkingZoneMapButton.setOnClickListener(v ->
+                startActivity(new Intent(this, ParkingZoneMapActivity.class)));
         payTrendButton.setOnClickListener(v -> showPayTrend());
         weatherPayCorrelationButton.setOnClickListener(v -> showWeatherPayCorrelation());
     }
