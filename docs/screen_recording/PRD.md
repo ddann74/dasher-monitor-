@@ -27,6 +27,9 @@ playable file exists after each delivery, or vibrate an alert -- direct
 follow-up to an audit that found nothing anywhere checked a produced
 recording was actually playable, only that MediaRecorder.stop() didn't
 throw. See §15/§16.
+§17 (added 2026-09-09, FIXED): driver asked how to actually access a
+recording, then to add a share button -- closes §7.1's own long
+-disclosed "no in-app player, no export" gap. See §17/§18.
 §13 (added 2026-09-03, CRITICAL, self-correcting §9's own fix): a THIRD
 real diagnostic log showed recording had never once actually started
 since §9's fix shipped - not crashing, but silently failing on every
@@ -986,4 +989,79 @@ documented `MediaMetadataRetriever` contract, not watched working.
       produces no alert; a deliberately-corrupted recording file (or a
       real corruption, if one occurs) DOES trigger the vibration and
       notification
+- [ ] Driver sign-off.
+
+## 17. Driver-requested (2026-09-09): a way to actually access a recording
+
+Direct follow-up to a plain question ("can I access the video from the
+app") -- answered honestly first: no, §7.1's disclosed gap ("no in-app
+player, no export/share button") was still true, unchanged since it was
+first written. Driver then asked to add a share button.
+
+**Design**: mirrors `DiagnosticsActivity.showDiagnosticArchives()`'s own
+list-then-act shape exactly, rather than inventing a new pattern - tap a
+filename, act on that one file. A bulk "share everything at once" was
+considered and rejected: a driver reviewing footage almost always wants
+ONE specific delivery's segment, not every recording on the device
+bundled into one share action.
+
+New `ScreenRecordingController.listRecordingsNewestFirst()` - the actual
+file array, not just the count/total-size summary `recordingsCount()`/
+`recordingsTotalSizeBytes()` already provided. Sorted by `lastModified()`
+descending rather than filename, since a segment's `_partN` suffix would
+otherwise sort `_part10` before `_part2` alphabetically.
+
+New `PermissionsActivity.showRecordingsList()` / `shareRecording(File)`:
+lists every recording (name + size) in a dialog; tapping one builds a
+`content://` URI via the SAME `FileProvider` authority
+(`androidx.core.content.FileProvider`, `<applicationId>.fileprovider`)
+already declared in `AndroidManifest.xml` for diagnostic-log export, and
+launches `Intent.ACTION_SEND` with `video/mp4` through the standard
+share sheet. No `file_paths.xml` change needed:
+`external-files-path name="external_exports" path="."` already covers
+the entire external-files root, and `ScreenRecordings/` is a direct
+subdirectory of it (`recordingsDir()`'s own definition) -- confirmed by
+reading that file rather than assumed.
+
+New button: "View/Share Recordings," placed above the existing "Delete
+All Recordings" (see it before you can delete it).
+
+### Verification
+
+Same disclosed limitation as the rest of this PRD - no Android SDK
+/emulator/device in this environment, so code review plus static
+checks, not an actual share-sheet launch or confirmed-openable file:
+
+- Brace/paren balance: `ScreenRecordingController.java` 86/86 braces,
+  358/358 parens; `PermissionsActivity.java` 81/81, 452/452.
+- XML well-formedness confirmed on `activity_permissions.xml` and
+  `strings.xml`.
+- `R.id.viewRecordingsButton` / `@string/view_recordings` cross-checked
+  between the new Java code, the layout, and `strings.xml` - every
+  reference resolves.
+- `python3 -m py_compile drive_monitor.py` - unaffected, re-confirmed
+  clean anyway.
+- Confirmed `getPackageName() + ".fileprovider"` matches the manifest's
+  declared authority exactly (`com.drivingefficiency.app.fileprovider`),
+  same string `DiagnosticsActivity` already uses successfully.
+
+**Not done, and can't be from here**: on-device confirmation that
+tapping a recording actually opens the Android share sheet, and that a
+real video player can actually open the resulting file - no emulator
+/device available, same limitation as every claim in this PRD.
+
+## 18. Success criteria for §17
+
+- [x] `listRecordingsNewestFirst()` added, real file list (not just
+      count/size)
+- [x] "View/Share Recordings" button added, lists recordings
+      newest-first
+- [x] Tapping a recording launches the share sheet via the existing
+      FileProvider authority, `video/mp4` MIME type
+- [x] No `file_paths.xml` change needed - confirmed the existing
+      external-files-root entry already covers `ScreenRecordings/`
+- [x] Brace/paren balance and XML well-formedness confirmed on every
+      touched file
+- [ ] Driver confirms: tapping a recording opens a real share sheet,
+      and the shared file actually opens/plays in a chosen video player
 - [ ] Driver sign-off.

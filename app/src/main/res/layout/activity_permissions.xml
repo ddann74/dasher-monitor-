@@ -256,6 +256,15 @@
         android:text="@string/screen_recording_status_default" />
 
     <Button
+        android:id="@+id/viewRecordingsButton"
+        android:backgroundTint="?attr/colorPrimary"
+        android:textColor="#FFFFFF"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/view_recordings" />
+
+    <Button
         android:id="@+id/deleteAllRecordingsButton"
         android:backgroundTint="?attr/colorPrimary"
         android:textColor="#FFFFFF"

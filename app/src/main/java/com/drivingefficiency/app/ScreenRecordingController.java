@@ -129,6 +129,21 @@ class ScreenRecordingController {
         return total;
     }
 
+    /** Every recording file, newest first -- driver-requested "view/share
+      * recordings" (PRD ss17): needed the actual file list, not just the
+      * count/total-size summary the Setup screen already showed. Sorted
+      * by lastModified() descending rather than filename, since a
+      * segment's "_partN" suffix would otherwise sort "trip_X_part10"
+      * before "trip_X_part2" alphabetically. */
+    static File[] listRecordingsNewestFirst(Context context) {
+        File[] files = recordingsDir(context).listFiles();
+        if (files == null) {
+            return new File[0];
+        }
+        java.util.Arrays.sort(files, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+        return files;
+    }
+
     /** Returns how many files could NOT be deleted (0 = fully successful) --
       * File.delete()'s own return value was previously ignored entirely,
       * so a partial failure (a locked/in-use file, a permission hiccup)
