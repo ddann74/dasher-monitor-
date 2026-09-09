@@ -517,9 +517,15 @@ class ScreenRecordingController {
                     + " failed to open: " + e.getClass().getSimpleName() + ": " + e.getMessage());
             return false;
         } finally {
+            // Real Android API quirk, confirmed by CI's own javac error
+            // (unlike MediaRecorder.release() elsewhere in this class):
+            // MediaMetadataRetriever.release() is a CHECKED
+            // java.io.IOException, not a RuntimeException -- catching
+            // only RuntimeException here left it unreported and failed
+            // the build outright, not silently.
             try {
                 retriever.release();
-            } catch (RuntimeException ignored) {
+            } catch (java.io.IOException | RuntimeException ignored) {
             }
         }
     }
