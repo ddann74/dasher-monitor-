@@ -578,3 +578,59 @@ watched working against a real file of either kind.
 Remaining PRD §16 boxes: driver confirms a normal delivery produces no
 alert, and a genuinely corrupted recording (deliberate or real) does
 trigger one; driver sign-off.
+
+## §17 fix (2026-09-09): a way to actually access a recording
+
+Driver asked "can I access the video from the app" - answered honestly
+first: no, still the same disclosed gap from PRD §7.1 (no in-app
+player, no export). Driver then asked for a share button.
+
+**`ScreenRecordingController.java`**: new `listRecordingsNewestFirst()`
+- the real file array (name, size, timestamp all readable off each
+`File`), not just the count/total-size summary already shown on Setup.
+Sorted by `lastModified()` descending, not filename (a `_partN` suffix
+would sort wrong alphabetically past 9 segments).
+
+**`PermissionsActivity.java`**: new "View/Share Recordings" button,
+placed above "Delete All Recordings." Mirrors
+`DiagnosticsActivity.showDiagnosticArchives()`'s exact list-then-act
+shape (tap a filename, act on that one file) rather than a bulk
+share-all - a driver reviewing footage almost always wants one specific
+delivery, not everything at once. Tapping a recording builds a
+`content://` URI via the SAME `FileProvider` authority already declared
+for diagnostic-log export and CSV export, and launches the standard
+Android share sheet with `video/mp4` - "viewing" a recording means
+handing it to whatever video player app the driver already has, since
+this app still has no in-app player (unchanged, not part of this ask).
+
+No `file_paths.xml` change needed - checked it directly rather than
+assumed: its existing `external-files-path name="external_exports"
+path="."` already covers the whole external-files root, and
+`ScreenRecordings/` is a direct subdirectory of that root
+(`recordingsDir()`'s own definition).
+
+### Verification
+
+Same disclosed limitation as the rest of this PRD - no Android SDK
+/emulator/device in this environment:
+
+- Brace/paren balance: `ScreenRecordingController.java` 86/86 braces,
+  358/358 parens; `PermissionsActivity.java` 81/81, 452/452.
+- XML well-formedness confirmed on `activity_permissions.xml` and
+  `strings.xml`.
+- `R.id.viewRecordingsButton`/`@string/view_recordings` cross-checked
+  across the new Java code, layout, and strings.xml - every reference
+  resolves.
+- Confirmed `getPackageName() + ".fileprovider"` matches the manifest's
+  declared authority exactly - same string `DiagnosticsActivity`
+  already uses successfully for its own shares.
+- `python3 -m py_compile drive_monitor.py` - unaffected, re-confirmed
+  clean anyway.
+
+**Not done, and can't be from here**: on-device confirmation that
+tapping a recording actually opens a real share sheet and that the
+resulting file opens/plays in a chosen video player - no emulator
+/device available.
+
+Remaining PRD §18 boxes: driver confirms the share sheet actually opens
+and a shared recording actually plays; driver sign-off.
