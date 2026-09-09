@@ -81,6 +81,7 @@ public class PermissionsActivity extends AppCompatActivity {
         Button cannedRepliesButton = findViewById(R.id.cannedRepliesButton);
         screenRecordingSwitch = findViewById(R.id.screenRecordingSwitch);
         screenRecordingStatusText = findViewById(R.id.screenRecordingStatusText);
+        Button viewRecordingsButton = findViewById(R.id.viewRecordingsButton);
         Button deleteAllRecordingsButton = findViewById(R.id.deleteAllRecordingsButton);
         EditText apiKeyInput = findViewById(R.id.apiKeyInput);
         Button saveApiKeyButton = findViewById(R.id.saveApiKeyButton);
@@ -311,6 +312,7 @@ public class PermissionsActivity extends AppCompatActivity {
                 refreshScreenRecordingStatus();
             }
         });
+        viewRecordingsButton.setOnClickListener(v -> showRecordingsList());
         deleteAllRecordingsButton.setOnClickListener(v -> {
             int count = ScreenRecordingController.recordingsCount(this);
             if (count == 0) {
@@ -388,6 +390,69 @@ public class PermissionsActivity extends AppCompatActivity {
                     "%d recording%s stored, %.1f MB total.", count, count == 1 ? "" : "s", totalMb));
         }
         screenRecordingStatusText.setText(text.toString());
+    }
+
+    /**
+     * Driver-requested: "add a share button to view recordings" -- the
+     * Setup screen previously only ever showed a count/total-size summary
+     * (PRD ss7.1's own disclosed gap: no in-app player, no export, no way
+     * to actually get a recording out to watch it). Same list-then-act
+     * shape as DiagnosticsActivity.showDiagnosticArchives() (tap a
+     * filename, act on that one file) rather than a bulk share-all, since
+     * a driver reviewing footage almost always wants ONE specific
+     * delivery's segment, not every recording on the device at once.
+     * Sorted newest-first (see listRecordingsNewestFirst's own doc).
+     */
+    private void showRecordingsList() {
+        java.io.File[] files = ScreenRecordingController.listRecordingsNewestFirst(this);
+        if (files.length == 0) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Recordings")
+                    .setMessage("No recordings yet.")
+                    .setPositiveButton("OK", null)
+                    .show();
+            return;
+        }
+        String[] labels = new String[files.length];
+        for (int i = 0; i < files.length; i++) {
+            double mb = files[i].length() / (1024.0 * 1024.0);
+            labels[i] = String.format(java.util.Locale.US, "%s (%.1f MB)", files[i].getName(), mb);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Recordings (tap to share/view)")
+                .setItems(labels, (dialog, which) -> shareRecording(files[which]))
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    /**
+     * Hands one recording off via the standard Android share sheet --
+     * "viewing" it means opening it in whatever video player app the
+     * driver already has, since this app has no in-app player (PRD
+     * ss7.1's own disclosed non-goal, unchanged here). Same FileProvider
+     * pattern DiagnosticsActivity already uses for the diagnostic log
+     * (file_paths.xml's existing external_exports entry already covers
+     * ScreenRecordings/, since it's declared as "." at the external
+     * files root -- no new <paths> entry needed).
+     */
+    private void shareRecording(java.io.File file) {
+        try {
+            android.net.Uri uri = androidx.core.content.FileProvider.getUriForFile(
+                    this, getPackageName() + ".fileprovider", file);
+            Intent shareIntent = new Intent(Intent.ACTION_SEND);
+            shareIntent.setType("video/mp4");
+            shareIntent.putExtra(Intent.EXTRA_STREAM, uri);
+            shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(shareIntent, "Open/share recording"));
+        } catch (IllegalArgumentException e) {
+            // FileProvider's own documented failure mode: the file isn't
+            // actually under a path file_paths.xml declares. Shouldn't
+            // happen (every recording lives under ScreenRecordings/,
+            // itself under the covered external-files root), but a
+            // Toast beats a crash if that assumption is ever wrong.
+            Toast.makeText(this, "Could not share this recording: " + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
+        }
     }
 
     @Override
