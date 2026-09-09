@@ -22,6 +22,11 @@ crash" gap. Full binary repair was investigated and explicitly rejected
 (unverifiable without a real device); fixed instead via segmented
 recording (bounds crash loss to one ≤5-minute segment) plus startup
 detection/cleanup of orphaned segments. See §11/§12; PROGRESS.md.
+§15 (added 2026-09-09, FIXED): driver asked to actually verify a
+playable file exists after each delivery, or vibrate an alert -- direct
+follow-up to an audit that found nothing anywhere checked a produced
+recording was actually playable, only that MediaRecorder.stop() didn't
+throw. See §15/§16.
 §13 (added 2026-09-03, CRITICAL, self-correcting §9's own fix): a THIRD
 real diagnostic log showed recording had never once actually started
 since §9's fix shipped - not crashing, but silently failing on every
@@ -829,4 +834,156 @@ thing that closes this out - not just "no crash observed."
 - [ ] Driver confirms an ACTUAL PLAYABLE recording file is produced on
       the next trip with recording enabled - not just "no crash," which
       is the exact claim §9/§10 made that turned out to be insufficient
+- [ ] Driver sign-off.
+
+## 15. Driver-requested (2026-09-09): verify a playable file exists after each delivery, vibrate an alert otherwise
+
+Direct follow-up to an audit (asked "does the code verify there is a
+playable file") that found a real, confirmed gap: `hasMoovBox()`
+(§11/§12) only ever ran once, at app startup, scanning leftover files
+from a PREVIOUS crashed session - nothing checked a NORMAL recording
+(one where `MediaRecorder.stop()` didn't throw) actually produced a
+playable file. §13.4 had already disclosed "doesn't crash" and
+"actually plays" were being wrongly conflated; this closes that gap for
+real instead of continuing to disclose it.
+
+**A real design wrinkle surfaced while scoping this**: screen recording
+is not, and has never been, scoped one-file-per-delivery.
+`startTracking()`/`stopTracking()` bound one whole MONITORING SESSION
+(driver taps Start/Stop Monitoring), which can span many deliveries;
+recording inside that session is segmented every `SEGMENT_DURATION_MS`
+(5 minutes) regardless of delivery boundaries (§4a P7's own disclosed
+gap: no link between a recording and the trip it belongs to). So
+"verify after a delivery" cannot mean "check that one delivery's file"
+- there often isn't one. What it CAN honestly mean, and what this
+implements: at each delivery's completion, verify every segment that
+has ACTUALLY finished (fully closed) since the previous delivery ended,
+skipping whichever segment is still open for writing (a mid-write MP4
+legitimately has no `moov` box yet - checking it would always report
+broken, which isn't a real defect).
+
+### 15.1 A real check, not `hasMoovBox()` again
+
+`hasMoovBox()` only proves the container was closed - it doesn't prove
+the video frames inside are decodable. New `ScreenRecordingController.
+isPlayable(File)` uses `MediaMetadataRetriever.setDataSource()` +
+`extractMetadata(METADATA_KEY_DURATION)` - Android's own media
+framework actually attempting to open the file, the same class of
+operation a real player performs, not a heuristic. A genuinely corrupt
+file fails `setDataSource()`/`extractMetadata()` here the same way it
+would fail to open in a video player. Returns false for a missing/empty
+file, one that throws opening, or one that opens but reports zero
+duration.
+
+### 15.2 Tracking which segments to check
+
+`ScreenRecordingController` gained `segmentFiles` (every segment this
+recording SESSION has produced, appended in `beginCapture()` and
+`rotateSegment()`, cleared at the start of each new session) and
+`verifiedSegmentCount` (how many have already been checked, so a
+session with many deliveries never re-verifies an already-confirmed
+segment). New `verifyNewlyFinishedSegments()`: examines
+`segmentFiles[verifiedSegmentCount .. finalizedCount)`, where
+`finalizedCount` is `segmentFiles.size() - 1` while still recording
+(the last entry is presumably still open) or `segmentFiles.size()` once
+recording has actually stopped (the last entry is now finalized too).
+Returns whichever of those failed `isPlayable()`.
+
+### 15.3 Where it's called
+
+`TripForegroundService.verifyScreenRecordingAfterDelivery()`, called
+from BOTH places `notifyRateThisDelivery()` already fires (the manual
+-stop path's own guarded call, and the automatic `TRIP_ACTIVE -> IDLE`
+transition) - reusing their exact existing guard conditions rather than
+re-deriving "did a delivery genuinely just complete," since that dedup
+logic already had one real bug found and fixed (the auto-pause
+double-prompt, see PROGRESS.md) that this piggybacks on rather than
+risks re-introducing independently. No-ops entirely if recording isn't
+enabled. If recording is enabled but not actually `isRecording()` at
+that moment (consent lost mid-session, setup failed) - itself a real
+integrity gap, distinct from "a file exists but is corrupt," and just
+as worth the driver knowing - alerts immediately with
+`lastFailureReason()`'s text. Otherwise checks `verifyNewlyFinishedSegments()`
+and alerts on anything broken.
+
+A second call, directly in `stopTracking()`'s existing recording-stop
+block (right after `screenRecordingController.stop()`), catches the
+ONE segment that can only become checkable once the session truly ends
+- the final segment, only finalized by that `stop()` call itself.
+
+### 15.4 The alert itself
+
+New `TripForegroundService.raiseRecordingVerificationFailedAlert(reason)`
+- same "explain why, don't just buzz with no context" shape as the
+existing `raisePermissionRevokedAlert` immediately above it in the
+file, logging to the visible diagnostic log AND raising a
+high-priority notification naming exactly which segment(s) failed or
+why recording wasn't active. Deliberately does NOT reuse
+`startPermissionAlertVibration()`'s repeating/cancellable vibration
+state: that pattern exists because a permission can come back
+mid-vibration (a live condition to poll and stop early for); a
+recording segment that already finished broken has nothing to
+self-heal, so a single distinctive pattern is the honest shape, not an
+indefinite buzz with no cancellation condition to ever wait for. New
+`HapticFeedback.vibrateRecordingVerificationFailed()` - three long
+buzzes played once through, distinct from every other pattern already
+in that file (the two-pulse/one-pulse/one-long Smart Score cues, the
+permission alert's own repeating `{0,800,400}`).
+
+### 15.5 Verification
+
+Same disclosed limitation as the rest of this PRD - no Android
+SDK/emulator/device in this environment, so code review plus static
+checks, not a live repro of an actual corrupt file being caught:
+
+- Brace/paren balance: `ScreenRecordingController.java` 84/84 braces,
+  344/344 parens; `HapticFeedback.java` 17/17, 28/28;
+  `TripForegroundService.java` 217/217, 1009/1009 (all balanced after
+  every edit in this section).
+- `python3 -m py_compile drive_monitor.py` -- unaffected by this
+  change, re-confirmed clean anyway (nothing here touches the Python
+  side).
+- Traced every call site of `verifyScreenRecordingAfterDelivery()` (2,
+  matching `notifyRateThisDelivery()`'s own 2) and of
+  `verifyNewlyFinishedSegments()` (those 2, plus the one direct call in
+  `stopTracking()`) - confirmed the mid-session calls never touch a
+  still-open segment (gated on `isRecording()` inside the shared
+  helper) and the final `stopTracking()` call only ever examines the
+  one segment the mid-session calls structurally couldn't have reached
+  yet.
+- Confirmed `reportBrokenRecordingSegments`' parameter type
+  (`java.util.List<java.io.File>`) matches `verifyNewlyFinishedSegments()`'s
+  return type (`java.util.List<File>`, `File` being `java.io.File` via
+  that file's own import) - same type, different qualification style
+  per each file's own existing convention, not a mismatch.
+- Confirmed no `AndroidManifest.xml` change is needed: notification
+  channels are created at runtime, not declared in the manifest, and
+  `VIBRATE` was already declared for `HapticFeedback`'s existing use.
+
+**Not done, and can't be from here**: on-device confirmation that
+`isPlayable()` actually rejects a real corrupted file (or accepts a
+real good one) - no Android SDK/emulator/device in this environment to
+produce either kind of file to test against. This is honestly the same
+class of gap as every other claim in this PRD: reasoned from Android's
+documented `MediaMetadataRetriever` contract, not watched working.
+
+## 16. Success criteria for §15
+
+- [x] Real playability check added (`isPlayable()`, via
+      `MediaMetadataRetriever`) - distinct from and stronger than
+      `hasMoovBox()`'s container-only scan
+- [x] Per-segment verification tracked across a whole session
+      (`segmentFiles`/`verifiedSegmentCount`), never re-checking an
+      already-confirmed segment, never checking a still-open one
+- [x] Verification wired to both real per-delivery completion points
+      (reusing `notifyRateThisDelivery()`'s own dedup guards) plus
+      session-end for the final segment
+- [x] Vibration alert on any verification failure, distinct pattern
+      from every existing one, plus a notification naming the actual
+      reason (not a silent or unexplained buzz)
+- [x] Brace/paren balance confirmed on every touched file
+- [ ] Driver confirms: a normal delivery with recording enabled
+      produces no alert; a deliberately-corrupted recording file (or a
+      real corruption, if one occurs) DOES trigger the vibration and
+      notification
 - [ ] Driver sign-off.

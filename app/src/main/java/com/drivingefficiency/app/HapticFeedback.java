@@ -49,6 +49,30 @@ public final class HapticFeedback {
         }
     }
 
+    /**
+     * Alarm-style pattern for a verified screen-recording integrity
+     * problem (docs/screen_recording/PRD.md) -- three long buzzes,
+     * played once through, not TripForegroundService's own permission
+     * -alert pattern (repeating until explicitly cancelled). That one
+     * repeats because the underlying condition is live and can self
+     * -heal mid-vibration (a permission getting re-granted); a segment
+     * that already finished broken has nothing to self-heal, so a
+     * single distinctive alarm is the honest shape here, not an
+     * indefinite buzz with no cancellation condition to wait for.
+     */
+    public static void vibrateRecordingVerificationFailed(Context context) {
+        Vibrator vibrator = getVibrator(context);
+        if (vibrator == null || !vibrator.hasVibrator()) {
+            return;
+        }
+        long[] pattern = {0, 500, 300, 500, 300, 500};
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1));
+        } else {
+            vibrator.vibrate(pattern, -1);
+        }
+    }
+
     private static Vibrator getVibrator(Context context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             VibratorManager vibratorManager =
