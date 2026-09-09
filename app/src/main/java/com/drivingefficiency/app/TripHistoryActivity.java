@@ -40,6 +40,7 @@ public class TripHistoryActivity extends AppCompatActivity {
         Button restaurantVisitHistoryButton = findViewById(R.id.restaurantVisitHistoryButton);
         Button locationProfitabilityMapButton = findViewById(R.id.locationProfitabilityMapButton);
         Button parkingZoneMapButton = findViewById(R.id.parkingZoneMapButton);
+        Button customerZoneMapButton = findViewById(R.id.customerZoneMapButton);
         Button payTrendButton = findViewById(R.id.payTrendButton);
         Button weatherPayCorrelationButton = findViewById(R.id.weatherPayCorrelationButton);
 
@@ -67,6 +68,10 @@ public class TripHistoryActivity extends AppCompatActivity {
         // locationProfitabilityMapButton immediately above.
         parkingZoneMapButton.setOnClickListener(v ->
                 startActivity(new Intent(this, ParkingZoneMapActivity.class)));
+        // Same shape as parkingZoneMapButton immediately above, for the
+        // dropoff-side counterpart screen.
+        customerZoneMapButton.setOnClickListener(v ->
+                startActivity(new Intent(this, CustomerZoneMapActivity.class)));
         payTrendButton.setOnClickListener(v -> showPayTrend());
         weatherPayCorrelationButton.setOnClickListener(v -> showWeatherPayCorrelation());
     }

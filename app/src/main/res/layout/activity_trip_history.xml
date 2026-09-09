@@ -113,6 +113,17 @@
         android:layout_marginTop="8dp"
         android:text="@string/parking_zone_map" />
 
+    <!-- Same shape as parkingZoneMapButton immediately above, for the
+         dropoff-side counterpart screen. -->
+    <Button
+        android:id="@+id/customerZoneMapButton"
+        android:backgroundTint="?attr/colorPrimary"
+        android:textColor="#FFFFFF"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/customer_zone_map" />
+
     <Button
         android:id="@+id/payTrendButton"
         android:backgroundTint="?attr/colorPrimary"

@@ -901,6 +901,10 @@ public class DasherAccessibilityService extends AccessibilityService {
                     // app process, not just this call.
                     try {
                         engine.callAttr("add_stop_to_buffer", fullAddress, lat, lon, deliveryInstruction);
+                        // Same "start persisting real coordinates going
+                        // forward" pattern as the pickup-side geocode
+                        // callback above -- see record_dropoff_location.
+                        engine.callAttr("record_dropoff_location", fullAddress, lat, lon);
                         logDiagnostic("GEOCODE", "Resolved dropoff " + fullAddress + " -> " + lat + "," + lon);
                     } catch (RuntimeException e) {
                         logDiagnostic("ERROR", "Dropoff geocode callback exception: "

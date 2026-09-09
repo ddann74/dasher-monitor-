@@ -392,6 +392,19 @@ class Database:
             timestamp REAL
         );
 
+        -- Real geocoded dropoff coordinates, same shape and same
+        -- "going forward only" reasoning as pickup_location_history
+        -- above -- see record_dropoff_location. Keyed by the full
+        -- geocoded address (already precise, no restaurant-name-style
+        -- fragmentation to canonicalize away).
+        CREATE TABLE IF NOT EXISTS dropoff_location_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            address TEXT,
+            lat REAL,
+            lon REAL,
+            timestamp REAL
+        );
+
         -- Per-restaurant, persistent (not per-trip) notes about the pickup
         -- location itself -- e.g. "gate code 1234", "enter through side
         -- door", "park in the loading zone, not the main lot". Keyed by
@@ -3976,6 +3989,25 @@ class DriveMonitorEngine:
         """, (canonical_name, lat, lon, time.time()))
         self.db.conn.commit()
 
+    def record_dropoff_location(self, address, lat, lon):
+        """
+        Same "start persisting real geocoded coordinates going forward"
+        reasoning as record_pickup_location, for the dropoff side --
+        previously no historical record of dropoff coordinates existed
+        anywhere either. Called once handleDropoffScreen's own address
+        geocode resolves (DasherAccessibilityService), same trigger
+        point record_pickup_location uses for pickups. No canonicalize
+        step needed here: unlike a hand-typed restaurant name, a
+        geocoded street address doesn't accumulate spelling variants.
+        """
+        if lat == 0.0 and lon == 0.0:
+            return  # placeholder coordinates (no API key configured) -- not real data worth keeping
+        self.db.conn.execute("""
+            INSERT INTO dropoff_location_history (address, lat, lon, timestamp)
+            VALUES (?, ?, ?, ?)
+        """, (address, lat, lon, time.time()))
+        self.db.conn.commit()
+
     def _best_zone_from_pickup_rows(self, rows, min_samples):
         """
         Shared zone-grid-frequency logic behind get_pickup_sweet_spot_zone
@@ -4215,6 +4247,59 @@ class DriveMonitorEngine:
                 continue
             entries.append({
                 "restaurant_name": row["restaurant_name"],
+                "lat": round(row["avg_lat"], 6),
+                "lon": round(row["avg_lon"], 6),
+                "avg_score": score["avg_score"],
+                "label": score["label"],
+                "sample_count": score["sample_count"],
+                "manual_sample_count": score["manual_sample_count"],
+                "auto_sample_count": score["auto_sample_count"],
+            })
+        return json.dumps({"entries": entries})
+
+    def get_customer_parking_difficulty_zones(self):
+        """
+        Real per-dropoff-address parking-difficulty zones, same shape as
+        get_parking_difficulty_zones immediately above but keyed by
+        dropoff_location_history's address instead of a restaurant name.
+
+        HONEST NOTE, found while adding this: parking_difficulty_feedback
+        rows are named "restaurant_name" throughout, but the only place
+        that ever populates them -- _record_park_to_walk_gap_sample, fed
+        by is_walking_pace via _check_approaching_stop -- only ever
+        checks self.stops, TripManager's DROPOFF stop list (see
+        check_approaching_pickup's own docstring: "the single active
+        pickup rather than a list of dropoff stops"). So in real usage
+        every row already carries a dropoff address, not a restaurant
+        name, despite the column name. That means this method needs no
+        new feedback-recording path -- it reuses the existing table
+        exactly as get_parking_difficulty_zones does, just joined against
+        the new dropoff_location_history anchor instead of
+        pickup_location_history. It also means get_parking_difficulty_
+        zones' own join (against real restaurant names) is very likely
+        matching close to nothing in production -- a pre-existing gap,
+        not something introduced or fixed here.
+
+        Same honest scope boundary as every other zone map in this app:
+        an address needs BOTH a dropoff_location_history row AND at
+        least PARKING_DIFFICULTY_MIN_SAMPLES samples to be plotted.
+        """
+        location_rows = self.db.conn.execute("""
+            SELECT address, AVG(lat) AS avg_lat, AVG(lon) AS avg_lon
+            FROM dropoff_location_history GROUP BY address
+        """).fetchall()
+
+        entries = []
+        for row in location_rows:
+            difficulty_rows = self.db.conn.execute(
+                "SELECT difficulty, source FROM parking_difficulty_feedback WHERE restaurant_name = ?",
+                (row["address"],),
+            ).fetchall()
+            score = self._score_parking_difficulty(difficulty_rows)
+            if not score["has_rating"]:
+                continue
+            entries.append({
+                "address": row["address"],
                 "lat": round(row["avg_lat"], 6),
                 "lon": round(row["avg_lon"], 6),
                 "avg_score": score["avg_score"],

@@ -87,4 +87,6 @@
     <string name="parking_zone_map">Parking Zones</string>
     <string name="parking_zone_map_no_data">Not enough real parking data yet -- this fills in as your own park-to-walk times get recorded (automatically) or you rate parking difficulty after a delivery. Each restaurant needs both a recorded pickup location and a few parking samples before it shows up here.</string>
     <string name="parking_zone_map_attribution">Satellite imagery: Esri, Maxar, Earthstar Geographics</string>
+    <string name="customer_zone_map">Customer Zones</string>
+    <string name="customer_zone_map_no_data">Not enough real parking data yet -- this fills in as your own park-to-walk times get recorded at dropoffs (automatically) or you rate parking difficulty after a delivery. Each address needs both a recorded dropoff location and a few parking samples before it shows up here.</string>
 </resources>
