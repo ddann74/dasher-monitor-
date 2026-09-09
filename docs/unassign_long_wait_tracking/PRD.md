@@ -73,27 +73,37 @@ the existing Accept/Decline pattern), `TripManager._evaluate_pickup`
 
 ## 2. Definition of "functional" for this task
 
-- [ ] Tapping "Yes, I want to unassign" on the real DoorDash prompt is
+- [x] Tapping "Yes, I want to unassign" on the real DoorDash prompt is
       detected and recorded -- tapping "No, continue with order" does
-      nothing (it's a dismiss, not a signal).
-- [ ] If the driver had already arrived at the restaurant
+      nothing (it's a dismiss, not a signal). **Re-verified 2026-09-09**:
+      `DasherAccessibilityService.java:716-732` matches exact button
+      text; no branch exists for "No, continue" (correctly a no-op).
+- [x] If the driver had already arrived at the restaurant
       (`self.pickup["arrived_at"]` is set), the real wait duration is
       computed and fed into `record_restaurant_wait` -- the same
       Restaurant Wait History/Address Book mechanism a normal completed
       pickup already feeds, so this restaurant's entry reflects it.
-- [ ] If the driver unassigns before ever registering arrival
+      **Re-verified 2026-09-09**: confirmed in
+      `record_pickup_unassigned_for_long_wait` (both Python-side).
+- [x] If the driver unassigns before ever registering arrival
       (`arrived_at` still `None`), no wait duration is invented -- the
-      outcome is still recorded, just without a duration.
-- [ ] A new `offer_outcomes` row is inserted with a distinct outcome
+      outcome is still recorded, just without a duration. **Re-verified
+      2026-09-09**: `wait_minutes` stays `None`, outcome row still
+      inserted.
+- [x] A new `offer_outcomes` row is inserted with a distinct outcome
       value (not folded into `declined`, since it's a materially
       different real-world action), restaurant name, claimed distance,
       and the smart score snapshot's components (for calibration) --
-      `payout` honestly left `NULL` per §1.5.
-- [ ] `recalculate_personal_calibration` treats this new outcome as a
-      satisfaction=0 signal, same as a decline.
-- [ ] `self.pickup` is cleared/marked resolved once this fires -- it
-      must not linger stale for the rest of the trip.
-- [ ] No change to the existing Accept/Decline click detection, or to
+      `payout` honestly left `NULL` per §1.5. **Re-verified 2026-09-09**:
+      `outcome='unassigned_long_wait'`, `payout=NULL`, confirmed.
+- [x] `recalculate_personal_calibration` treats this new outcome as a
+      satisfaction=0 signal, same as a decline. **Re-verified
+      2026-09-09**: the outcome filter includes it, satisfaction formula
+      treats anything but `accepted` as 0.
+- [x] `self.pickup` is cleared/marked resolved once this fires -- it
+      must not linger stale for the rest of the trip. **Re-verified
+      2026-09-09**: `self.pickup = None` set immediately.
+- [x] No change to the existing Accept/Decline click detection, or to
       `_evaluate_pickup`'s normal departure-based wait recording --
       both stay exactly as they are.
 

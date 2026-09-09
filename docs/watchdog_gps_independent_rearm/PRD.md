@@ -69,19 +69,25 @@ does, found by tracing the call chain rather than trusting the comment.
 
 ## 2. Definition of "functional" for this task
 
-- [ ] The redundant watchdog re-arm fires on a fixed schedule as long as
+- [x] The redundant watchdog re-arm fires on a fixed schedule as long as
       the service process itself is alive - not gated on GPS callbacks
-      arriving at all.
-- [ ] Mirrors the existing, already-proven `accessibilityHeartbeatHandler`/
+      arriving at all. **Re-verified 2026-09-09** (was implemented, just
+      never checked off here even though the identical §6 item was):
+      `watchdogRearmRunnable` calls `scheduleWatchdog` and self-reschedules
+      via `postDelayed`, independent of any GPS callback.
+- [x] Mirrors the existing, already-proven `accessibilityHeartbeatHandler`/
       `accessibilityHeartbeatRunnable` self-repeating `Handler.postDelayed`
       pattern in this same file, rather than inventing a new mechanism.
-- [ ] Started alongside the accessibility heartbeat in `startTracking()`,
+      **Re-verified 2026-09-09**: confirmed identical shape.
+- [x] Started alongside the accessibility heartbeat in `startTracking()`,
       stopped alongside it in `stopTracking()`/`onDestroy()` - same
-      lifecycle, no new leak surface.
-- [ ] `maybeLogHeartbeat`'s own re-arm call is removed (superseded, not
+      lifecycle, no new leak surface. **Re-verified 2026-09-09**: both
+      start together, both stop together in both teardown paths.
+- [x] `maybeLogHeartbeat`'s own re-arm call is removed (superseded, not
       duplicated - two independent timers both re-arming the same alarm
-      is harmless but pointless).
-- [ ] No change to `MonitoringWatchdogReceiver` itself, the watchdog's own
+      is harmless but pointless). **Re-verified 2026-09-09**: confirmed
+      removed, only an explanatory comment remains.
+- [x] No change to `MonitoringWatchdogReceiver` itself, the watchdog's own
       self-reschedule, or the alert/restart logic - this PRD is scoped to
       where the redundant re-arm is triggered FROM, not what it does.
 

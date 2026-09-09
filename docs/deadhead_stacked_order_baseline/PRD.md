@@ -101,19 +101,24 @@ Read `TripManager.add_pickup`, `_evaluate_pickup`, `_start_trip`, and
 
 ## 2. Definition of "functional" for this task
 
-- [ ] A pickup added while a trip is ALREADY active (a stacked/batch
+- [x] A pickup added while a trip is ALREADY active (a stacked/batch
       order, `_cumulative_distance_km` non-zero at `add_pickup` time)
       measures deadhead as the distance from THAT pickup's acceptance to
       arrival at ITS restaurant, not the trip's entire cumulative
-      distance so far.
-- [ ] A pickup added at the start of a fresh trip (the common, single-
+      distance so far. **Re-verified 2026-09-09** (was implemented, just
+      never checked off here even though the identical §6 item was):
+      `add_pickup` snapshots `_deadhead_baseline_km`, `_evaluate_pickup`'s
+      arrival branch computes `_deadhead_distance_km` against it.
+- [x] A pickup added at the start of a fresh trip (the common, single-
       delivery case) is unaffected - deadhead still measures correctly
       from trip start to arrival, same real-world value as today.
-- [ ] No change to `deadhead_score`'s formula, `WEIGHT_DEADHEAD`, or
+      **Re-verified 2026-09-09**: baseline is 0.0 on a fresh trip
+      (`_start_trip` resets it), reproducing pre-fix behavior exactly.
+- [x] No change to `deadhead_score`'s formula, `WEIGHT_DEADHEAD`, or
       `_estimate_deadhead_km`'s fallback logic (restaurant-specific ->
       overall -> 0.0) - this PRD only fixes the measurement those already
-      consume.
-- [ ] No change to `actual_delivery_km`'s existing, already-correct
+      consume. **Re-verified 2026-09-09**: both unchanged.
+- [x] No change to `actual_delivery_km`'s existing, already-correct
       baseline-subtraction pattern - used as the reference implementation
       for this fix, not touched itself.
 

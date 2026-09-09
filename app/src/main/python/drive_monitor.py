@@ -859,7 +859,10 @@ class SmartScoreEngine:
         Called once per pickup after TripManager detects the driver has left
         the restaurant's vicinity (see TripManager's pickup tracking). This
         is what makes restaurant wait time real, learned data instead of a
-        hardcoded constant that never changes.
+        hardcoded constant that never changes -- and the ONLY thing that
+        populates restaurant_wait_history, which is itself what makes a
+        restaurant show up in the Address Book at all (get_address_book()
+        reads this table, not pickup_location_history directly).
 
         Important caveat: GPS can't distinguish "time spent parking" from
         "time spent waiting for the order to be ready" -- both look
@@ -867,9 +870,20 @@ class SmartScoreEngine:
         combined pickup friction time (parking + wait), not restaurant wait
         in isolation. There's no separate "parking" metric for the same
         reason -- see parking_note in calculate()'s output.
+
+        Driver backlog #11 ("restaurant address book not populated",
+        docs/driver_backlog_2026_09_03/PRD.md ss4): no diagnostic log was
+        ever available to root-cause a specific failure, so rather than
+        guess at a fix, this method (and both its callers, in
+        DriveMonitorEngine) now return/log whether a wait was actually
+        recorded here -- the guard below silently dropped a call with a
+        blank restaurant_name or missing/negative wait_minutes with ZERO
+        trace anywhere, which is exactly the kind of thing that could make
+        the Address Book quietly never populate with no way to tell why.
+        Returns True if a row was written, False if the guard dropped it.
         """
         if not restaurant_name or wait_minutes is None or wait_minutes < 0:
-            return
+            return False
         avg, count, learned = self._restaurant_wait_info(restaurant_name)
         if learned:
             new_count = count + 1
@@ -884,6 +898,7 @@ class SmartScoreEngine:
                 sample_count = excluded.sample_count
         """, (restaurant_name, new_avg, new_count))
         self.db.conn.commit()
+        return True
 
     def _is_peak_hour(self, hour_24):
         """
@@ -3779,9 +3794,18 @@ class DriveMonitorEngine:
             lat, lon, speed_kmh, timestamp_ms
         )
         if pickup_wait_event:
-            self.smart_score.record_restaurant_wait(
+            recorded = self.smart_score.record_restaurant_wait(
                 pickup_wait_event["restaurant_name"], pickup_wait_event["wait_minutes"]
             )
+            if recorded:
+                self.log_diagnostic("ADDRESS_BOOK", "Recorded pickup wait for "
+                                     + str(pickup_wait_event["restaurant_name"]) + ": "
+                                     + str(round(pickup_wait_event["wait_minutes"], 1)) + " min")
+            else:
+                # Driver backlog #11 -- previously silent (see
+                # SmartScoreEngine.record_restaurant_wait's own doc).
+                self.log_diagnostic("ADDRESS_BOOK", "Dropped pickup-wait event -- missing "
+                                     "restaurant_name or invalid wait_minutes: " + str(pickup_wait_event))
         if delivery_speed_event:
             self.smart_score.record_delivery_speed(
                 delivery_speed_event["distance_km"], delivery_speed_event["time_hours"]
@@ -4831,7 +4855,14 @@ class DriveMonitorEngine:
             return json.dumps(result)
 
         if result["wait_minutes"] is not None:
-            self.smart_score.record_restaurant_wait(result["restaurant_name"], result["wait_minutes"])
+            recorded = self.smart_score.record_restaurant_wait(result["restaurant_name"], result["wait_minutes"])
+            if recorded:
+                self.log_diagnostic("ADDRESS_BOOK", "Recorded pickup wait (unassigned) for "
+                                     + str(result["restaurant_name"]) + ": "
+                                     + str(round(result["wait_minutes"], 1)) + " min")
+            else:
+                self.log_diagnostic("ADDRESS_BOOK", "Dropped pickup-wait event (unassigned) -- "
+                                     "missing restaurant_name or invalid wait_minutes: " + str(result))
 
         # smart_score/components_json extracted from the full snapshot
         # add_pickup was given at accept-time (see calculate()'s return

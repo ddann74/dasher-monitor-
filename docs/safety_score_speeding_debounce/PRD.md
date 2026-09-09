@@ -86,24 +86,33 @@ L2095-2137, L2732-2736).
 
 ## 2. Definition of "functional" for this task
 
-- [ ] A sustained speeding period (many consecutive ticks over the
+- [x] A sustained speeding period (many consecutive ticks over the
       limit) is logged as ONE event, not one event per tick.
-- [ ] Speed dropping back to/under the limit, then exceeding it again
+      **Re-verified 2026-09-09**: `_detect_harsh_events`, edge-triggered
+      via `self._open_speeding_event`.
+- [x] Speed dropping back to/under the limit, then exceeding it again
       later in the same trip, produces a SECOND distinct event -- this
       is still catching real, separate violations, not collapsing an
       entire trip into at most one event regardless of how many times
-      the driver actually sped.
-- [ ] The logged event's magnitude reflects the PEAK speed reached during
+      the driver actually sped. **Re-verified 2026-09-09**:
+      `_open_speeding_event` resets to `None` on dip below limit,
+      reopens on next crossing.
+- [x] The logged event's magnitude reflects the PEAK speed reached during
       the violation period, not just the speed at the first tick that
       crossed the threshold -- a period that starts at 61 km/h and peaks
-      at 95 km/h should record 95, not 61.
-- [ ] `harsh_accel`/`harsh_brake` logging is completely unchanged --
-      this task only touches the `speeding` branch.
-- [ ] `_safety_score`'s formula (the `15.0` multiplier, the `events_per_km`
+      at 95 km/h should record 95, not 61. **Re-verified 2026-09-09**:
+      magnitude only updates upward while the period stays open.
+- [x] `harsh_accel`/`harsh_brake` logging is completely unchanged --
+      this task only touches the `speeding` branch. **Re-verified
+      2026-09-09**: confirmed untouched.
+- [x] `_safety_score`'s formula (the `15.0` multiplier, the `events_per_km`
       shape) is unchanged -- see §5, this is a separate calibration
-      question, not addressed here.
-- [ ] Verified by an actual executable test (see §4), not just code
-      review -- the first PRD in this repo able to do so.
+      question, not addressed here. **Re-verified 2026-09-09**: confirmed
+      unchanged (`100.0 - events_per_km*15.0`).
+- [x] Verified by an actual executable test (see §4), not just code
+      review -- the first PRD in this repo able to do so. **Re-verified
+      2026-09-09**: re-ran the test directly against the live repo file --
+      all assertions still pass, matching PROGRESS.md's claimed output.
 
 Non-goals (explicitly out of scope for this task):
 - Changing `DEFAULT_SPEED_LIMIT_KMH` or making it road-type-aware --

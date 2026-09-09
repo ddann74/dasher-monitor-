@@ -1,9 +1,11 @@
 # PRD: Store wait timer (Arrived at Store -> Confirm Pickup, 1-minute grace period)
 
-Status: DRAFT -- not yet implemented. Driver asked to have PRD +
-premortem + a ralph loop written first, per this repo's usual
-convention, before continuing the code that was already in progress
-when this was requested.
+Status: IMPLEMENTED (all §2/§5 checklist boxes checked except
+on-device confirmation and driver sign-off, which are never mine to
+check). **Corrected 2026-09-09**: this header was stale, still reading
+"DRAFT -- not yet implemented" from before the code was written -- a
+documentation-drift audit found the feature fully built (see §2/§5
+below) with the header never updated to match.
 
 ## 0. Origin
 
@@ -74,17 +76,24 @@ plainly in §3, not silently assumed correct.
 ## 2. Definition of "functional" / non-goals
 
 Definition of functional:
-- [ ] Tapping Dasher's "Arrived at Store" button starts a 1-minute
+- [x] Tapping Dasher's "Arrived at Store" button starts a 1-minute
       internal grace period; nothing is shown or logged if "Confirm
-      Pickup" is tapped before that minute elapses.
-- [ ] If the grace period elapses before "Confirm Pickup" is tapped, a
+      Pickup" is tapped before that minute elapses. **Re-verified
+      2026-09-09**: `startStoreWaitGracePeriod()`/`STORE_WAIT_GRACE_
+      PERIOD_MS = 60_000`; `stopStoreWaitTimer()` persists nothing when
+      the overlay never became visible.
+- [x] If the grace period elapses before "Confirm Pickup" is tapped, a
       small floating overlay appears showing elapsed time past the
       grace period, ticking once a second, until "Confirm Pickup" is
-      tapped.
-- [ ] On "Confirm Pickup", the overlay is removed and the measured
+      tapped. **Re-verified 2026-09-09**: `storeWaitTimerTickRunnable`
+      calls `OverlayHelper.showStoreWaitTimer` and reschedules itself
+      every `STORE_WAIT_TIMER_TICK_MS = 1000`ms.
+- [x] On "Confirm Pickup", the overlay is removed and the measured
       over-grace duration is persisted (silently -- no voice, no toast)
-      against the current trip.
-- [ ] The measured duration is visible later in Trip History, alongside
+      against the current trip. **Re-verified 2026-09-09**:
+      `stopStoreWaitTimer()` clears the overlay then calls
+      `record_store_wait_timer`, no voice/toast call present.
+- [x] The measured duration is visible later in Trip History, alongside
       this app's other measured phase durations, clearly labeled as
       distinct from the existing GPS-based wait duration and the
       subjective wait rating.

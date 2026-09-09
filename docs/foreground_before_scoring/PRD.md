@@ -81,23 +81,33 @@ Read `AppNotificationListenerService.java` in full (`handleDasherNotification`,
 
 ## 2. Definition of "functional" for this task
 
-- [ ] Dasher is launched for every recognized offer notification,
+- [x] Dasher is launched for every recognized offer notification,
       regardless of what the notification-based parser guessed the
       label was -- the "Poor" gate on `launchDasherApp()` is removed.
-- [ ] No voice announcement, haptic pattern, overlay text, or
+      **Re-verified 2026-09-09**: `launchDasherApp()` fires
+      unconditionally right after offer recognition; the old label gate
+      is gone.
+- [x] No voice announcement, haptic pattern, overlay text, or
       auto-launch notification body presents the notification-based
       `smart_score`'s `final_score`/`label`/`$/km`/`$/hr` as a confident,
       final number. The real Smart Score badge (screen-based,
       `DasherAccessibilityService`) remains the only place a numeric
-      score is presented as authoritative.
-- [ ] The notification-based path still tells the driver *something*
+      score is presented as authoritative. **Re-verified 2026-09-09**: no
+      `HapticFeedback.vibrateForLabel` call remains in this file; the
+      voice line only speaks payout, not score/label/rates.
+- [x] The notification-based path still tells the driver *something*
       useful immediately (offer exists, payout if known) -- this is a
       confidence downgrade, not a removal of the instant-detection
       feature the class doc describes as the whole point of this file.
-- [ ] `DeveloperTestingActivity`'s offer-outcome simulation (if it
+      **Re-verified 2026-09-09**: all three branches still speak.
+- [x] `DeveloperTestingActivity`'s offer-outcome simulation (if it
       exercises this code path) still passes / is updated to match.
-- [ ] No change to `DasherAccessibilityService.parse_offer_screen` or the
+      **Re-verified 2026-09-09**: condition doesn't apply -- that
+      Activity's simulation mirrors the screen-based path, not this
+      notification-based one, so nothing there could have broken.
+- [x] No change to `DasherAccessibilityService.parse_offer_screen` or the
       live Smart Score badge it drives -- out of scope, already correct.
+      **Re-verified 2026-09-09**: both unchanged.
 
 Non-goals (explicitly out of scope for this task):
 - Improving `parse_offer_notification`'s parsing accuracy itself (the

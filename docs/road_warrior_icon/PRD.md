@@ -98,25 +98,33 @@ copy an empty or not-yet-resolved value.
       radius of a stop with a real (non-placeholder) address (unchanged
       trigger, `TripManager.check_approaching_pickup` /
       `_check_approaching_stop`).
-- [ ] Tapping the icon when the stop's address text is available copies
+- [x] Tapping the icon when the stop's address text is available copies
       exactly that address text to the clipboard and shows a confirmation
-      toast that names (or previews) what was copied.
-- [ ] Tapping the icon when the address text is not yet available (empty
+      toast that names (or previews) what was copied. **Re-verified
+      2026-09-09**: `NavigationHelper.copyAddressToClipboard`.
+- [x] Tapping the icon when the address text is not yet available (empty
       string / not yet extracted or geocoded) refuses to copy and shows a
       clear, distinct "address not available yet" toast instead of
-      copying an empty value.
-- [ ] The old auto-launch-navigation behavior (RoadWarrior-targeted intent,
+      copying an empty value. **Re-verified 2026-09-09**: blank/null
+      guard returns before any clipboard write.
+- [x] The old auto-launch-navigation behavior (RoadWarrior-targeted intent,
       fallback to a generic maps chooser) is removed from this icon's tap
-      handler -- it no longer opens any app itself.
-- [ ] The RoadWarrior package-override setting on the Permissions & Setup
+      handler -- it no longer opens any app itself. **Re-verified
+      2026-09-09**: no Intent-building code remains in this call path.
+- [x] The RoadWarrior package-override setting on the Permissions & Setup
       screen (added for the old design's P5 mitigation, see §4a) is
       removed, since no intent is launched from this icon anymore.
-- [ ] The existing `DeveloperTestingActivity` manual test hooks are
+      **Re-verified 2026-09-09**: no RoadWarrior-package references
+      remain in `PermissionsActivity.java` or its layout.
+- [x] The existing `DeveloperTestingActivity` manual test hooks are
       updated to exercise the two new outcomes -- successful copy,
       blocked-copy-when-unresolved -- replacing the old
       RoadWarrior-opens / fallback-opens / placeholder-blocked hooks.
-- [ ] README's description of this icon's tap behavior is updated to
+      **Re-verified 2026-09-09**: `addTestStopNearby()`/
+      `addPlaceholderTestStop()` exercise both outcomes.
+- [x] README's description of this icon's tap behavior is updated to
       describe copy-to-clipboard, replacing the auto-navigate description.
+      **Re-verified 2026-09-09**: confirmed updated.
 
 Non-goals (explicitly out of scope for this task):
 - Any change to the icon's appearance trigger (approach-radius logic) --
