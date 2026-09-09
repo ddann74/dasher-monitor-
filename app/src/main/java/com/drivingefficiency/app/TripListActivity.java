@@ -78,6 +78,7 @@ public class TripListActivity extends AppCompatActivity {
                 allTrips = new JSONArray();
             }
         } catch (JSONException | PyException e) {
+            logDiagnostic("Could not load trip history -- " + e.getMessage());
             Toast.makeText(this, "Could not load trip history: " + e.getMessage(), Toast.LENGTH_LONG).show();
             allTrips = new JSONArray();
         }
@@ -166,6 +167,17 @@ public class TripListActivity extends AppCompatActivity {
             });
 
             tripRowsContainer.addView(row);
+        }
+    }
+
+    /** Same "a logging call can never crash the app" wrapper pattern used
+      * elsewhere in this app -- this Activity had none until the
+      * field-test checklist audit found its one load failure was
+      * Toast-only (gone once dismissed). */
+    private void logDiagnostic(String message) {
+        try {
+            engine.callAttr("log_diagnostic", "TRIP_LIST", message);
+        } catch (RuntimeException e) { // covers PyException too
         }
     }
 }

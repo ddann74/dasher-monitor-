@@ -207,3 +207,39 @@ a Dasher trip" question - reused, not re-derived.
 GENERAL-mode drive now produces neither icon, and a real Dasher trip
 still produces the correct one - no Android SDK/emulator/device in this
 environment.
+
+## 8. Driver-requested (2026-09-09): diagnostic logging for the home-address geocode
+
+Follow-on to the same field-test-checklist logging audit as §7.
+`PermissionsActivity`'s home-address geocode (`GoogleApiHelper.geocodeAddress`,
+feeding `ShiftRoutingPrefs.setHomeAddress` - the address this entire
+feature's hotspot-or-home suggestion is routed against) was the one
+`GoogleApiHelper` caller across the whole app the earlier audit round
+missed: every OTHER caller already logs both `onResult` and `onError`
+(confirmed by re-reading all six call sites), but this one was
+Toast-only in both directions. A failed or wrong home address here
+means this feature's own suggestion is silently never right, with
+nothing in the log to explain why.
+
+Fixed: both branches now log under `SHIFT_ROUTING` - success logs the
+resolved lat/lon, failure logs Google's own error message.
+`GoogleApiHelper.java`/`WeatherHelper.java` themselves needed no
+changes - both already delegate the real error text back to the
+caller via their callback contract, and every other caller already
+logs it.
+
+### Verification
+
+- Brace/paren balance confirmed on `PermissionsActivity.java`
+- HONEST LIMIT: no Android device/emulator available - not observed
+  firing on a real geocode failure.
+
+## 9. Success criteria for §8
+
+- [x] Home-address geocode logs both success and failure
+- [x] Confirmed every other `GoogleApiHelper`/`WeatherHelper` caller
+      already logs (no changes needed to either helper itself)
+- [x] Brace/paren balance confirmed
+- [ ] Driver confirms: a real or forced-invalid home address entry
+      shows a line in the diagnostic log
+- [ ] Driver sign-off.

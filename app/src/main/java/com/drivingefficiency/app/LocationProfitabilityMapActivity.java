@@ -103,10 +103,17 @@ public class LocationProfitabilityMapActivity extends AppCompatActivity {
             JSONArray entries = result.optJSONArray("entries");
             TextView notEnoughDataText = findViewById(R.id.notEnoughDataText);
             if (entries == null || entries.length() == 0) {
+                // Same field-test note as the ParkingZoneMap/CustomerZoneMap
+                // screens this Activity was later copied to build: distinguishes
+                // "empty because no restaurant has enough history yet"
+                // (expected) from a silent query failure.
+                logDiagnostic("No restaurants have enough offer history yet -- showing the empty-state message");
                 mapView.setVisibility(android.view.View.GONE);
                 notEnoughDataText.setVisibility(android.view.View.VISIBLE);
                 return;
             }
+            logDiagnostic("Loaded " + entries.length() + " location"
+                    + (entries.length() == 1 ? "" : "s") + " onto the profitability map");
 
             double sumLat = 0;
             double sumLon = 0;
@@ -140,6 +147,7 @@ public class LocationProfitabilityMapActivity extends AppCompatActivity {
             mapView.getController().setZoom(11.0);
             mapView.getController().setCenter(new GeoPoint(sumLat / entries.length(), sumLon / entries.length()));
         } catch (JSONException | PyException e) {
+            logDiagnostic("Could not load profitability map -- " + e.getMessage());
             Toast.makeText(this, "Could not load profitability map: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
@@ -150,6 +158,7 @@ public class LocationProfitabilityMapActivity extends AppCompatActivity {
                 entry.optDouble("avg_smart_score", 0), entry.optString("label", ""),
                 entry.optDouble("avg_dollar_per_km", 0), entry.optDouble("avg_dollar_per_hr", 0),
                 entry.optInt("sample_count", 0), entry.optInt("sample_count", 0) == 1 ? "" : "s");
+        logDiagnostic("Tapped location: " + entry.optString("restaurant_name", "Unknown"));
         new AlertDialog.Builder(this)
                 .setTitle(entry.optString("restaurant_name", "Unknown"))
                 .setMessage(message)
@@ -189,5 +198,17 @@ public class LocationProfitabilityMapActivity extends AppCompatActivity {
             canvas.restore();
         }
         return bitmap;
+    }
+
+    /** Same "a logging call can never crash the app" wrapper pattern used
+      * elsewhere in this app -- this Activity had none until the
+      * field-test checklist audit found it logged nothing at all (same
+      * gap ParkingZoneMapActivity/CustomerZoneMapActivity, copied from
+      * this class, had until an earlier round of that same audit). */
+    private void logDiagnostic(String message) {
+        try {
+            engine.callAttr("log_diagnostic", "LOCATION_PROFITABILITY_MAP", message);
+        } catch (RuntimeException e) { // covers PyException too
+        }
     }
 }
