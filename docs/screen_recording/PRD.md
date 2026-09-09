@@ -1165,3 +1165,141 @@ real video player can actually open the resulting file - no emulator
 - [ ] Driver confirms: tapping a recording opens a real share sheet,
       and the shared file actually opens/plays in a chosen video player
 - [ ] Driver sign-off.
+
+## 19. Driver-requested (2026-09-09): "build into the log for these check lists if it is necessary"
+
+The field-test checklist built for this app (an interactive artifact
+covering every feature from Sections 1-18 plus the zone-map/routing
+work) has a recurring shape to its "how do I know it worked" column:
+several items could only be judged by *absence* - no crash, no vibration
+alert, no error Toast - which can't tell "this ran and passed" apart
+from "this code path never ran at all." This section closes that gap at
+every checklist trigger point that had no visible trace before, using
+the same judgment standard as everywhere else in this PRD: only where a
+driver genuinely couldn't otherwise tell from the app's own log.
+
+### 19.1 What was silent before
+
+- `ParkingZoneMapActivity` and `CustomerZoneMapActivity` had **no**
+  `logDiagnostic` calls at all - not the empty-state case, not a
+  successful zone load, not a zone tap.
+- The GENERAL-mode routing-suggestion suppression (§ hotspot/home
+  routing PRD) had a comment (`// Nothing to suggest...`) but no log
+  line - no way to tell "correctly suppressed" from "this whole block
+  didn't run."
+- §15's after-delivery and end-of-session recording verification only
+  ever logged the *broken* case (`reportBrokenRecordingSegments`) - a
+  clean pass produced no line at all, so "no alert" couldn't be told
+  apart from "verification never ran."
+- `PermissionsActivity.shareRecording()` only ever showed a Toast on
+  failure and opened the OS share sheet on success - neither is in this
+  app's own diagnostic log.
+
+### 19.2 A genuine bug found by this audit, not just a logging gap
+
+Auditing `ScreenRecordingController`'s `StopListener` callback (fired
+from the one place all teardown paths converge, `releaseInternal()`)
+for what it actually told the caller turned up a real, previously
+unknown silent failure: **if recording stopped mid-trip for any reason
+other than the caller's own explicit `stop()` call - a segment-rotation
+failure (`rotateSegment()`'s two catch blocks) or Android itself
+revoking the grant externally (the driver tapping the system "Stop"
+notification, or the grant expiring) - nothing surfaced anywhere,
+not even to logcat in the external-revoke case.** A driver would just
+see recording quietly stop mid-delivery with zero explanation, and
+nothing in this app's own log would show it happened.
+
+Fixed by:
+- `MediaProjection.Callback.onStop()` now sets `lastFailureReason`
+  before tearing down, instead of leaving it whatever a previous,
+  unrelated failure had last set it to.
+- `StopListener.onRecordingStopped()` changed from a no-argument
+  callback to `onRecordingStopped(String unexpectedReason)` -
+  `null` for a normal caller-initiated `stop()`, non-null for anything
+  else.
+- New `expectingStop` field, set for the duration of `stop()`'s own
+  body, lets `releaseInternal()` tell "this was the caller's own
+  stop() call" apart from every other teardown path, without adding a
+  flag at each of `rotateSegment()`'s internal call sites individually
+  (the same "one convergence point, not three separately-maintained
+  call sites" reasoning already documented for `StopListener` itself).
+- New `wasEverRecordingThisSession` field, set only once
+  `mediaRecorder.start()` has actually succeeded in `beginCapture()`
+  and reset at the top of each new session, so an initial acquire/
+  begin-capture failure (already logged explicitly by
+  `TripForegroundService.startTracking()`'s own check) isn't ALSO
+  reported through this callback - that would have duplicated one real
+  failure into two confusing log lines.
+- `TripForegroundService`'s `ScreenRecordingController` instantiation
+  now logs `"Recording stopped unexpectedly mid-trip: " + unexpectedReason`
+  under the `SCREEN_RECORDING` category whenever `unexpectedReason` is
+  non-null.
+
+### 19.3 Positive-confirmation logging added
+
+- `ParkingZoneMapActivity`/`CustomerZoneMapActivity`: log the
+  empty-state case, the loaded-zone-count case, and each zone tap
+  (`PARKING_ZONE_MAP`/`CUSTOMER_ZONE_MAP` categories), via a new
+  `logDiagnostic` wrapper each Activity previously lacked entirely.
+- `TripForegroundService`'s GENERAL-mode branch now logs
+  `"Skipped hotspot/home/sweet-spot suggestion -- completed trip was
+  GENERAL mode, not Dasher"` under `ROUTING_SUGGESTION`.
+- `ScreenRecordingController.verifyNewlyFinishedSegments()` gained a
+  `lastVerifiedSegmentCount()` getter (segments actually examined this
+  call, as opposed to "nothing new to check yet" - both return an empty
+  broken list, but only the first is worth a positive log line). Both
+  call sites (after-delivery, end-of-session) now log
+  `"Verified N recording segment(s) from this delivery/session's end --
+  playable."` under `SCREEN_RECORDING` when the check ran and found
+  nothing broken.
+- `PermissionsActivity.shareRecording()` now logs
+  `"Opened share sheet for recording: <name>"` on success and
+  `"Could not share recording <name> -- <error>"` on the
+  `FileProvider` failure path, both under `SCREEN_RECORDING`.
+
+### 19.4 Verification
+
+- Brace/paren balance confirmed on every touched file:
+  `ScreenRecordingController.java`, `TripForegroundService.java`,
+  `ParkingZoneMapActivity.java`, `CustomerZoneMapActivity.java`,
+  `PermissionsActivity.java`.
+- `python3 -m py_compile app/src/main/python/drive_monitor.py` -
+  unaffected (Python untouched), re-confirmed anyway per this
+  repository's own convention.
+- Every new field/method cross-referenced across its call sites:
+  `wasEverRecordingThisSession` (declared, set false at the top of
+  `beginCapture()`, set true only after `mediaRecorder.start()`
+  succeeds, read in `releaseInternal()`); `lastVerifiedSegmentCount`
+  (declared, reset and incremented in `verifyNewlyFinishedSegments()`,
+  exposed via `lastVerifiedSegmentCount()`, read at both call sites in
+  `TripForegroundService`); `StopListener`'s new signature updated at
+  its one instantiation site.
+- HONEST LIMIT, same as every prior section: no Android
+  device/emulator available in this environment. The actual mid-trip
+  external-revoke path (tapping the system "Stop" notification) and
+  the actual segment-rotation-failure path could not be triggered and
+  observed producing this new log line on a real device - the fix
+  follows directly from reading `releaseInternal()`'s own control flow,
+  not from an observed run.
+
+## 20. Success criteria for §19
+
+- [x] `ParkingZoneMapActivity`/`CustomerZoneMapActivity` log empty
+      state, load count, and zone taps
+- [x] GENERAL-mode routing-suggestion suppression now logs that it ran
+- [x] Recording verification logs a positive "verified, playable" line
+      on a clean pass, not just the broken case
+- [x] `PermissionsActivity.shareRecording()` logs success and failure
+- [x] `StopListener` now reports mid-trip unexpected stops
+      (segment-rotation failure or external grant revoke) - previously
+      untraced anywhere, including logcat
+- [x] `wasEverRecordingThisSession` prevents double-logging the
+      initial acquire/begin-capture failure case
+- [x] Brace/paren balance and Python compile confirmed on every
+      touched file
+- [ ] Driver confirms: the field-test checklist's log-based items now
+      show a real line for each, including the two previously-silent
+      failure paths (would need an actual mid-trip permission-revoke
+      or rotation failure to observe directly - unlikely to occur
+      naturally during a normal field test)
+- [ ] Driver sign-off.

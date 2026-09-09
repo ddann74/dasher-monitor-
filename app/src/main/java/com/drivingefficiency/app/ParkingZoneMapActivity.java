@@ -115,10 +115,18 @@ public class ParkingZoneMapActivity extends AppCompatActivity {
             JSONArray entries = result.optJSONArray("entries");
             TextView notEnoughDataText = findViewById(R.id.notEnoughDataText);
             if (entries == null || entries.length() == 0) {
+                // Field-test note: previously nothing in the visible
+                // diagnostic log distinguished "empty because no
+                // restaurant has 3+ samples yet" (expected, not a bug)
+                // from "the query itself silently failed."
+                logDiagnostic("PARKING_ZONE_MAP", "No restaurants have both a GPS anchor and "
+                        + "enough parking samples yet -- showing the empty-state message");
                 mapView.setVisibility(android.view.View.GONE);
                 notEnoughDataText.setVisibility(android.view.View.VISIBLE);
                 return;
             }
+            logDiagnostic("PARKING_ZONE_MAP", "Loaded " + entries.length() + " restaurant zone"
+                    + (entries.length() == 1 ? "" : "s") + " onto the satellite map");
 
             double sumLat = 0;
             double sumLon = 0;
@@ -160,15 +168,29 @@ public class ParkingZoneMapActivity extends AppCompatActivity {
         int sampleCount = entry.optInt("sample_count", 0);
         int manualCount = entry.optInt("manual_sample_count", 0);
         int autoCount = entry.optInt("auto_sample_count", 0);
+        String restaurantName = entry.optString("restaurant_name", "Unknown");
+        String label = entry.optString("label", "");
         String message = String.format(java.util.Locale.US,
                 "Parking difficulty: %s (%.0f/100)\nBased on %d sample%s (%d manual, %d automatic)",
-                entry.optString("label", ""), entry.optDouble("avg_score", 0),
+                label, entry.optDouble("avg_score", 0),
                 sampleCount, sampleCount == 1 ? "" : "s", manualCount, autoCount);
+        logDiagnostic("PARKING_ZONE_MAP", "Tapped zone: " + restaurantName + " (" + label + ")");
         new AlertDialog.Builder(this)
-                .setTitle(entry.optString("restaurant_name", "Unknown"))
+                .setTitle(restaurantName)
                 .setMessage(message)
                 .setPositiveButton("OK", null)
                 .show();
+    }
+
+    /** Same "a logging call can never crash the app" wrapper pattern
+      * already used elsewhere in this app (e.g. TripForegroundService,
+      * DiagnosticsActivity) -- this Activity had none until the
+      * field-test checklist audit found it logged nothing at all. */
+    private void logDiagnostic(String category, String message) {
+        try {
+            engine.callAttr("log_diagnostic", category, message);
+        } catch (RuntimeException e) { // covers PyException too
+        }
     }
 
     /**

@@ -143,9 +143,18 @@ public class TripForegroundService extends Service {
     // covering all three ways recording can actually stop (explicit
     // stop(), a mid-setup failure, or Android externally revoking the
     // grant) in one place -- see ScreenRecordingController.StopListener's
-    // own doc for the real bug this closed.
+    // own doc for the real bug this closed. unexpectedReason is non-null
+    // only for the two cases that previously went completely untraced --
+    // a mid-trip segment-rotation failure or Android itself revoking the
+    // grant -- so only those get logged here; a normal stop() already has
+    // its own "Stopped recording for this trip" log line elsewhere.
     private final ScreenRecordingController screenRecordingController =
-            new ScreenRecordingController(() -> isScreenRecordingActive = false);
+            new ScreenRecordingController(unexpectedReason -> {
+                isScreenRecordingActive = false;
+                if (unexpectedReason != null) {
+                    logDiagnostic("SCREEN_RECORDING", "Recording stopped unexpectedly mid-trip: " + unexpectedReason);
+                }
+            });
 
     @Override
     public void onCreate() {
@@ -906,7 +915,17 @@ public class TripForegroundService extends Service {
         // isRecording() is still true here -- verifyNewlyFinishedSegments()
         // itself skips whichever segment is still open for writing, only
         // examining ones that already finalized before this delivery ended.
-        reportBrokenRecordingSegments(screenRecordingController.verifyNewlyFinishedSegments());
+        java.util.List<java.io.File> broken = screenRecordingController.verifyNewlyFinishedSegments();
+        int checkedCount = screenRecordingController.lastVerifiedSegmentCount();
+        if (broken.isEmpty() && checkedCount > 0) {
+            // Field-test note: "no alert fired" alone can't distinguish
+            // a real pass from the check never having run at all --
+            // this positive line is what actually makes that
+            // distinguishable in the visible diagnostic log.
+            logDiagnostic("SCREEN_RECORDING", "Verified " + checkedCount + " recording segment"
+                    + (checkedCount == 1 ? "" : "s") + " from this delivery -- playable.");
+        }
+        reportBrokenRecordingSegments(broken);
     }
 
     private void reportBrokenRecordingSegments(java.util.List<java.io.File> broken) {
@@ -1474,7 +1493,13 @@ public class TripForegroundService extends Service {
             // verifyScreenRecordingAfterDelivery()), so this call only
             // ever examines the one segment that couldn't be checked
             // until now.
-            reportBrokenRecordingSegments(screenRecordingController.verifyNewlyFinishedSegments());
+            java.util.List<java.io.File> finalBroken = screenRecordingController.verifyNewlyFinishedSegments();
+            int finalCheckedCount = screenRecordingController.lastVerifiedSegmentCount();
+            if (finalBroken.isEmpty() && finalCheckedCount > 0) {
+                logDiagnostic("SCREEN_RECORDING", "Verified " + finalCheckedCount + " recording segment"
+                        + (finalCheckedCount == 1 ? "" : "s") + " from this session's end -- playable.");
+            }
+            reportBrokenRecordingSegments(finalBroken);
         }
         if (fusedLocationClient != null && locationCallback != null) {
             fusedLocationClient.removeLocationUpdates(locationCallback);
@@ -1582,7 +1607,14 @@ public class TripForegroundService extends Service {
                     // driver who never sets this up sees zero behavior
                     // change.
                     if (!"DASHER".equals(completedTripMode)) {
-                        // Nothing to suggest after a GENERAL-mode trip.
+                        // Field-test note: previously nothing confirmed
+                        // the GENERAL-mode suppression itself actually
+                        // ran, as opposed to this whole block having
+                        // been skipped for some other reason (no valid
+                        // location, etc.) -- "no icon appeared" alone
+                        // can't tell those apart.
+                        logDiagnostic("ROUTING_SUGGESTION", "Skipped hotspot/home/sweet-spot "
+                                + "suggestion -- completed trip was GENERAL mode, not Dasher");
                     } else if (ShiftRoutingPrefs.isConfigured(this)) {
                         try {
                             double[] home = ShiftRoutingPrefs.getHomeLatLon(this);

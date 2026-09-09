@@ -472,12 +472,18 @@ public class PermissionsActivity extends AppCompatActivity {
             shareIntent.putExtra(Intent.EXTRA_STREAM, uri);
             shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             startActivity(Intent.createChooser(shareIntent, "Open/share recording"));
+            // Field-test checklist note: the only prior record of this
+            // action was the OS share-sheet chooser itself, which isn't
+            // in this app's own diagnostic log at all.
+            logDiagnostic("SCREEN_RECORDING", "Opened share sheet for recording: " + file.getName());
         } catch (IllegalArgumentException e) {
             // FileProvider's own documented failure mode: the file isn't
             // actually under a path file_paths.xml declares. Shouldn't
             // happen (every recording lives under ScreenRecordings/,
             // itself under the covered external-files root), but a
             // Toast beats a crash if that assumption is ever wrong.
+            logDiagnostic("SCREEN_RECORDING", "Could not share recording " + file.getName()
+                    + " -- " + e.getMessage());
             Toast.makeText(this, "Could not share this recording: " + e.getMessage(),
                     Toast.LENGTH_LONG).show();
         }

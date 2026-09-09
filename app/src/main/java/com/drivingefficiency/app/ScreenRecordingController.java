@@ -239,10 +239,42 @@ class ScreenRecordingController {
     // A single callback fired from inside cleanup itself can't be missed
     // by construction, unlike three independently-maintained call sites.
     interface StopListener {
-        void onRecordingStopped();
+        /**
+         * unexpectedReason is null for a normal, caller-initiated stop()
+         * call (TripForegroundService already logs its own "Stopped
+         * recording for this trip" line right after calling stop(), so
+         * nothing here would add anything). Non-null when recording
+         * ended some OTHER way mid-trip -- a segment-rotation failure
+         * (rotateSegment()'s two catch blocks) or Android itself
+         * revoking the grant externally (projectionCallback.onStop()
+         * below) -- CONFIRMED REAL GAP, found auditing this for the
+         * field-test checklist: neither case ever surfaced anywhere
+         * before this, not even to logcat in the external-revoke case.
+         * A driver would just see recording quietly stop mid-delivery
+         * with no explanation anywhere.
+         */
+        void onRecordingStopped(String unexpectedReason);
     }
 
     private final StopListener stopListener;
+
+    // Set true only for the duration of stop()'s own body -- lets
+    // releaseInternal() tell "this teardown was the caller's own
+    // explicit stop() call" apart from "something else tore this down"
+    // without needing a separate flag at every one of rotateSegment()'s
+    // internal call sites.
+    private boolean expectingStop;
+
+    // True only once mediaRecorder.start() has actually succeeded this
+    // session (set in beginCapture(), reset at the top of each new
+    // session). Gates releaseInternal()'s unexpectedReason: an initial
+    // acquire/begin-capture failure (start()/beginCapture() returning
+    // false before recording ever began) is already logged explicitly by
+    // TripForegroundService.startTracking()'s own check right after that
+    // call returns -- without this flag, that same single failure would
+    // ALSO surface through the StopListener callback below, duplicating
+    // one real event into two confusing log lines.
+    private boolean wasEverRecordingThisSession;
 
     ScreenRecordingController(StopListener stopListener) {
         this.stopListener = stopListener;
@@ -256,6 +288,8 @@ class ScreenRecordingController {
             // notification's own Stop action) -- this is the only
             // reliable signal that happened, so clean up rather than
             // leaving a half-torn-down recorder/display around.
+            lastFailureReason = "Android revoked the screen-recording permission mid-trip "
+                    + "(system \"Stop\" notification action tapped, or the grant expired)";
             releaseInternal();
         }
     };
@@ -383,6 +417,7 @@ class ScreenRecordingController {
             segmentFiles.clear();
             segmentFiles.add(currentFile);
             verifiedSegmentCount = 0;
+            wasEverRecordingThisSession = false;
 
             mediaRecorder = newRecorder(currentFile);
             mediaRecorder.prepare();
@@ -393,6 +428,16 @@ class ScreenRecordingController {
                     mediaRecorder.getSurface(), null, null);
 
             mediaRecorder.start();
+            // Only set true once capture has GENUINELY started -- gates
+            // releaseInternal()'s unexpectedReason (see StopListener's
+            // own doc): an initial acquire/begin failure here (never
+            // successfully started) is already logged explicitly by
+            // TripForegroundService.startTracking()'s own check right
+            // after this call returns false; without this flag, that
+            // same single failure would ALSO surface through the
+            // StopListener callback below, duplicating one real event
+            // into two confusing log lines.
+            wasEverRecordingThisSession = true;
             return true;
         } catch (Exception e) { // MediaRecorder/MediaProjection setup has many real, non-exotic
             // failure modes (codec unavailable, disk full, a device that
@@ -602,19 +647,33 @@ class ScreenRecordingController {
      *
      * Returns the segments that failed isPlayable() -- empty means every
      * segment examined this call is genuinely playable, not merely that
-     * MediaRecorder.stop() didn't throw.
+     * MediaRecorder.stop() didn't throw. lastVerifiedSegmentCount()
+     * exposes how many were actually examined THIS call, so a caller can
+     * tell "checked N, all playable" apart from "nothing new to check
+     * yet" -- both return an empty broken list, but only the first is
+     * worth a positive confirmation in the visible diagnostic log
+     * (field-test checklist: "no alert fired" alone can't distinguish a
+     * real pass from the check never having run at all).
      */
     java.util.List<File> verifyNewlyFinishedSegments() {
         int finalizedCount = isRecording() ? segmentFiles.size() - 1 : segmentFiles.size();
         java.util.List<File> broken = new java.util.ArrayList<>();
+        lastVerifiedSegmentCount = 0;
         while (verifiedSegmentCount < finalizedCount) {
             File f = segmentFiles.get(verifiedSegmentCount);
             if (!isPlayable(f)) {
                 broken.add(f);
             }
             verifiedSegmentCount++;
+            lastVerifiedSegmentCount++;
         }
         return broken;
+    }
+
+    private int lastVerifiedSegmentCount;
+
+    int lastVerifiedSegmentCount() {
+        return lastVerifiedSegmentCount;
     }
 
     /**
@@ -662,6 +721,7 @@ class ScreenRecordingController {
     /** Safe to call even if acquireProjection()/beginCapture() never
       * succeeded -- releaseInternal() itself null-checks everything. */
     void stop() {
+        expectingStop = true;
         lastStopWasLikelyEmpty = false;
         try {
             if (mediaRecorder != null) {
@@ -711,8 +771,21 @@ class ScreenRecordingController {
         // matters -- an external stop via the projectionCallback above --
         // can never be missed the way three separately-maintained call
         // sites at the caller were (see class doc).
+        //
+        // unexpectedReason is null exactly when THIS teardown was
+        // triggered by stop()'s own body (expectingStop was set right
+        // before it ran) -- never based on lastFailureReason's own
+        // staleness, since that field is never cleared between sessions
+        // and would otherwise leak a PREVIOUS trip's failure into a
+        // perfectly normal stop() of a later, successful one. Also
+        // requires wasEverRecordingThisSession, so an initial acquire/
+        // begin-capture failure (recording never actually started) isn't
+        // ALSO reported here -- startTracking() already logs that case
+        // explicitly on its own.
+        String unexpectedReason = (expectingStop || !wasEverRecordingThisSession) ? null : lastFailureReason;
+        expectingStop = false;
         if (stopListener != null) {
-            stopListener.onRecordingStopped();
+            stopListener.onRecordingStopped(unexpectedReason);
         }
     }
 

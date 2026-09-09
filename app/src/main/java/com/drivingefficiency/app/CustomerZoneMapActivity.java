@@ -106,10 +106,17 @@ public class CustomerZoneMapActivity extends AppCompatActivity {
             JSONArray entries = result.optJSONArray("entries");
             TextView notEnoughDataText = findViewById(R.id.notEnoughDataText);
             if (entries == null || entries.length() == 0) {
+                // Same field-test note as ParkingZoneMapActivity's own:
+                // distinguishes "empty because no address has 3+
+                // samples yet" (expected) from a silent query failure.
+                logDiagnostic("CUSTOMER_ZONE_MAP", "No addresses have both a GPS anchor and "
+                        + "enough parking samples yet -- showing the empty-state message");
                 mapView.setVisibility(android.view.View.GONE);
                 notEnoughDataText.setVisibility(android.view.View.VISIBLE);
                 return;
             }
+            logDiagnostic("CUSTOMER_ZONE_MAP", "Loaded " + entries.length() + " customer zone"
+                    + (entries.length() == 1 ? "" : "s") + " onto the satellite map");
 
             double sumLat = 0;
             double sumLon = 0;
@@ -146,15 +153,28 @@ public class CustomerZoneMapActivity extends AppCompatActivity {
         int sampleCount = entry.optInt("sample_count", 0);
         int manualCount = entry.optInt("manual_sample_count", 0);
         int autoCount = entry.optInt("auto_sample_count", 0);
+        String address = entry.optString("address", "Unknown address");
+        String label = entry.optString("label", "");
         String message = String.format(java.util.Locale.US,
                 "Parking difficulty: %s (%.0f/100)\nBased on %d sample%s (%d manual, %d automatic)",
-                entry.optString("label", ""), entry.optDouble("avg_score", 0),
+                label, entry.optDouble("avg_score", 0),
                 sampleCount, sampleCount == 1 ? "" : "s", manualCount, autoCount);
+        logDiagnostic("CUSTOMER_ZONE_MAP", "Tapped zone: " + address + " (" + label + ")");
         new AlertDialog.Builder(this)
-                .setTitle(entry.optString("address", "Unknown address"))
+                .setTitle(address)
                 .setMessage(message)
                 .setPositiveButton("OK", null)
                 .show();
+    }
+
+    /** Same wrapper pattern already used elsewhere (e.g.
+      * TripForegroundService, DiagnosticsActivity) -- this Activity had
+      * none until the field-test checklist audit found it. */
+    private void logDiagnostic(String category, String message) {
+        try {
+            engine.callAttr("log_diagnostic", category, message);
+        } catch (RuntimeException e) { // covers PyException too
+        }
     }
 
     /** Same shaded-oval technique as ParkingZoneMapActivity's own. */
