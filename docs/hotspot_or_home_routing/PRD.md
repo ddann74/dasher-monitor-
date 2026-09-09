@@ -127,6 +127,9 @@ hotspot suggestion.
 - [x] Java wiring: new combined check when configured, OLD sweet-spot
       check unchanged when not
 - [x] New icon distinguishing home (house) vs. hotspot (fire) visually
+- [x] Neither suggestion (hotspot-or-home, or the sweet-spot fallback)
+      fires after a GENERAL-mode drive - gated on the completed trip's
+      own persisted mode, not the live per-tick one (§7)
 - [ ] Driver confirms in real use
 - [ ] Driver sign-off
 
@@ -157,3 +160,50 @@ pure-Python logic, code review plus brace/paren balance for Java.
   (`onResult`/`onError`, not the `onSuccess`/`onFailure` first assumed)
   by reading the interface directly before using it - caught and fixed
   before this would have been a compile error.
+
+## 7. Driver-requested (2026-09-09, FIXED): suppress in GENERAL mode
+
+Driver: "i dont need to see the navigate home button when in general
+driving mode." Confirmed real, not a misreport: the trigger condition
+(`TRIP_ACTIVE -> IDLE`) is driven purely by GPS speed
+(`TripManager._start_trip`) with no mode check anywhere - it fires
+identically for an ordinary personal drive (GENERAL) and a real Dasher
+trip. Both branches this trigger can take - the hotspot-or-home
+suggestion AND the older sweet-spot fallback - are inherently
+Dasher-shift concepts (a pickup "sweet spot," a shift rate to compare
+against a threshold) that mean nothing after a plain drive, so the fix
+scopes the WHOLE block, not just the home-icon half the driver
+literally named.
+
+**A real subtlety, not just "add a mode check"**: the live per-tick
+`mode` already parsed a few lines above this block
+(`obj.optString("mode", "GENERAL")`) reflects whether the Dasher app is
+the foreground app RIGHT NOW - which can already read `GENERAL` the
+instant a delivery finishes (the driver switches away immediately)
+even though the trip that just ended genuinely was a Dasher one. Using
+that live value would have silently suppressed the suggestion for
+exactly the drivers it's meant to help. Fixed by fetching
+`get_last_trip_summary()`'s own `mode` field instead - the COMPLETED
+trip's persisted, sticky `_trip_mode` snapshot (upgrade-only to DASHER,
+set once and never downgraded mid-trip - see `TripManager.__init__`/
+`_start_trip`), the exact same source `notifyRateThisDelivery()`
+already relies on a few lines below for the identical "was this really
+a Dasher trip" question - reused, not re-derived.
+
+### Verification
+
+- Brace/paren balance: `TripForegroundService.java` 220/220 braces,
+  1022/1022 parens.
+- `python3 -m py_compile drive_monitor.py` - unaffected, re-confirmed
+  clean anyway (Python side untouched).
+- Traced `_trip_mode`'s own lifecycle (`TripManager.__init__` sets
+  `"GENERAL"`, upgraded to `"DASHER"` only, sticky) and
+  `get_last_trip_summary()`'s query (`trips` table, most recent row
+  with `end_time IS NOT NULL`) to confirm it reads the trip that JUST
+  ended, not a stale earlier one, at the exact moment this transition
+  fires.
+
+**Not done, and can't be from here**: on-device confirmation that a
+GENERAL-mode drive now produces neither icon, and a real Dasher trip
+still produces the correct one - no Android SDK/emulator/device in this
+environment.

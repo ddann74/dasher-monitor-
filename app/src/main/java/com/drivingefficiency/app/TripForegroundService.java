@@ -1552,6 +1552,27 @@ public class TripForegroundService extends Service {
                 // other state change, and not per-stop within a batch.
                 if ("TRIP_ACTIVE".equals(lastKnownTripState) && "IDLE".equals(tripState)
                         && TripForegroundService.hasValidLocation) {
+                    // Driver-requested: neither suggestion belongs after an
+                    // ordinary GENERAL-mode drive -- "hotspot," "home based
+                    // on shift rate," and "sweet spot" are all inherently
+                    // Dasher-shift concepts, meaningless outside an actual
+                    // dash. Deliberately reads the COMPLETED TRIP's own
+                    // persisted mode (same source notifyRateThisDelivery()
+                    // already uses for the identical "was this really a
+                    // Dasher trip" question a few lines below), not the
+                    // live per-tick `mode` above -- that reflects whether
+                    // Dasher is the foreground app RIGHT NOW, which can
+                    // already read GENERAL the instant a delivery finishes
+                    // (driver switches away immediately) even though the
+                    // trip itself genuinely was a Dasher one.
+                    String completedTripMode = "";
+                    try {
+                        JSONObject lastTrip = new JSONObject(engine.callAttr("get_last_trip_summary").toString());
+                        completedTripMode = lastTrip.optString("mode", "");
+                    } catch (JSONException | RuntimeException e) {
+                        logDiagnostic("ERROR", "get_last_trip_summary (routing-suggestion mode check) exception: "
+                                + android.util.Log.getStackTraceString(e));
+                    }
                     // docs/hotspot_or_home_routing/PRD.md: once the driver
                     // has configured BOTH a home address and a rate
                     // threshold, this SAME trigger moment uses the new
@@ -1560,7 +1581,9 @@ public class TripForegroundService extends Service {
                     // the original check runs completely unchanged -- a
                     // driver who never sets this up sees zero behavior
                     // change.
-                    if (ShiftRoutingPrefs.isConfigured(this)) {
+                    if (!"DASHER".equals(completedTripMode)) {
+                        // Nothing to suggest after a GENERAL-mode trip.
+                    } else if (ShiftRoutingPrefs.isConfigured(this)) {
                         try {
                             double[] home = ShiftRoutingPrefs.getHomeLatLon(this);
                             JSONObject check = new JSONObject(engine.callAttr(
