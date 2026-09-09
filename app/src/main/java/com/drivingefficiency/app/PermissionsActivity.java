@@ -28,6 +28,12 @@ import org.json.JSONObject;
 
 public class PermissionsActivity extends AppCompatActivity {
 
+    /** docs/screen_recording/PRD.md ss7/ss8 -- set by MainActivity's
+      * first-run explanation dialog when launching this Activity after
+      * the driver taps "Enable," so consent is requested immediately
+      * instead of needing a second manual tap on the Switch. */
+    static final String EXTRA_AUTO_REQUEST_RECORDING_CONSENT = "auto_request_recording_consent";
+
     private PyObject engine;
     private TextView permissionStatusText;
     private Switch screenRecordingSwitch;
@@ -289,22 +295,7 @@ public class PermissionsActivity extends AppCompatActivity {
         screenRecordingSwitch.setChecked(ScreenRecordingController.isEnabled(this));
         screenRecordingSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
             if (isChecked) {
-                // Turning the toggle on always re-asks for consent, even
-                // if one might already be held from earlier this same
-                // process -- simplest, most honest behavior given
-                // ScreenRecordingController's own unconfirmed-on-a-real-
-                // device note about whether a held grant can be reused;
-                // asking again here costs the driver one extra tap at
-                // most, not a real burden, and is guaranteed to work.
-                MediaProjectionManager manager = (MediaProjectionManager)
-                        getSystemService(MEDIA_PROJECTION_SERVICE);
-                if (manager == null) {
-                    Toast.makeText(this, "Screen recording isn't available on this device.",
-                            Toast.LENGTH_LONG).show();
-                    screenRecordingSwitch.setChecked(false);
-                    return;
-                }
-                screenCaptureConsentLauncher.launch(manager.createScreenCaptureIntent());
+                requestScreenRecordingConsent();
             } else {
                 ScreenRecordingController.setEnabled(this, false);
                 ScreenRecordingController.clearPendingConsent();
@@ -312,6 +303,21 @@ public class PermissionsActivity extends AppCompatActivity {
                 refreshScreenRecordingStatus();
             }
         });
+        // docs/screen_recording/PRD.md ss7/ss8 -- "capture by default":
+        // MainActivity's own first-run explanation dialog launches this
+        // Activity with this extra set after the driver taps "Enable."
+        // The listener is already attached above, so setChecked(true)
+        // here fires it exactly like a real tap would -- same single
+        // call to requestScreenRecordingConsent() that branch already
+        // makes, not a second explicit one (calling both would launch
+        // the real OS consent dialog twice back to back). Safe to assume
+        // this is a real OFF -> ON transition: MainActivity only sets
+        // this extra when hasEverBeenConfigured() was false, so
+        // isEnabled() (read into the Switch's initial state above) was
+        // false too.
+        if (getIntent().getBooleanExtra(EXTRA_AUTO_REQUEST_RECORDING_CONSENT, false)) {
+            screenRecordingSwitch.setChecked(true);
+        }
         viewRecordingsButton.setOnClickListener(v -> showRecordingsList());
         deleteAllRecordingsButton.setOnClickListener(v -> {
             int count = ScreenRecordingController.recordingsCount(this);
@@ -390,6 +396,28 @@ public class PermissionsActivity extends AppCompatActivity {
                     "%d recording%s stored, %.1f MB total.", count, count == 1 ? "" : "s", totalMb));
         }
         screenRecordingStatusText.setText(text.toString());
+    }
+
+    /**
+     * Extracted from the Switch's own "turned on" branch (docs/
+     * screen_recording/PRD.md ss7/ss8) so the first-run auto-trigger
+     * above can request the exact same real OS consent flow without a
+     * second, duplicate copy of this logic. Always re-asks for consent
+     * even if one might already be held from earlier this same process
+     * -- ScreenRecordingController's own unconfirmed-on-a-real-device
+     * note about whether a held grant can be reused; asking again costs
+     * one extra tap at most and is guaranteed to work.
+     */
+    private void requestScreenRecordingConsent() {
+        MediaProjectionManager manager = (MediaProjectionManager)
+                getSystemService(MEDIA_PROJECTION_SERVICE);
+        if (manager == null) {
+            Toast.makeText(this, "Screen recording isn't available on this device.",
+                    Toast.LENGTH_LONG).show();
+            screenRecordingSwitch.setChecked(false);
+            return;
+        }
+        screenCaptureConsentLauncher.launch(manager.createScreenCaptureIntent());
     }
 
     /**

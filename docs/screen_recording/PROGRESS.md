@@ -634,3 +634,81 @@ resulting file opens/plays in a chosen video player - no emulator
 
 Remaining PRD §18 boxes: driver confirms the share sheet actually opens
 and a shared recording actually plays; driver sign-off.
+
+## §7 implemented (2026-09-09): "implement the screen recording by default feature"
+
+Driver's explicit go-ahead on the DRAFT-only §7 from 2026-09-02. Went
+with §7.5's own recommendation (a first-run explanation dialog before
+the OS consent prompt) rather than re-asking, since the go-ahead came
+after that recommendation was already on record.
+
+**Investigated and rejected before writing code**: the checklist's own
+original plan was to literally flip `ScreenRecordingController.
+isEnabled()`'s `getBoolean(KEY_ENABLED, false)` default to `true`.
+Traced every read of `isEnabled()` first and found a real regression
+risk: `TripForegroundService.startTracking()`'s recording-attempt block
+reads it too, and monitoring can auto-start without the driver ever
+opening `MainActivity` first (a real, already-documented scenario -
+`docs/dash_monitoring_awareness/PRD.md`). A flipped raw default would
+make that driver's `isEnabled()` read `true` before they'd ever seen an
+explanation or granted real consent, firing the existing "enabled but
+no consent held" alert for a feature they never asked about.
+
+**Built instead**, same goal (a driver who never opens Setup still gets
+proactively asked once), a safer mechanism:
+
+- `ScreenRecordingController.hasEverBeenConfigured()` -
+  `SharedPreferences.contains(KEY_ENABLED)` - distinguishes "never
+  touched this" from "explicitly turned off," which a flipped default
+  or a bare `isEnabled()` check cannot. `isEnabled()`'s own raw default
+  stays `false`, unchanged.
+- `MainActivity.maybeShowScreenRecordingDefaultPrompt()`, called once
+  from `onCreate` - shows the recommended explanation dialog only when
+  `!hasEverBeenConfigured() && !isDefaultPromptShown()`.
+  `setCancelable(false)`: "Enable Screen Recording" launches
+  `PermissionsActivity` with a new
+  `EXTRA_AUTO_REQUEST_RECORDING_CONSENT` extra; "Not Now" explicitly
+  persists `enabled=false` - both a real recorded choice, no
+  dismiss-without-choosing case left dangling.
+- `PermissionsActivity`: the switch's own "turned on" logic was
+  extracted into `requestScreenRecordingConsent()`; the new extra
+  triggers `screenRecordingSwitch.setChecked(true)`, which fires the
+  already-attached listener the same way a real tap would - the real OS
+  consent dialog appears immediately.
+- `ScreenRecordingController.isDefaultPromptShown()`/
+  `setDefaultPromptShown()` - a plain persisted flag so this is a true
+  one-time nudge.
+
+**Self-caught bug during implementation**: the first version called
+`requestScreenRecordingConsent()` explicitly right after
+`setChecked(true)` in `PermissionsActivity` - but the listener is
+already attached at that point in `onCreate`, so `setChecked(true)`
+ALSO fires it, meaning the real OS consent dialog would have launched
+twice, back to back. Caught on re-read before verifying brace/paren
+balance; fixed by removing the redundant explicit call.
+
+§7.1's in-app export/share gap was deliberately NOT bundled into this -
+already addressed separately as its own driver ask (§17/§18 above).
+
+### Verification
+
+- Brace/paren balance: `ScreenRecordingController.java` 89/89 braces,
+  381/381 parens; `PermissionsActivity.java` 83/83, 465/465;
+  `MainActivity.java` 132/132, 571/571 (all after the double-launch
+  fix).
+- `python3 -m py_compile drive_monitor.py` - unaffected, re-confirmed
+  clean anyway.
+- Cross-referenced `EXTRA_AUTO_REQUEST_RECORDING_CONSENT`,
+  `hasEverBeenConfigured`, `isDefaultPromptShown`, and
+  `setDefaultPromptShown` across every call site - all resolve.
+- Traced the double-launch bug from its cause (listener already
+  attached before the auto-trigger block runs) to its fix (rely on the
+  listener alone, don't call `requestScreenRecordingConsent()` twice).
+
+**Not done, and can't be from here**: on-device confirmation that the
+explanation actually appears on a fresh install's first launch, that
+"Enable" leads straight to a real OS consent dialog, and that an
+existing driver with any prior opinion about the toggle never sees the
+prompt - no emulator/device available.
+
+Remaining PRD §7.7 boxes: driver confirmation in real use; sign-off.

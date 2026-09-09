@@ -54,6 +54,7 @@ public class MainActivity extends AppCompatActivity {
             engine = PythonBridge.getEngine(this);
             VoiceAnnouncer.init(this);
             attemptTrustedContactsAutoRecovery();
+            maybeShowScreenRecordingDefaultPrompt();
 
             // Reached via TripDetailActivity's "Rate This Delivery"
             // button (docs/trip_history_redesign/PRD.md ss3.4) -- shows
@@ -376,6 +377,51 @@ public class MainActivity extends AppCompatActivity {
          * so it's clear at a glance which mode is active, matching the
          * indicator already shown in the persistent notification.
          */
+        /**
+         * docs/screen_recording/PRD.md ss7/ss8, "capture screen recording
+         * by default": a driver who never opens Setup would otherwise
+         * never be asked about this feature at all. Shown at most ONCE
+         * ever (see ScreenRecordingController.isDefaultPromptShown) --
+         * gated on hasEverBeenConfigured(), not on isEnabled(), since the
+         * whole point is distinguishing "never touched this" from
+         * "explicitly chose a value" (see that method's own doc for why
+         * a flipped isEnabled() default was considered and rejected).
+         * Deliberately setCancelable(false): both buttons record a real,
+         * explicit choice (Enable -> the real OS consent dialog, exactly
+         * as if the driver had tapped the Setup switch themselves; Not
+         * Now -> explicitly persisted off, not just skipped) rather than
+         * leaving a dismiss-without-choosing case to reason about
+         * separately.
+         */
+        private void maybeShowScreenRecordingDefaultPrompt() {
+            if (ScreenRecordingController.hasEverBeenConfigured(this)
+                    || ScreenRecordingController.isDefaultPromptShown(this)) {
+                return;
+            }
+            new AlertDialog.Builder(this)
+                    .setTitle("Record your screen during trips?")
+                    .setMessage("Dasher Monitor can automatically record your screen during trips, "
+                            + "so you can review a delivery later if something goes wrong.\n\n"
+                            + "Screen recording captures your ENTIRE screen -- not just this app -- "
+                            + "for the whole trip. If you switch to messages, banking, or anything "
+                            + "else mid-trip, that's captured too. Recordings stay private on this "
+                            + "device only, never uploaded anywhere, and you can turn this off "
+                            + "anytime in Setup.")
+                    .setCancelable(false)
+                    .setPositiveButton("Enable Screen Recording", (dialog, which) -> {
+                        ScreenRecordingController.setDefaultPromptShown(this);
+                        Intent intent = new Intent(this, PermissionsActivity.class);
+                        intent.putExtra(PermissionsActivity.EXTRA_AUTO_REQUEST_RECORDING_CONSENT, true);
+                        startActivity(intent);
+                    })
+                    .setNegativeButton("Not Now", (dialog, which) -> {
+                        ScreenRecordingController.setDefaultPromptShown(this);
+                        ScreenRecordingController.setEnabled(this, false);
+                        logDiagnostic("SCREEN_RECORDING", "Declined the first-run default-on prompt -- staying off");
+                    })
+                    .show();
+        }
+
         /**
          * Auto-recovery for trusted contacts: ONLY triggers if the list
          * is currently completely empty (e.g. after a reinstall or a
