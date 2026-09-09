@@ -49,7 +49,14 @@ public class TrustedContactsActivity extends AppCompatActivity {
                 trustedContactInput.setText("");
                 Toast.makeText(this, "Added: \"" + name + "\" -- will match any sender "
                         + "whose name contains this.", Toast.LENGTH_LONG).show();
+                logDiagnostic("TRUSTED_CONTACTS", "Added trusted contact: " + name);
             } catch (RuntimeException e) { // covers PyException too
+                // Field-test note: a Toast alone doesn't survive being
+                // dismissed -- a driver who genuinely needs this contact
+                // trusted (this gates which senders get read aloud) has
+                // no way to later confirm it actually failed vs. was
+                // never attempted.
+                logDiagnostic("TRUSTED_CONTACTS", "Could not add contact \"" + name + "\" -- " + e.getMessage());
                 Toast.makeText(this, "Could not add contact: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         });
@@ -110,7 +117,9 @@ public class TrustedContactsActivity extends AppCompatActivity {
             rememberContactsFileUri(uri);
             Toast.makeText(this, "Saved " + names.length() + " trusted contact(s) to file.",
                     Toast.LENGTH_LONG).show();
+            logDiagnostic("TRUSTED_CONTACTS", "Saved " + names.length() + " trusted contact(s) to file");
         } catch (RuntimeException | JSONException | java.io.IOException e) {
+            logDiagnostic("TRUSTED_CONTACTS", "Could not save trusted contacts file -- " + e.getMessage());
             Toast.makeText(this, "Could not save file: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
@@ -144,6 +153,7 @@ public class TrustedContactsActivity extends AppCompatActivity {
             int addedCount = 0;
             try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
                 if (in == null) {
+                    logDiagnostic("TRUSTED_CONTACTS", "Could not open picked trusted-contacts file (openInputStream returned null)");
                     Toast.makeText(this, "Could not open that file.", Toast.LENGTH_LONG).show();
                     return;
                 }
@@ -161,7 +171,9 @@ public class TrustedContactsActivity extends AppCompatActivity {
             rememberContactsFileUri(uri);
             Toast.makeText(this, "Loaded " + addedCount + " trusted contact(s) from file.",
                     Toast.LENGTH_LONG).show();
+            logDiagnostic("TRUSTED_CONTACTS", "Loaded " + addedCount + " trusted contact(s) from file");
         } catch (RuntimeException | java.io.IOException e) {
+            logDiagnostic("TRUSTED_CONTACTS", "Could not load trusted contacts file -- " + e.getMessage());
             Toast.makeText(this, "Could not load file: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
@@ -170,6 +182,18 @@ public class TrustedContactsActivity extends AppCompatActivity {
     public boolean onSupportNavigateUp() {
         finish();
         return true;
+    }
+
+    /** Same "a logging call can never crash the app" wrapper pattern used
+      * elsewhere in this app -- this Activity had none until the
+      * field-test checklist audit found every failure here was Toast-only
+      * (gone once dismissed), for a safety-relevant feature (this list
+      * gates which senders' messages get read aloud while driving). */
+    private void logDiagnostic(String category, String message) {
+        try {
+            engine.callAttr("log_diagnostic", category, message);
+        } catch (RuntimeException e) { // covers PyException too
+        }
     }
 
     /**
@@ -198,11 +222,13 @@ public class TrustedContactsActivity extends AppCompatActivity {
                         .setTitle("Trusted Contacts (tap to remove)")
                         .setItems(names, (dialog, which) -> {
                             engine.callAttr("remove_trusted_sender", names[which]);
+                            logDiagnostic("TRUSTED_CONTACTS", "Removed trusted contact: " + names[which]);
                             Toast.makeText(this, "Removed: " + names[which], Toast.LENGTH_SHORT).show();
                         })
                         .setNegativeButton("Close", null)
                         .show();
             } catch (JSONException | PyException e) {
+                logDiagnostic("TRUSTED_CONTACTS", "Could not load trusted contacts -- " + e.getMessage());
                 Toast.makeText(this, "Could not load trusted contacts.", Toast.LENGTH_SHORT).show();
             }
         }

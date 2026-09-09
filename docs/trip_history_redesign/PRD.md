@@ -325,3 +325,57 @@ this needs -- no Python change for this piece either.
       Monitoring; the trip list filters and opens the right trip;
       General-mode trips never show a rating prompt
 - [ ] Driver sign-off
+
+## 7. Driver-requested (2026-09-09): diagnostic logging for TripHistoryActivity's own silent failures
+
+Follow-on to `docs/screen_recording/PRD.md` §19's field-test-checklist
+logging audit -- the driver asked whether the same "does the log cover
+everything" question applied elsewhere too. It didn't: `TripHistoryActivity`
+(this screen's own hub -- distance accuracy, hourly rate accuracy,
+address book, acceptance stats, personal calibration, rejected offers
+report, pay trend, weather vs. pay) had 16 failure paths, every single
+one Toast-only. A Toast disappears once dismissed; nothing about why a
+screen failed to load was ever recoverable afterward from this app's
+own log.
+
+Fixed by adding a `logDiagnostic(String)` wrapper (this Activity's own
+single-category convenience form -- everything here logs under
+`TRIP_HISTORY`) and a call at all 16 existing catch blocks, plus two
+data-mutating actions that previously had no trace either way:
+`reset_personal_calibration` (now logs on success too, not just
+failure) and `set_offer_omitted_from_calibration` (logs which specific
+offer's toggle failed to persist, since a driver toggling several in
+one sitting couldn't otherwise tell which one silently didn't save).
+
+Deliberately did NOT add positive-confirmation logging for a normal,
+successful screen view (unlike screen_recording's own after-delivery
+verification) -- these are read-only stat/history screens a driver may
+open repeatedly out of curiosity, not once-per-delivery events; logging
+every successful view would be noise, not signal. Only the two
+mutating actions above got a success line, since those are real state
+changes worth being able to confirm later.
+
+### Verification
+
+- Brace/paren balance confirmed
+- `python3 -m py_compile app/src/main/python/drive_monitor.py` --
+  unaffected (Python untouched)
+- All 17 `catch (` blocks (16 original + the new `logDiagnostic`
+  wrapper's own) cross-referenced against 17 real `logDiagnostic(...)`
+  call sites (18 total occurrences of the method name, minus its own
+  one-line definition)
+- HONEST LIMIT: no Android device/emulator available in this
+  environment -- these log lines were not observed firing on a real
+  failure, only read as correct from the code itself
+
+## 8. Success criteria for §7
+
+- [x] `logDiagnostic(String)` wrapper added
+- [x] All 16 pre-existing Toast-only catch blocks now also log
+- [x] `reset_personal_calibration` logs both success and failure
+- [x] `set_offer_omitted_from_calibration` failure names which offer
+- [x] Brace/paren balance and Python compile confirmed
+- [ ] Driver confirms: a forced failure on any of these screens (e.g.
+      airplane mode mid-load) now shows a real line in the diagnostic
+      log, not just a Toast that's already gone
+- [ ] Driver sign-off
