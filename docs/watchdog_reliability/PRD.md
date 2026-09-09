@@ -93,18 +93,27 @@ finding against the real uploaded log, not just the code in isolation.
 
 ## 2. Definition of "functional" for this task
 
-- [ ] A single dropped/missed watchdog alarm no longer permanently
+- [x] A single dropped/missed watchdog alarm no longer permanently
       disables the watchdog for the rest of the session -- something
       still alive and running (the service's own heartbeat, proven to
       keep running reliably for hours in the real log) gives it a chance
-      to re-arm without requiring a full app reopen.
-- [ ] The diagnostic log can confirm, after the fact, whether
+      to re-arm without requiring a full app reopen. **Re-verified
+      2026-09-09**: implemented via a dedicated `watchdogRearmRunnable`
+      on a fixed 5-minute schedule (later moved out of the heartbeat
+      itself, since that only ran on GPS callbacks -- see
+      `docs/watchdog_gps_independent_rearm/PRD.md`; the underlying
+      requirement here is still met).
+- [x] The diagnostic log can confirm, after the fact, whether
       `scheduleWatchdog()` actually succeeded in scheduling the next
-      check -- closing the current observability gap.
-- [ ] The diagnostic log records `Build.MANUFACTURER`/`Build.MODEL` once
+      check -- closing the current observability gap. **Re-verified
+      2026-09-09**: `MonitoringWatchdogReceiver.scheduleWatchdog()` logs
+      under `WATCHDOG`.
+- [x] The diagnostic log records `Build.MANUFACTURER`/`Build.MODEL` once
       per session, so a future uploaded log can immediately answer "which
-      phone was this."
-- [ ] None of this claims to guarantee the underlying OS/OEM kill itself
+      phone was this." **Re-verified 2026-09-09**: logged in
+      `TripForegroundService.onCreate()`, along with SDK version and
+      known-aggressive-OEM flag.
+- [x] None of this claims to guarantee the underlying OS/OEM kill itself
       is prevented -- see explicit non-goals below and the premortem in
       §4a. This narrows a real gap in the existing safety net; it is not
       a promise the safety net becomes unbreakable.

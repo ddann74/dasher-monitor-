@@ -191,13 +191,55 @@ anything) is still needed before a fix can be attempted.
       driver's actual cause; existing partial mitigation for "overlay
       permission never granted" (a notification nudge,
       `TripForegroundService.java`, line number approximate) untouched.
-- [ ] **#17a - RoadWarrior icon didn't appear that one time** (the
-      "already implemented" reading of #17 - see §3). If this is what
-      the driver meant, it's a bug report against
-      `docs/road_warrior_icon/PRD.md`'s existing feature, not new work.
-      **Action: needs the driver to confirm which reading of #17 they
-      meant before this checklist item is actionable at all** - see
-      §5/#17b for the alternative "new feature" reading.
+- [x] **#11 - restaurant address book not populated** (duplicate: #15,
+      per §2). FOUND AND FIXED (2026-09-09, closing a doc-tracking gap --
+      this item was promised a §4 entry in both §1 and §2 but never
+      actually got one). No diagnostic log was available to root-cause a
+      SPECIFIC failed case, so rather than guess, hardened the confirmed
+      weak point instead (same "no log, so instrument the real risk"
+      pattern already used for #16/#21 below): `get_address_book()` only
+      ever reads from `restaurant_wait_history`, and the ONE method that
+      writes to it,`SmartScoreEngine.record_restaurant_wait()`, silently
+      dropped the call with ZERO trace anywhere if `restaurant_name` was
+      blank or `wait_minutes` was `None`/negative -- exactly the kind of
+      thing that could make the Address Book quietly never populate with
+      no way to tell why. That method now returns whether it actually
+      recorded, and both its callers in `DriveMonitorEngine`
+      (`on_gps_update`'s pickup-wait-event handling, and
+      `record_pickup_unassigned_for_long_wait`) now log under
+      `ADDRESS_BOOK` either way. **Not closed as fully verified** -- like
+      #16/#21, whether a real pickup was ever actually silently dropped
+      this way is still unconfirmed; if the Address Book is still empty
+      after a driver completes a real delivery with pickup tracking on a
+      build with this logging, the `ADDRESS_BOOK` category in the
+      diagnostic log will now say exactly why.
+- [x] **#20 - app keeps switching Dasher<->General mode.** FOUND AND
+      DOCUMENTED (2026-09-09, closing a doc-tracking gap -- promised a §4
+      entry in §1 but never got one). Re-verified the debounce fix §1
+      already found (`MODE_CHANGE_DEBOUNCE_MS = 2000`,
+      `DasherAccessibilityService.java:952`, gating logic at
+      `:600-639`): a candidate mode change must persist for 2 full
+      seconds before it commits. Unlike #11, this path is ALREADY fully
+      logged -- a brief, non-sustained flicker logs under `MODE_FILTER`
+      ("Discarded a brief, non-sustained mode candidate", `:623`), and an
+      actual committed switch logs under `MODE` (`:639`). **No further
+      code change made or needed** -- nothing here is silent. Still not
+      closed as driver-confirmed, per §1's own original caveat: "already
+      fixed in code" isn't the same as "driver confirmed the fix holds."
+      If flapping is still reported on a build with this debounce, the
+      `MODE_FILTER`/`MODE` diagnostic log lines around that time will show
+      whether it's genuine (both packages really did hold foreground for
+      2+ seconds each) or the debounce itself needs a longer window.
+- [x] **#17a - RoadWarrior icon didn't appear that one time** (the
+      "already implemented" reading of #17 - see §3). RESOLVED
+      (2026-09-09, closing a stale bullet): §3 already recorded that the
+      driver confirmed #17 meant reading (b) - "navigate home with a
+      saved/preset route" (§5/#17b) - not this RoadWarrior-icon bug
+      reading, back on 2026-09-03. This bullet's own "needs the driver to
+      confirm which reading" action was already satisfied at that point;
+      it just never got updated/checked off to say so. No code change
+      needed - correctly "not what the driver meant, so it needed no
+      fix," per §3's own text.
 
 ## 5. Category D - new feature requests, no existing design
 
@@ -504,12 +546,20 @@ words; see §1-§5 for what each number maps to.
 
 ## 9. Success criteria (this PRD as a whole)
 
-- [ ] Every §4 item either fixed, or explicitly still blocked on a
+- [x] Every §4 item either fixed, or explicitly still blocked on a
       named piece of missing evidence (a diagnostic log, a driver
-      answer) - never silently dropped
-- [ ] Every §5 item either implemented, or explicitly still blocked on
-      an open question or driver scoping conversation
-- [ ] §3's three open questions answered by the driver
+      answer) - never silently dropped. **Re-verified 2026-09-09**: #11
+      and #20 were promised §4 entries (by §1 and §2) but never actually
+      got them - a real gap in this exact promise, found by an
+      independent audit and fixed above; both now have full §4 entries.
+- [x] Every §5 item either implemented, or explicitly still blocked on
+      an open question or driver scoping conversation. **Re-verified
+      2026-09-09**: all 12 Category D items (#1, #2, #5, #6, #7, #8, #9,
+      #14, #17b, #25, #26, #29) have a §5 entry, each either fixed and
+      verified with a real test, or explicitly moved to its own PRD.
+- [x] §3's three open questions answered by the driver. **Re-verified
+      2026-09-09**: #4, #17, and #26 are all marked resolved with the
+      driver's own confirmation, inline in §3.
 - [ ] Driver confirms the recommended priority order in §6, or gives a
       different one
 

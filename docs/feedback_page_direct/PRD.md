@@ -78,18 +78,26 @@ trigger.
 
 ## 2. Definition of "functional" for this task
 
-- [ ] When a delivery completes (`TRIP_ACTIVE` -> `IDLE`), the feedback
+- [x] When a delivery completes (`TRIP_ACTIVE` -> `IDLE`), the feedback
       page appears without the driver needing to tap a notification
       first, using the same reliable-foreground mechanism
       `launchDasherApp()` already uses elsewhere in this app.
-- [ ] If the automatic foreground launch is blocked for any reason (BAL
+      **Re-verified 2026-09-09**: `notifyRateThisDelivery()` shows a BAL-
+      exemption overlay then calls `startActivity()` directly.
+- [x] If the automatic foreground launch is blocked for any reason (BAL
       restriction, `USE_FULL_SCREEN_INTENT` revoked on Android 14+,
       etc.), the driver still gets a notification they can tap -- this is
       a reliability upgrade, not a removal of the existing fallback path.
-- [ ] The stale `TripHistoryActivity` reference in
+      **Re-verified 2026-09-09**: the full-screen-intent notification is
+      posted unconditionally, not gated on the direct launch failing.
+- [x] The stale `TripHistoryActivity` reference in
       `notifyRateThisDelivery`'s comment is corrected to `MainActivity`.
-- [ ] No change to `MainActivity.showFeedbackDialog` or the
+      **Re-verified 2026-09-09**: no stale reference remains (the target
+      has since moved on again, to `TripDetailActivity`, per
+      `docs/trip_history_redesign/PRD.md` -- a later, separate change).
+- [x] No change to `MainActivity.showFeedbackDialog` or the
       `auto_show_feedback_trip_id` handling -- both already work.
+      **Re-verified 2026-09-09**: both unchanged.
 
 Non-goals (explicitly out of scope for this task):
 - The notification-ID collision noted in §1.4 -- separate, pre-existing,
