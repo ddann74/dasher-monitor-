@@ -113,3 +113,39 @@ paused" the driver is describing.
       confirm `EXTRA_MESSAGES` actually carries what this design
       assumes.
 - [ ] Driver sign-off.
+
+## 7. Driver-requested (2026-09-09): diagnostic logging for TrustedContactsActivity's own silent failures
+
+Follow-on to `docs/screen_recording/PRD.md` §19's field-test-checklist
+logging audit, extended to whether the same gap existed elsewhere.
+`TrustedContactsActivity` — the screen that manages the trusted-sender
+list this PRD's own filtering depends on — had ZERO `logDiagnostic`
+calls anywhere: add/remove a contact, save/load the list to/from a
+file (the reinstall-survival feature), and viewing the list were all
+either Toast-only or silent on failure. For a safety-relevant list
+(gates which senders get read aloud while driving), a failed add that
+the driver didn't notice in time, or a failed file load after a
+reinstall, would have left no trace anywhere.
+
+Fixed by adding this Activity's own `logDiagnostic(String, String)`
+wrapper (same defensive pattern used throughout this app) and logging:
+add contact (success + failure), remove contact, save-to-file
+(success + failure), load-from-file (success + failure, including the
+`openInputStream()` returned-null case), and the list-view load
+failure.
+
+### Verification
+
+- Brace/paren balance confirmed
+- HONEST LIMIT: no Android device/emulator available in this
+  environment — not observed firing on a real device.
+
+## 8. Success criteria for §7
+
+- [x] `logDiagnostic` wrapper added
+- [x] Add/remove contact, save/load file, and view-list failure all
+      log
+- [x] Brace/paren balance confirmed
+- [ ] Driver confirms: adding, removing, saving, and loading trusted
+      contacts each show a real line in the diagnostic log
+- [ ] Driver sign-off.

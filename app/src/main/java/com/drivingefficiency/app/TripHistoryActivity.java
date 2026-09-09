@@ -125,6 +125,7 @@ public class TripHistoryActivity extends AppCompatActivity {
                         .setPositiveButton("OK", null)
                         .show();
             } catch (JSONException | PyException e) {
+                logDiagnostic("Could not load distance accuracy -- " + e.getMessage());
                 Toast.makeText(this, "Could not load distance accuracy: " + e.getMessage(),
                         Toast.LENGTH_LONG).show();
             }
@@ -183,6 +184,7 @@ public class TripHistoryActivity extends AppCompatActivity {
                         .setPositiveButton("OK", null)
                         .show();
             } catch (JSONException | PyException e) {
+                logDiagnostic("Could not load hourly rate accuracy -- " + e.getMessage());
                 Toast.makeText(this, "Could not load hourly rate accuracy: " + e.getMessage(),
                         Toast.LENGTH_LONG).show();
             }
@@ -212,6 +214,7 @@ public class TripHistoryActivity extends AppCompatActivity {
                 intent.putExtra(TripDetailActivity.EXTRA_TRIP_ID, summary.optInt("trip_id", -1));
                 startActivity(intent);
             } catch (JSONException | PyException e) {
+                logDiagnostic("Could not read last trip summary -- " + e.getMessage());
                 new AlertDialog.Builder(this)
                         .setTitle("Last Trip Summary")
                         .setMessage("Could not read trip summary.")
@@ -258,7 +261,11 @@ public class TripHistoryActivity extends AppCompatActivity {
                                 sweetSpot.optInt("sample_count", 0), sweetSpot.optInt("min_required", 0)));
                     }
                 } catch (JSONException | RuntimeException e) {
-                    // Not worth blocking the whole Address Book over this.
+                    // Not worth blocking the whole Address Book over this --
+                    // still worth a log line, since a sweet-spot suggestion
+                    // that just never appears otherwise leaves no trace of
+                    // why.
+                    logDiagnostic("Sweet-spot suggestion fetch failed -- " + e.getMessage());
                 }
 
                 // Recency-windowed hotspot (driver backlog #5,
@@ -282,7 +289,8 @@ public class TripHistoryActivity extends AppCompatActivity {
                                 recentHotspot.optInt("zone_sample_count", 0), recentHotspot.optInt("total_sample_count", 0)));
                     }
                 } catch (JSONException | RuntimeException e) {
-                    // Not worth blocking the whole Address Book over this.
+                    // Same reasoning as the sweet-spot fetch above.
+                    logDiagnostic("Recent hotspot fetch failed -- " + e.getMessage());
                 }
 
                 for (int i = 0; i < entries.length(); i++) {
@@ -356,6 +364,7 @@ public class TripHistoryActivity extends AppCompatActivity {
                 }
                 addressBookDialog.show();
             } catch (JSONException | PyException e) {
+                logDiagnostic("Could not load address book -- " + e.getMessage());
                 Toast.makeText(this, "Could not load address book: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }
@@ -392,6 +401,7 @@ public class TripHistoryActivity extends AppCompatActivity {
                         .setNegativeButton("Cancel", null)
                         .show();
             } catch (JSONException | PyException e) {
+                logDiagnostic("Could not load restaurant list -- " + e.getMessage());
                 Toast.makeText(this, "Could not load restaurant list: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }
@@ -442,6 +452,7 @@ public class TripHistoryActivity extends AppCompatActivity {
                         .setPositiveButton("OK", null)
                         .show();
             } catch (JSONException | PyException e) {
+                logDiagnostic("Could not load visit history for \"" + restaurantName + "\" -- " + e.getMessage());
                 Toast.makeText(this, "Could not load visit history: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }
@@ -491,6 +502,7 @@ public class TripHistoryActivity extends AppCompatActivity {
                         .setPositiveButton("OK", null)
                         .show();
             } catch (RuntimeException | JSONException e) { // RuntimeException covers PyException too
+                logDiagnostic("Could not load acceptance stats -- " + e.getMessage());
                 Toast.makeText(this, "Could not load stats: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }
@@ -536,15 +548,18 @@ public class TripHistoryActivity extends AppCompatActivity {
                         .setNeutralButton("Reset to Base Weights", (dialog, which) -> {
                             try {
                                 engine.callAttr("reset_personal_calibration");
+                                logDiagnostic("Personal calibration reset to base weights");
                                 Toast.makeText(this, "Calibration reset -- back to base weights.",
                                         Toast.LENGTH_SHORT).show();
                             } catch (RuntimeException e) {
+                                logDiagnostic("Could not reset personal calibration -- " + e.getMessage());
                                 Toast.makeText(this, "Could not reset: " + e.getMessage(), Toast.LENGTH_LONG).show();
                             }
                         })
                         .setNegativeButton("Edit Offers Used", (dialog, which) -> showCalibrationOffersToggle())
                         .show();
             } catch (RuntimeException | JSONException e) {
+                logDiagnostic("Could not load personal calibration -- " + e.getMessage());
                 Toast.makeText(this, "Could not load calibration: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }
@@ -595,12 +610,20 @@ public class TripHistoryActivity extends AppCompatActivity {
                             try {
                                 engine.callAttr("set_offer_omitted_from_calibration", offerIds[which], !isChecked);
                             } catch (RuntimeException e) {
+                                // Field-test note: a driver toggling several
+                                // offers in one sitting has no way to tell
+                                // WHICH toggle silently failed to persist
+                                // without this -- the Toast alone doesn't
+                                // say.
+                                logDiagnostic("Could not save offer-omitted-from-calibration toggle "
+                                        + "for offer " + offerIds[which] + " -- " + e.getMessage());
                                 Toast.makeText(this, "Could not save: " + e.getMessage(), Toast.LENGTH_LONG).show();
                             }
                         })
                         .setPositiveButton("Done", null)
                         .show();
             } catch (RuntimeException | JSONException e) {
+                logDiagnostic("Could not load calibration offers list -- " + e.getMessage());
                 Toast.makeText(this, "Could not load offers: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }
@@ -677,6 +700,7 @@ public class TripHistoryActivity extends AppCompatActivity {
                         .setPositiveButton("OK", null)
                         .show();
             } catch (RuntimeException | JSONException e) {
+                logDiagnostic("Could not load rejected offers report -- " + e.getMessage());
                 Toast.makeText(this, "Could not load report: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }
@@ -787,6 +811,7 @@ public class TripHistoryActivity extends AppCompatActivity {
                         .setPositiveButton("OK", null)
                         .show();
             } catch (JSONException | PyException e) {
+                logDiagnostic("Could not load pay trend -- " + e.getMessage());
                 Toast.makeText(this, "Could not load pay trend: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }
@@ -840,6 +865,7 @@ public class TripHistoryActivity extends AppCompatActivity {
                         .setPositiveButton("OK", null)
                         .show();
             } catch (JSONException | PyException e) {
+                logDiagnostic("Could not load weather vs. pay -- " + e.getMessage());
                 Toast.makeText(this, "Could not load weather vs. pay: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }
@@ -860,5 +886,18 @@ public class TripHistoryActivity extends AppCompatActivity {
                             : String.format("Smart Score %.0f avg", bucket.optDouble("avg_smart_score"))));
             return lines.toString();
         }
+
+    /** Same "a logging call can never crash the app" wrapper pattern used
+      * elsewhere in this app -- this Activity had none until the
+      * field-test checklist audit found every one of its many screens'
+      * load failures was Toast-only (gone once dismissed), with no
+      * lasting trace of what actually went wrong. Single-arg since every
+      * call site here is under this one Activity's own category. */
+    private void logDiagnostic(String message) {
+        try {
+            engine.callAttr("log_diagnostic", "TRIP_HISTORY", message);
+        } catch (RuntimeException e) { // covers PyException too
+        }
+    }
 
 }
