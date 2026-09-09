@@ -8,10 +8,11 @@ premortem/silent-failure audit passes after initial implementation
 consent-staleness gap. This introduces a genuinely new, privacy-
 sensitive capability this app has never had before - read §1.3 and §5
 before signing off, not just the checklist.
-§7 (added 2026-09-02, DRAFT, NOT implemented): the driver asked to
-capture screen recording by default. Investigated and designed, with
-an open question (§7.5) - explicitly NOT coded, per the driver's own
-instruction to add this to the PRD without implementing it yet.
+§7 (added 2026-09-02, DRAFT; IMPLEMENTED 2026-09-09 per the driver's
+explicit go-ahead): the driver asked to capture screen recording by
+default. §7.6/§7.7 - a proactive first-run explanation dialog, not a
+flipped `isEnabled()` default (investigated and rejected as a real
+regression risk - see §7.6).
 §9 (added 2026-09-02, CRITICAL, FIXED): a real diagnostic log from the
 driver showed a crash loop - screen recording surviving past the first
 trip in a session crashed the whole app on every subsequent trip start,
@@ -503,21 +504,102 @@ proactively defaulted INTO this by an app update deserves to know
 specifically why, before being asked to tap through it - but this is
 disclosed as a recommendation only, not built.
 
-## 8. Success criteria for §7 (NOT started - explicitly not to be coded without a follow-up "yes implement it")
+### 7.6 Implemented (2026-09-09): driver's explicit go-ahead ("implement the screen recording by default feature")
 
-- [ ] §7.5's open question answered by the driver (or their explicit
-      go-ahead to build it per this section's own recommendation)
-- [ ] Toggle default flipped from `false` to `true`
-      (`ScreenRecordingController.isEnabled`)
-- [ ] Consent prompt proactively surfaced (exact trigger point - first
-      app launch? first `startTracking()` with no consent held? -
-      still needs a specific decision, not just "proactively" left
-      vague)
-- [ ] §7.5's first-run explanation screen, if that's the chosen answer
-- [ ] §7.1's in-app export/share gap addressed, IF the driver confirms
-      that's wanted alongside this (separate ask, not assumed)
-- [ ] Executable/reviewed verification, same standard as §6
-- [ ] User sign-off
+Went with §7.5's own recommendation (first-run explanation screen)
+rather than blocking on a re-ask, since the driver's go-ahead came
+after that recommendation was already on record - flagged here as a
+judgment call, not silently assumed.
+
+**A real regression risk found while designing the trigger, not just
+"pick first-launch vs. first-trip"**: the checklist below originally
+planned to literally flip `ScreenRecordingController.isEnabled()`'s
+`getBoolean(KEY_ENABLED, false)` default to `true`. Investigated first
+and REJECTED: `isEnabled()` is read in multiple places, most
+importantly `TripForegroundService.startTracking()`'s recording
+-attempt block - and monitoring can auto-start without the driver ever
+opening `MainActivity` first (a real, already-documented scenario, see
+`docs/dash_monitoring_awareness/PRD.md`). A flipped raw default would
+have made `isEnabled()` read `true` for such a driver BEFORE they ever
+saw an explanation or granted real consent, firing the existing
+"enabled but no consent held" alert for a feature they never asked
+about - confusing, not helpful, and exactly the kind of "fixed one
+thing, silently broke another" this PRD's own §13 already lived
+through once on this exact subsystem.
+
+**What was actually built instead**, same goal, safer mechanism:
+
+- New `ScreenRecordingController.hasEverBeenConfigured()` -
+  `SharedPreferences.contains(KEY_ENABLED)`, not `isEnabled() ==
+  false` - correctly distinguishes "never touched this" from
+  "explicitly turned off." `isEnabled()`'s own raw default stays
+  `false`, unchanged; it only ever becomes `true` the same way it
+  always has, via a real granted consent.
+- New `MainActivity.maybeShowScreenRecordingDefaultPrompt()` - runs
+  once per `onCreate` (the app's real, guaranteed entry point), shows
+  the recommended explanation dialog ONLY when
+  `!hasEverBeenConfigured() && !isDefaultPromptShown()`. Both buttons
+  record a real, explicit choice (`setCancelable(false)`, no
+  dismiss-without-choosing case to reason about separately): "Enable
+  Screen Recording" launches `PermissionsActivity` with a new
+  `EXTRA_AUTO_REQUEST_RECORDING_CONSENT` extra; "Not Now" explicitly
+  persists `enabled=false` (a real opt-out, not a soft skip).
+- `PermissionsActivity.onCreate()`: that extra triggers
+  `screenRecordingSwitch.setChecked(true)`, which fires the SAME
+  already-attached listener a real manual tap would - the real OS
+  consent dialog appears immediately, no second tap needed. The
+  switch-on branch's own consent-request logic was extracted into
+  `requestScreenRecordingConsent()` specifically so this reuses it
+  rather than duplicating it.
+- New `ScreenRecordingController.isDefaultPromptShown()`/
+  `setDefaultPromptShown()` - a plain persisted flag so the prompt is a
+  true ONE-TIME nudge, never a repeat nag on later launches.
+
+**Self-caught bug during implementation**: the first version called
+`screenRecordingSwitch.setChecked(true)` AND explicitly called
+`requestScreenRecordingConsent()` right after it, in
+`PermissionsActivity`. Since the `OnCheckedChangeListener` is already
+attached by that point in `onCreate` (unlike the switch's OWN initial
+`setChecked()` a few lines earlier, which deliberately runs BEFORE the
+listener is attached), `setChecked(true)` already fires the listener -
+which itself calls `requestScreenRecordingConsent()`. The explicit
+second call would have launched the real OS consent dialog TWICE, back
+to back. Caught on re-read before verifying brace/paren balance, fixed
+by removing the redundant explicit call and relying on the listener
+alone.
+
+§7.1's in-app export/share gap was NOT bundled into this - it was
+already addressed separately (a real driver ask in its own right, see
+this PRD's §17/§18), not assumed as part of "by default."
+
+### 7.7 Success criteria for §7
+
+- [x] §7.5's open question answered (driver's go-ahead + this section's
+      own recommendation)
+- [x] Proactive first-run trigger implemented -
+      `MainActivity.onCreate()`, gated on `hasEverBeenConfigured()`, NOT
+      a flipped `isEnabled()` default (see §7.6 for why that would have
+      been a real regression)
+- [x] §7.5's first-run explanation screen built, `setCancelable(false)`,
+      both outcomes persisted explicitly
+- [x] §7.1's in-app export/share gap - already addressed separately
+      (§17/§18), not part of this ask
+- [x] Executable/reviewed verification: brace/paren balance --
+      `ScreenRecordingController.java` 89/89 braces, 381/381 parens;
+      `PermissionsActivity.java` 83/83, 465/465;
+      `MainActivity.java` 132/132, 571/571 (all after the double-launch
+      fix) -- plus `python3 -m py_compile drive_monitor.py` re-confirmed
+      clean (Python side untouched) and cross-referenced
+      `EXTRA_AUTO_REQUEST_RECORDING_CONSENT`/`hasEverBeenConfigured`/
+      `isDefaultPromptShown`/`setDefaultPromptShown` across every call
+      site
+- [ ] Driver confirms in real use: the explanation appears on first
+      launch for a never-configured install, "Enable" leads straight to
+      the real OS consent dialog, "Not Now" leaves recording off and
+      never asks again, and an EXISTING driver who already has an
+      opinion about this toggle (on or off) never sees the prompt at
+      all
+- [ ] Driver sign-off
 
 ## 9. Driver-reported (2026-09-02, CRITICAL): real crash loop, confirmed by a real diagnostic log
 

@@ -66,6 +66,11 @@ class ScreenRecordingController {
 
     private static final String PREFS_NAME = "screen_recording_prefs";
     private static final String KEY_ENABLED = "enabled";
+    // docs/screen_recording/PRD.md ss7/ss8 ("capture by default"): whether
+    // MainActivity's own first-run explanation dialog has already been
+    // shown and resolved (Enable or Not Now), so it's a true ONE-TIME
+    // nudge, never a repeat nag on later app opens.
+    private static final String KEY_DEFAULT_PROMPT_SHOWN = "default_prompt_shown";
     private static final String RECORDINGS_DIR_NAME = "ScreenRecordings";
 
     // In-memory only, deliberately never persisted -- see class doc. Set by
@@ -98,6 +103,39 @@ class ScreenRecordingController {
     static void setEnabled(Context context, boolean enabled) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit().putBoolean(KEY_ENABLED, enabled).apply();
+    }
+
+    /**
+     * "capture by default" (docs/screen_recording/PRD.md ss7/ss8):
+     * whether the driver has EVER made a real, explicit choice about
+     * this toggle -- deliberately NOT "isEnabled() == true," which
+     * can't distinguish "explicitly turned off" from "never touched."
+     * SharedPreferences.contains() answers exactly that. This, not a
+     * flipped isEnabled() default, is what MainActivity gates its
+     * first-run explanation on: flipping the raw getBoolean default to
+     * true was considered and rejected -- it would make isEnabled()
+     * read true everywhere ELSE in the codebase (most importantly
+     * TripForegroundService.startTracking()'s recording-attempt check)
+     * before the driver had ever seen an explanation or granted real
+     * consent, which for a driver whose monitoring auto-starts without
+     * ever opening MainActivity first (a real, already-documented
+     * scenario -- docs/dash_monitoring_awareness/PRD.md) would raise a
+     * confusing "no consent held" alert for a feature they never asked
+     * about. isEnabled() only ever becomes true the same way it always
+     * has: an explicit setEnabled(true) once real consent is granted.
+     */
+    static boolean hasEverBeenConfigured(Context context) {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).contains(KEY_ENABLED);
+    }
+
+    static boolean isDefaultPromptShown(Context context) {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(KEY_DEFAULT_PROMPT_SHOWN, false);
+    }
+
+    static void setDefaultPromptShown(Context context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putBoolean(KEY_DEFAULT_PROMPT_SHOWN, true).apply();
     }
 
     /** Private app storage, not a shared/public gallery -- same reasoning
