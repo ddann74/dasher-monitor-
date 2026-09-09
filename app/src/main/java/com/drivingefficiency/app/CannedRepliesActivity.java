@@ -52,8 +52,10 @@ public class CannedRepliesActivity extends AppCompatActivity {
                 engine.callAttr("add_canned_reply", text);
                 newReplyInput.setText("");
                 Toast.makeText(this, "Added.", Toast.LENGTH_SHORT).show();
+                logDiagnostic("Added canned reply: " + text);
                 refreshRepliesList(repliesContainer);
             } catch (RuntimeException e) { // covers PyException too
+                logDiagnostic("Could not add canned reply -- " + e.getMessage());
                 Toast.makeText(this, "Could not add reply: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         });
@@ -94,6 +96,7 @@ public class CannedRepliesActivity extends AppCompatActivity {
                 container.addView(buildReplyRow(replyId, text));
             }
         } catch (JSONException | PyException e) {
+            logDiagnostic("Could not load canned replies -- " + e.getMessage());
             Toast.makeText(this, "Could not load replies: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
@@ -120,8 +123,10 @@ public class CannedRepliesActivity extends AppCompatActivity {
             try {
                 engine.callAttr("delete_canned_reply", replyId);
                 Toast.makeText(this, "Deleted.", Toast.LENGTH_SHORT).show();
+                logDiagnostic("Deleted canned reply id " + replyId);
                 refreshRepliesList((LinearLayout) findViewById(R.id.repliesContainer));
             } catch (RuntimeException e) { // covers PyException too
+                logDiagnostic("Could not delete canned reply id " + replyId + " -- " + e.getMessage());
                 Toast.makeText(this, "Could not delete: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         });
@@ -147,8 +152,10 @@ public class CannedRepliesActivity extends AppCompatActivity {
                     try {
                         engine.callAttr("update_canned_reply", replyId, newText);
                         Toast.makeText(this, "Updated.", Toast.LENGTH_SHORT).show();
+                        logDiagnostic("Updated canned reply id " + replyId);
                         refreshRepliesList((LinearLayout) findViewById(R.id.repliesContainer));
                     } catch (RuntimeException e) { // covers PyException too
+                        logDiagnostic("Could not update canned reply id " + replyId + " -- " + e.getMessage());
                         Toast.makeText(this, "Could not update: " + e.getMessage(), Toast.LENGTH_LONG).show();
                     }
                 })
@@ -160,5 +167,17 @@ public class CannedRepliesActivity extends AppCompatActivity {
     public boolean onSupportNavigateUp() {
         finish();
         return true;
+    }
+
+    /** Same "a logging call can never crash the app" wrapper pattern used
+      * elsewhere in this app -- this Activity had none until the
+      * field-test checklist audit found every add/edit/delete/load
+      * failure here was Toast-only (gone once dismissed), for a feature
+      * used live while responding to a customer message. */
+    private void logDiagnostic(String message) {
+        try {
+            engine.callAttr("log_diagnostic", "CANNED_REPLIES", message);
+        } catch (RuntimeException e) { // covers PyException too
+        }
     }
 }

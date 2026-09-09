@@ -356,3 +356,38 @@ Android SDK/emulator/device.
   `AndroidManifest.xml`/`activity_tutorial.xml`/`activity_main.xml`/
   `strings.xml` all re-validated as well-formed XML.
 - Re-ran the full existing scratchpad test suite — no regressions.
+
+## 9. Driver-requested (2026-09-09): diagnostic logging for the one failure that isn't already on screen
+
+Follow-on to `docs/screen_recording/PRD.md` §19's field-test-checklist
+logging audit. Every failure path in this Activity except one already
+shows its message persistently in `stepBody` (stays on screen until
+the driver taps Next/Skip, unlike a Toast) - deliberately did NOT add
+logging there, since it's already visible for as long as the driver
+needs. The one exception: `onCreate()`'s environment-setup failure
+(`get_tutorial_environment`) both shows a Toast AND immediately calls
+`finish()`, so the driver would be dropped back out with the message
+already gone. That one now also logs under `TUTORIAL`.
+
+Also confirmed the three `catch (PyException ignored)`/ (best-effort,
+explicitly non-fatal) blocks genuinely don't need logging - each is
+already documented as "the walkthrough continues either way," the same
+intentionally-silent pattern established elsewhere in this codebase
+(e.g. `OverlayHelper`'s benign `removeView` catches).
+
+### Verification
+
+- Brace/paren balance confirmed.
+- HONEST LIMIT: no Android device/emulator available - not observed
+  firing on a real device.
+
+## 10. Success criteria for §9
+
+- [x] `onCreate()`'s environment-setup failure now also logs (the one
+      case that finishes the Activity right after showing its message)
+- [x] Confirmed every other failure path is already persistently
+      visible on screen, and every "ignored" catch is genuinely benign
+- [x] Brace/paren balance confirmed
+- [ ] Driver confirms this line appears in the diagnostic log on a
+      forced tutorial-start failure
+- [ ] Driver sign-off.

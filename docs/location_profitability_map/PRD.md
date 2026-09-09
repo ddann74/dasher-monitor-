@@ -167,3 +167,27 @@ limitation."
       correctly colored/positioned markers, and the elevated osmdroid-
       specific risk (ss4) didn't turn into a real compile/runtime problem
 - [ ] Driver sign-off.
+
+## 6. Driver-requested (2026-09-09): diagnostic logging
+
+Follow-on to `docs/screen_recording/PRD.md` §19's field-test-checklist
+logging audit. This Activity (the original class `ParkingZoneMapActivity`/
+`CustomerZoneMapActivity` were later structurally copied from) had the
+exact same gap those two had before their own fix: zero `logDiagnostic`
+calls anywhere. Added the empty-state message, the loaded-marker-count
+confirmation, each marker tap, and the load failure - same four points
+those two screens now log, for consistency.
+
+### Verification
+
+- Brace/paren balance confirmed.
+- HONEST LIMIT: no Android device/emulator available - not observed
+  firing on a real device.
+
+## 7. Success criteria for §6
+
+- [x] Empty-state, load-count, marker-tap, and load-failure all log
+      under `LOCATION_PROFITABILITY_MAP`
+- [x] Brace/paren balance confirmed
+- [ ] Driver confirms these lines actually appear in the diagnostic log
+- [ ] Driver sign-off.

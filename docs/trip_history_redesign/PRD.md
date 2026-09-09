@@ -379,3 +379,36 @@ changes worth being able to confirm later.
       airplane mode mid-load) now shows a real line in the diagnostic
       log, not just a Toast that's already gone
 - [ ] Driver sign-off
+
+## 9. Driver-requested (2026-09-09): diagnostic logging for TripDetailActivity and TripListActivity
+
+Same audit as §7, extended to this screen's two sibling Activities
+(both created by this same PRD, §3.1/§3.5). Both had zero
+`logDiagnostic` calls.
+
+`TripDetailActivity` didn't previously have `engine` as a field at all
+(it was a local variable in `onCreate()`, since nothing else needed
+it) - promoted to a field so the new `logDiagnostic` wrapper can use
+it, same shape as every other Activity in this app. Now logs: no valid
+trip id passed in, the requested trip not found, and the summary-load
+failure.
+
+`TripListActivity` now logs its one failure path: the trip-history
+list load.
+
+### Verification
+
+- Brace/paren balance confirmed on both files
+- HONEST LIMIT: no Android device/emulator available - not observed
+  firing on a real device.
+
+## 10. Success criteria for §9
+
+- [x] `TripDetailActivity`: no-trip-id, trip-not-found, and load-failure
+      all log
+- [x] `TripListActivity`: load-failure logs
+- [x] `engine` promoted to a field in `TripDetailActivity` (previously
+      local-only), no behavior change
+- [x] Brace/paren balance confirmed
+- [ ] Driver confirms these lines appear in the diagnostic log
+- [ ] Driver sign-off.

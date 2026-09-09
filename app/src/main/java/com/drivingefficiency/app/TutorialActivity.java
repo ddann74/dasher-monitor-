@@ -91,6 +91,12 @@ public class TutorialActivity extends AppCompatActivity {
                     ? TripForegroundService.lastKnownLon : 151.205;
             environment = new JSONObject(engine.callAttr("get_tutorial_environment", baseLat, baseLon).toString());
         } catch (JSONException | PyException e) {
+            // Unlike this Activity's other failure paths (all shown
+            // persistently in stepBody, staying on screen until the
+            // driver advances), this one finishes the Activity right
+            // after -- the Toast alone would vanish with no trace of why
+            // the tutorial never actually opened.
+            logDiagnostic("TUTORIAL", "Could not start tutorial -- " + e.getMessage());
             Toast.makeText(this, "Could not start tutorial: " + e.getMessage(), Toast.LENGTH_LONG).show();
             finish();
             return;
@@ -389,5 +395,17 @@ public class TutorialActivity extends AppCompatActivity {
         // through finishTutorial() at all (e.g. the system reclaiming
         // it) -- PRD ss5 P3's own stated risk.
         cleanupSimulatedState();
+    }
+
+    /** Same "a logging call can never crash the app" wrapper pattern used
+      * elsewhere in this app. This Activity's other failures are already
+      * persistent on screen (stepBody stays visible until the driver
+      * advances) -- only the one that finishes the Activity right after
+      * needed this. */
+    private void logDiagnostic(String category, String message) {
+        try {
+            engine.callAttr("log_diagnostic", category, message);
+        } catch (RuntimeException e) { // covers PyException too
+        }
     }
 }

@@ -178,6 +178,7 @@ public class PermissionsActivity extends AppCompatActivity {
                 public void onResult(double lat, double lon) {
                     ShiftRoutingPrefs.setHomeAddress(PermissionsActivity.this, address, lat, lon);
                     refreshShiftRoutingSubtext(shiftRoutingSubtext);
+                    logDiagnostic("SHIFT_ROUTING", "Resolved home address \"" + address + "\" -> " + lat + "," + lon);
                     Toast.makeText(PermissionsActivity.this, "Home address saved.", Toast.LENGTH_SHORT).show();
                 }
 
@@ -190,6 +191,10 @@ public class PermissionsActivity extends AppCompatActivity {
                     // being configured yet.
                     ShiftRoutingPrefs.clearHomeLocation(PermissionsActivity.this);
                     refreshShiftRoutingSubtext(shiftRoutingSubtext);
+                    // Field-test note: this specific geocode call site was
+                    // missing from the audit that added logging to every
+                    // other GoogleApiHelper caller -- was Toast-only.
+                    logDiagnostic("SHIFT_ROUTING", "Could not resolve home address \"" + address + "\" -- " + message);
                     Toast.makeText(PermissionsActivity.this,
                             "Could not resolve that address: " + message, Toast.LENGTH_LONG).show();
                 }

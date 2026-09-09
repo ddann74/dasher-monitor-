@@ -42,6 +42,7 @@ public class TripDetailActivity extends AppCompatActivity {
     public static final String EXTRA_TRIP_ID = "trip_id";
     public static final String EXTRA_PROMPT_FEEDBACK_ON_CLOSE = "prompt_feedback_on_close";
 
+    private PyObject engine;
     private int tripId = -1;
     private boolean promptFeedbackOnClose = false;
     private boolean isDasherTrip = false;
@@ -58,17 +59,19 @@ public class TripDetailActivity extends AppCompatActivity {
         tripId = getIntent().getIntExtra(EXTRA_TRIP_ID, -1);
         promptFeedbackOnClose = getIntent().getBooleanExtra(EXTRA_PROMPT_FEEDBACK_ON_CLOSE, false);
 
+        engine = PythonBridge.getEngine(this);
         if (tripId < 0) {
+            logDiagnostic("Launched with no valid trip id -- EXTRA_TRIP_ID was " + tripId);
             Toast.makeText(this, "No trip to show.", Toast.LENGTH_LONG).show();
             finish();
             return;
         }
 
-        PyObject engine = PythonBridge.getEngine(this);
         try {
             JSONObject summary = new JSONObject(
                     engine.callAttr("get_trip_summary_by_id", tripId).toString());
             if (!summary.optBoolean("found", false)) {
+                logDiagnostic("Trip " + tripId + " could not be found (get_trip_summary_by_id returned found=false)");
                 Toast.makeText(this, "That trip could not be found.", Toast.LENGTH_LONG).show();
                 finish();
                 return;
@@ -90,6 +93,7 @@ public class TripDetailActivity extends AppCompatActivity {
             populateInstructions(summary);
             populateYourRating(summary);
         } catch (JSONException | PyException e) {
+            logDiagnostic("Could not load trip " + tripId + " -- " + e.getMessage());
             Toast.makeText(this, "Could not load trip: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
 
@@ -404,6 +408,17 @@ public class TripDetailActivity extends AppCompatActivity {
                 return "Speeding";
             default:
                 return eventType;
+        }
+    }
+
+    /** Same "a logging call can never crash the app" wrapper pattern used
+      * elsewhere in this app -- this Activity had none until the
+      * field-test checklist audit found its one load failure was
+      * Toast-only (gone once dismissed). */
+    private void logDiagnostic(String message) {
+        try {
+            engine.callAttr("log_diagnostic", "TRIP_DETAIL", message);
+        } catch (RuntimeException e) { // covers PyException too
         }
     }
 }
