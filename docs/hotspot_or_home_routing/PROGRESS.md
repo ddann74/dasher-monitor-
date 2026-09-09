@@ -85,3 +85,32 @@ suppression - all passed. XML re-validated as well-formed.
 
 PRD §5 boxes checked except driver confirmation and sign-off - both
 outstanding until reported back.
+
+## §7 fix (2026-09-09): suppress in GENERAL mode
+
+Driver: "i dont need to see the navigate home button when in general
+driving mode." Traced the trigger (`TRIP_ACTIVE -> IDLE`, driven purely
+by GPS speed via `TripManager._start_trip`) and confirmed it really did
+fire identically regardless of mode - not a misreport. Both the
+hotspot-or-home suggestion and the older sweet-spot fallback are
+Dasher-shift concepts, so both got gated, not just the home-icon half
+of the request.
+
+Used the completed trip's own persisted `_trip_mode` (via
+`get_last_trip_summary()`, the same source `notifyRateThisDelivery()`
+already relies on right below this block) rather than the live per-tick
+`mode` a few lines above - that live value can already read `GENERAL`
+the instant a real Dasher delivery finishes (driver switches apps
+immediately), which would have silently broken the suggestion for
+exactly the drivers it exists to help. Reused an already-solved "was
+this really a Dasher trip" answer instead of re-deriving a second,
+subtly-wrong one.
+
+**Verification**: `TripForegroundService.java` 220/220 braces,
+1022/1022 parens. `python3 -m py_compile drive_monitor.py` unaffected,
+re-confirmed clean. Traced `_trip_mode`'s sticky/upgrade-only lifecycle
+and `get_last_trip_summary()`'s query to confirm it reads the trip that
+just ended, not a stale one.
+
+Not done, can't be from here: on-device confirmation. Same disclosed
+limitation as the rest of this PRD.
