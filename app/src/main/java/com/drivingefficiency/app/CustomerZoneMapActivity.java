@@ -31,17 +31,15 @@ import org.osmdroid.views.overlay.Marker;
  * get_customer_parking_difficulty_zones() rather than
  * get_parking_difficulty_zones().
  *
- * Found while adding this screen, not introduced by it: parking_
+ * Found while adding this screen, later fixed: parking_
  * difficulty_feedback rows are named "restaurant_name" throughout, but
- * the only place that ever writes them (TripManager.is_walking_pace,
- * via _check_approaching_stop) only ever checks the DROPOFF stop list --
- * see get_customer_parking_difficulty_zones's own doc comment in
- * drive_monitor.py. So this screen's difficulty data needs no new
- * recording path; only the GPS-anchor side (dropoff_location_history /
- * record_dropoff_location) is genuinely new here. This also means
- * ParkingZoneMapActivity's own restaurant-keyed join is very likely
- * showing close to empty in real use -- a pre-existing gap this screen
- * does not fix.
+ * until TripManager.is_walking_pace's own fix, the only place that ever
+ * wrote them only ever checked the DROPOFF stop list -- see
+ * get_customer_parking_difficulty_zones's own doc comment in
+ * drive_monitor.py. is_walking_pace now checks pickup too and tags each
+ * sample with the stop it actually happened at, so ParkingZoneMapActivity's
+ * restaurant-keyed join and this screen's dropoff-keyed one each see only
+ * their own real data going forward.
  */
 public class CustomerZoneMapActivity extends AppCompatActivity {
 

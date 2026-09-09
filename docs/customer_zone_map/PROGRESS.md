@@ -102,7 +102,86 @@ New strings: `customer_zone_map`, `customer_zone_map_no_data`.
 
 **Not done, and can't be from here**: on-device confirmation (no
 Android SDK/emulator in this environment, same disclosed limitation as
-every other Java/XML change in this repo). The pickup-side wiring bug
-this investigation surfaced (`is_walking_pace` only ever checking
-dropoff stops) is also **not fixed** -- left alone per explicit
-driver choice, not an oversight.
+every other Java/XML change in this repo).
+
+## Pickup-side wiring bug: fixed (2026-09-09)
+
+Driver asked to fix it after all. `TripManager.is_walking_pace` now
+calls `check_approaching_pickup` FIRST; only when that returns `None`
+(no active, not-yet-arrived pickup -- which is also true for the
+entire rest of a trip once pickup is arrived) does it fall back to
+`_check_approaching_stop` (the dropoff list), exactly as before. Each
+call site now tracks a local `stop_type` ('pickup' or 'dropoff')
+alongside `nearest`, and the gap-recording key switches with it:
+`restaurant_name` for a pickup, `address` for a dropoff -- the two
+identifiers this app already uses for those two things elsewhere
+(`pickup_location_history` vs `dropoff_location_history`).
+
+`_record_park_to_walk_gap_sample` gained a `stop_type` parameter,
+threaded straight into a new `stop_type` column on
+`parking_difficulty_feedback`. Migration backfills every pre-existing
+row as `'dropoff'` -- not a guess, an honest description of what every
+such row already was (see the finding above). `record_parking_
+difficulty_feedback`'s manual-upgrade path needed no change: it only
+ever touches `difficulty`/`source` on the row `feedback_id` already
+points at, never `stop_type`, so a driver's manual answer inherits
+whichever stop type the auto row was already tagged with.
+
+`get_parking_difficulty_rating`, `get_parking_difficulty_zones`, and
+`get_customer_parking_difficulty_zones` all gained a matching
+`stop_type = 'pickup'` / `'dropoff'` filter. This is the actual
+correctness fix for the already-open parking zone map PR: before it,
+genuine pickup samples didn't exist at all (the bug), so the join
+against real restaurant names matched close to nothing; now that
+`is_walking_pace` actually detects walking-to-pickup, the filter makes
+sure a restaurant's zone reflects only real pickup samples, and a
+customer's zone only real dropoff samples -- never an accidental
+cross-match if a restaurant name and a street address were ever
+somehow equal.
+
+Also exposed `stop_type` on `get_last_parking_gap_for_feedback`'s
+returned dict, for whichever future change wants the post-trip
+feedback dialog to say which kind of stop it's actually asking about.
+Not wired into any Java caller yet -- no UI copy change was asked for
+here, and org.json silently ignores an extra key it doesn't read.
+
+### Verification
+
+- `python3 -m py_compile drive_monitor.py` -- compiles cleanly.
+- New scratchpad test (`test_pickup_wiring_fix.py`, 23 assertions, all
+  passed):
+  - Migration backfill: a hand-built pre-existing database (has
+    `source`, predates `stop_type`) gets its existing row backfilled
+    as `stop_type = 'dropoff'`, `source` left untouched.
+  - Full GPS-tick simulation through `TripManager.is_walking_pace`
+    (a genuine park confirmed at `WALKING_MIN_PARK_SECONDS`, then
+    sustained walking-pace speed across
+    `WALKING_PATTERN_CONSECUTIVE_READINGS` ticks, at a real distance
+    -- confirmed against this app's own `haversine_meters`, not
+    hand-approximated -- between `ARRIVAL_GEOFENCE_METERS` and
+    `APPROACHING_RADIUS_METERS`) for an active pickup: walking
+    confirms on the expected tick, exactly one row is auto-recorded,
+    keyed by `restaurant_name`, tagged `stop_type = 'pickup'`, and
+    `get_last_parking_gap_for_feedback` reports the same.
+  - Same simulation for an unmatched dropoff stop with no active
+    pickup: still detected, still recorded, now explicitly tagged
+    `stop_type = 'dropoff'` -- confirms the fix didn't regress the
+    pre-existing (accidental) behavior.
+  - Two location anchors seeded under the SAME name, one in
+    `pickup_location_history` and one in `dropoff_location_history`,
+    with 3 `'pickup'`-tagged Easy samples and 3 `'dropoff'`-tagged
+    Difficult samples both under that name: `get_parking_difficulty_
+    rating`/`get_parking_difficulty_zones` report Easy (pickup rows
+    only), `get_customer_parking_difficulty_zones` reports Difficult
+    (dropoff rows only) -- proves the two are never conflated even
+    when the underlying name collides.
+- Re-ran `test_customer_zone_map.py` (the earlier 15-assertion test)
+  after adding the `stop_type` filter -- still passes: SQLite's column
+  `DEFAULT 'dropoff'` applies on an `INSERT` that omits the column, so
+  rows seeded without an explicit `stop_type` still match the new
+  filter as expected.
+- Brace/paren balance re-confirmed on `CustomerZoneMapActivity.java`
+  (19/19, 113/113) after its doc-comment update.
+
+**Not done, and can't be from here**: on-device confirmation, same
+disclosed limitation as above.

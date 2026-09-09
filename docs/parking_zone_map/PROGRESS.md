@@ -150,3 +150,18 @@ this progress note's own tile-source section), that zones appear at
 roughly correct real-world positions, and that tapping one shows
 correct detail. Per PRD §6, these and final sign-off are the driver's
 own to confirm.
+
+## A real bug in this feature's own join, found and fixed later (2026-09-09)
+
+While scoping a follow-up (a customer/dropoff counterpart to this map),
+found that `get_parking_difficulty_zones()`'s join against
+`pickup_location_history` was very likely matching close to nothing in
+production: `is_walking_pace`, the only writer of
+`parking_difficulty_feedback`, only ever checked TripManager's dropoff
+stop list, never the active pickup -- so every real row already
+carried a dropoff address under the `restaurant_name` column, despite
+its name. Full account and the fix (a `stop_type` column, tagged going
+forward, backfilled honestly on existing rows) are in
+`docs/customer_zone_map/PROGRESS.md`. This restaurant map's own query
+now filters `stop_type = 'pickup'` and should actually populate from
+here on, rather than only after the fact.
