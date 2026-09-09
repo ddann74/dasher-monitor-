@@ -497,3 +497,84 @@ Remaining PRD §14 boxes: driver confirms an ACTUAL PLAYABLE recording
 file is produced on the next trip with recording enabled (not just "no
 crash," which is the exact insufficient claim §9/§10 made), and driver
 sign-off.
+
+## §15 fix (2026-09-09): verify a playable file after each delivery, vibrate an alert otherwise
+
+Driver first asked "does the code verify there is a playable file" -
+answered directly: no, `hasMoovBox()` only ever ran at app startup on
+leftover files from a PREVIOUS crash, never on a normally-finished
+recording. Driver then asked to actually build the verification, with
+a vibration alarm on failure.
+
+**Real design question resolved before writing code**: recording has
+never been scoped one-file-per-delivery - `startTracking()`/
+`stopTracking()` bound a whole monitoring SESSION (can span many
+deliveries), and recording inside it rotates every 5 minutes regardless
+of delivery boundaries (PRD §4a P7's own disclosed gap). So "verify
+after a delivery" was implemented as: at each delivery's completion,
+verify every segment that has actually finished since the previous
+check, explicitly skipping whichever segment is still open for writing
+(a mid-write MP4 legitimately lacks a `moov` box - checking it would
+always report broken, not a real defect).
+
+**`ScreenRecordingController.java`**: new `isPlayable(File)` - actually
+opens the file via `MediaMetadataRetriever` and checks for a real,
+positive duration, a stronger claim than `hasMoovBox()`'s container
+-only scan (a closed container can still hold undecodable frame data).
+New `segmentFiles`/`verifiedSegmentCount` track every segment produced
+this session and how many have already been checked; new
+`verifyNewlyFinishedSegments()` examines only the newly-finalized ones
+since the last call (nothing re-checked, nothing still-open touched),
+returning whichever failed.
+
+**`TripForegroundService.java`**: new `verifyScreenRecordingAfterDelivery()`,
+called from both existing `notifyRateThisDelivery()` sites (the manual
+-stop path and the automatic `TRIP_ACTIVE -> IDLE` transition) -
+deliberately reusing their exact guard conditions rather than
+re-deriving "did a delivery just genuinely complete," since that dedup
+logic already had one real bug fixed (the auto-pause double-prompt) this
+piggybacks on instead of risking independently. Also alerts if recording
+is enabled but not actually active during a delivery (consent lost,
+setup failed) - a real integrity gap distinct from "file exists but
+corrupt," surfaced the same way. A second call sits directly in
+`stopTracking()`'s existing recording-stop block, catching the one
+segment that only becomes checkable once the session actually ends.
+New `raiseRecordingVerificationFailedAlert()` logs the reason, raises a
+high-priority notification naming it, and vibrates.
+
+**`HapticFeedback.java`**: new `vibrateRecordingVerificationFailed()` -
+three long buzzes played once, deliberately NOT
+`TripForegroundService`'s own repeating/cancellable permission-alert
+pattern (that one repeats because a permission can come back
+mid-vibration; a recording segment that already finished broken has
+nothing to self-heal, so a single distinctive alarm is the honest shape
+here).
+
+### Verification
+
+Same disclosed limitation as the rest of this PRD - no Android SDK
+/emulator/device in this environment:
+
+- Brace/paren balance: `ScreenRecordingController.java` 84/84 braces,
+  344/344 parens; `HapticFeedback.java` 17/17, 28/28;
+  `TripForegroundService.java` 217/217, 1009/1009.
+- `python3 -m py_compile drive_monitor.py` - unaffected, re-confirmed
+  clean anyway.
+- Traced every new call site: `verifyScreenRecordingAfterDelivery()`
+  matches `notifyRateThisDelivery()`'s own 2 call sites exactly;
+  confirmed the mid-session calls structurally cannot touch a
+  still-open segment (gated on `isRecording()`) and the `stopTracking()`
+  call only ever reaches the one segment those couldn't have checked
+  yet.
+- Confirmed no `AndroidManifest.xml` change needed - notification
+  channels are created at runtime, and `VIBRATE` was already declared
+  for `HapticFeedback`'s existing use.
+
+**Not done, and can't be from here**: on-device confirmation that
+`isPlayable()` actually distinguishes a real corrupted file from a good
+one - reasoned from `MediaMetadataRetriever`'s documented contract, not
+watched working against a real file of either kind.
+
+Remaining PRD §16 boxes: driver confirms a normal delivery produces no
+alert, and a genuinely corrupted recording (deliberate or real) does
+trigger one; driver sign-off.

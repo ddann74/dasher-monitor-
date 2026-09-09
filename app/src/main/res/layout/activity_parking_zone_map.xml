@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- docs/parking_zone_map/PRD.md ss3.2 - structural copy of
+     activity_location_profitability_map.xml (osmdroid MapView +
+     empty-state text), with one addition: an on-screen attribution
+     line for the satellite tile source (Esri World Imagery, a real
+     term of use for that free service - not decoration). -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <org.osmdroid.views.MapView
+        android:id="@+id/parkingZoneMapView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <TextView
+        android:id="@+id/notEnoughDataText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:padding="24dp"
+        android:gravity="center"
+        android:textSize="16sp"
+        android:visibility="gone"
+        android:text="@string/parking_zone_map_no_data" />
+
+    <TextView
+        android:id="@+id/attributionText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="6dp"
+        android:padding="4dp"
+        android:background="#99000000"
+        android:textColor="#FFFFFF"
+        android:textSize="10sp"
+        android:text="@string/parking_zone_map_attribution" />
+
+</FrameLayout>

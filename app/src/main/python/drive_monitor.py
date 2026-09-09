@@ -392,6 +392,19 @@ class Database:
             timestamp REAL
         );
 
+        -- Real geocoded dropoff coordinates, same shape and same
+        -- "going forward only" reasoning as pickup_location_history
+        -- above -- see record_dropoff_location. Keyed by the full
+        -- geocoded address (already precise, no restaurant-name-style
+        -- fragmentation to canonicalize away).
+        CREATE TABLE IF NOT EXISTS dropoff_location_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            address TEXT,
+            lat REAL,
+            lon REAL,
+            timestamp REAL
+        );
+
         -- Per-restaurant, persistent (not per-trip) notes about the pickup
         -- location itself -- e.g. "gate code 1234", "enter through side
         -- door", "park in the loading zone, not the main lot". Keyed by
@@ -611,6 +624,22 @@ class Database:
         if "source" not in parking_feedback_columns:
             self.conn.execute(
                 "ALTER TABLE parking_difficulty_feedback ADD COLUMN source TEXT DEFAULT 'manual'")
+            self.conn.commit()
+
+        # docs/customer_zone_map/PROGRESS.md's own finding: every existing
+        # row here was actually recorded at a DROPOFF stop (is_walking_pace
+        # never checked pickup at all until this migration's companion
+        # fix), regardless of what "restaurant_name" suggests -- so
+        # 'dropoff' is the honest backfill default for anything recorded
+        # before this column existed, not a guess. Re-query columns fresh
+        # rather than reusing parking_feedback_columns above, since that
+        # list predates the source migration that may have just run.
+        parking_feedback_columns = [
+            row["name"] for row in self.conn.execute("PRAGMA table_info(parking_difficulty_feedback)")
+        ]
+        if "stop_type" not in parking_feedback_columns:
+            self.conn.execute(
+                "ALTER TABLE parking_difficulty_feedback ADD COLUMN stop_type TEXT DEFAULT 'dropoff'")
             self.conn.commit()
 
         # Migration for databases that already existed before phase-timing
@@ -2203,6 +2232,7 @@ class TripManager:
         self._last_gap_restaurant_name = None
         self._last_gap_seconds = None
         self._last_gap_feedback_row_id = None
+        self._last_gap_stop_type = None
 
         # Dual-mode support: DASHER mode (Dasher app active / delivery in
         # progress) vs GENERAL mode (plain driving-efficiency tracking).
@@ -3104,6 +3134,12 @@ class TripManager:
             # answer UPGRADES that row instead of adding a second one for
             # the same physical park event.
             "feedback_id": self._last_gap_feedback_row_id,
+            # 'pickup' or 'dropoff' -- which stop this gap was actually
+            # measured at (see is_walking_pace). Not yet read by any
+            # Java caller; exposed so the feedback dialog can eventually
+            # say which kind of stop it's asking about instead of always
+            # implying "restaurant".
+            "stop_type": self._last_gap_stop_type,
         }
 
     def clear_last_parking_gap_for_feedback(self):
@@ -3116,6 +3152,7 @@ class TripManager:
         self._last_gap_restaurant_name = None
         self._last_gap_seconds = None
         self._last_gap_feedback_row_id = None
+        self._last_gap_stop_type = None
 
     def _learned_walking_speed_threshold_kmh(self):
         """
@@ -3206,12 +3243,19 @@ class TripManager:
             return "difficult"
         return "normal"
 
-    def _record_park_to_walk_gap_sample(self, gap_seconds, restaurant_name=None):
+    def _record_park_to_walk_gap_sample(self, gap_seconds, restaurant_name=None, stop_type="dropoff"):
         """
         Records the real time elapsed between a genuine park being
         confirmed and walking actually being confirmed -- recorded
         exactly ONCE per park event (see the recorded-flag check in
         is_walking_pace), not on every tick while still walking.
+
+        stop_type: 'pickup' or 'dropoff' -- which stop is_walking_pace
+        was actually tracking for this park event (see its own docstring
+        for the fix this parameter is part of). Defaults to 'dropoff'
+        only as this method's own safety default, matching the honest
+        backfill default the stop_type column migration uses -- every
+        real caller passes it explicitly.
         """
         row = self.db.conn.execute(
             "SELECT avg_gap_seconds, sample_count FROM park_to_walk_gap_history WHERE id = 1"
@@ -3233,6 +3277,7 @@ class TripManager:
         # gets confirmed/corrected by the user afterward, per restaurant.
         self._last_gap_restaurant_name = restaurant_name
         self._last_gap_seconds = gap_seconds
+        self._last_gap_stop_type = stop_type
         # Immediately persist an auto-labeled sample for THIS stop -- see
         # PARKING_AUTO_LABEL_* above. Fires here, once per park event, so
         # every stop of a multi-stop trip gets its own row, not just the
@@ -3243,9 +3288,9 @@ class TripManager:
         if restaurant_name is not None:
             auto_difficulty = self._auto_parking_difficulty_label(gap_seconds)
             cursor = self.db.conn.execute("""
-                INSERT INTO parking_difficulty_feedback (restaurant_name, gap_seconds, difficulty, timestamp, source)
-                VALUES (?, ?, ?, ?, 'auto')
-            """, (restaurant_name, gap_seconds, auto_difficulty, time.time()))
+                INSERT INTO parking_difficulty_feedback (restaurant_name, gap_seconds, difficulty, timestamp, source, stop_type)
+                VALUES (?, ?, ?, ?, 'auto', ?)
+            """, (restaurant_name, gap_seconds, auto_difficulty, time.time(), stop_type))
             self.db.conn.commit()
             self._last_gap_feedback_row_id = cursor.lastrowid
         # Consumed by DriveMonitorEngine.on_gps_update to log this --
@@ -3262,6 +3307,18 @@ class TripManager:
         The real-time check driving the purple "walking" status dot.
         DASHER mode only, per explicit request -- GENERAL mode driving
         never shows this regardless of speed.
+
+        FIXED HERE (docs/customer_zone_map/PROGRESS.md's own finding):
+        this used to check ONLY _check_approaching_stop (the dropoff
+        list), so a genuine walk-to-pickup was never detected as
+        "walking" and never recorded a parking-difficulty sample --
+        despite parking_difficulty_feedback being named "restaurant_name"
+        throughout. Now checks check_approaching_pickup FIRST (pickup
+        always precedes any dropoff within one trip, and it naturally
+        stops returning a stop once arrived_at is set), falling back to
+        the dropoff list exactly as before. Every real park event is
+        tagged with the stop_type it actually happened at, so pickup and
+        dropoff samples are never conflated going forward.
 
         RETROSPECTIVE, not single-instant: a single slow GPS reading can't
         tell "parked, now walking" apart from "car briefly slowed in
@@ -3293,7 +3350,13 @@ class TripManager:
         if self.get_mode() != "DASHER":
             self._walking_consecutive_pace_count = 0
             return False
-        nearest = self._check_approaching_stop(lat, lon)
+        approaching_pickup = self.check_approaching_pickup(lat, lon)
+        if approaching_pickup is not None:
+            nearest = approaching_pickup
+            stop_type = "pickup"
+        else:
+            nearest = self._check_approaching_stop(lat, lon)
+            stop_type = "dropoff"
         if nearest is None:
             self._walking_consecutive_pace_count = 0
             return False
@@ -3352,7 +3415,13 @@ class TripManager:
             # right when walking is FIRST confirmed for this park, not on
             # every subsequent tick while still walking.
             if not self._walking_gap_recorded_for_current_park:
-                self._record_park_to_walk_gap_sample(ts - self._walking_last_genuine_park_ts, nearest.get("address"))
+                # Pickup's real identifier is restaurant_name (matches
+                # pickup_location_history / get_parking_difficulty_zones);
+                # dropoff's is address (matches dropoff_location_history /
+                # get_customer_parking_difficulty_zones) -- see this
+                # method's own docstring for why stop_type exists at all.
+                gap_key = nearest.get("restaurant_name") if stop_type == "pickup" else nearest.get("address")
+                self._record_park_to_walk_gap_sample(ts - self._walking_last_genuine_park_ts, gap_key, stop_type)
                 self._walking_gap_recorded_for_current_park = True
                 cursor = self.db.conn.execute(
                     "UPDATE trips SET walking_confirmed_ts = ? WHERE end_time IS NULL AND walking_confirmed_ts IS NULL",
@@ -3976,6 +4045,25 @@ class DriveMonitorEngine:
         """, (canonical_name, lat, lon, time.time()))
         self.db.conn.commit()
 
+    def record_dropoff_location(self, address, lat, lon):
+        """
+        Same "start persisting real geocoded coordinates going forward"
+        reasoning as record_pickup_location, for the dropoff side --
+        previously no historical record of dropoff coordinates existed
+        anywhere either. Called once handleDropoffScreen's own address
+        geocode resolves (DasherAccessibilityService), same trigger
+        point record_pickup_location uses for pickups. No canonicalize
+        step needed here: unlike a hand-typed restaurant name, a
+        geocoded street address doesn't accumulate spelling variants.
+        """
+        if lat == 0.0 and lon == 0.0:
+            return  # placeholder coordinates (no API key configured) -- not real data worth keeping
+        self.db.conn.execute("""
+            INSERT INTO dropoff_location_history (address, lat, lon, timestamp)
+            VALUES (?, ?, ?, ?)
+        """, (address, lat, lon, time.time()))
+        self.db.conn.commit()
+
     def _best_zone_from_pickup_rows(self, rows, min_samples):
         """
         Shared zone-grid-frequency logic behind get_pickup_sweet_spot_zone
@@ -4134,37 +4222,161 @@ class DriveMonitorEngine:
             "distance_km": round(distance_km, 2),
         })
 
-    def get_parking_difficulty_rating(self, restaurant_name):
+    @staticmethod
+    def _score_parking_difficulty(rows):
         """
-        Returns this restaurant's learned parking-difficulty rating,
-        gated on PARKING_DIFFICULTY_MIN_SAMPLES confirmed samples for
-        THIS specific restaurant -- same mapping pattern as personal
-        calibration's overall_rating_map: easy=0, normal=50, difficult=100,
-        averaged across every sample recorded for this location (both
-        auto-labeled -- see PARKING_AUTO_LABEL_* -- and driver-confirmed;
-        manual_sample_count/auto_sample_count below disclose the split
-        rather than presenting a mostly-guessed rating as fully confirmed).
+        docs/parking_zone_map/PRD.md -- the actual scoring logic behind
+        get_parking_difficulty_rating, extracted so a second caller
+        (get_parking_difficulty_zones, scoring every restaurant at once
+        for the map) can reuse it exactly rather than carrying a second,
+        driftable copy of the same three-line formula. `rows`: any
+        iterable of sqlite Rows with `difficulty`/`source` columns (the
+        exact shape a `SELECT difficulty, source FROM
+        parking_difficulty_feedback ...` query already returns). Same
+        mapping pattern as personal calibration's overall_rating_map:
+        easy=0, normal=50, difficult=100, averaged across every sample
+        (both auto-labeled -- see PARKING_AUTO_LABEL_* -- and
+        driver-confirmed; manual_sample_count/auto_sample_count disclose
+        the split rather than presenting a mostly-guessed rating as
+        fully confirmed).
         """
         difficulty_map = {"easy": 0.0, "normal": 50.0, "difficult": 100.0}
-        rows = self.db.conn.execute(
-            "SELECT difficulty, source FROM parking_difficulty_feedback WHERE restaurant_name = ?",
-            (restaurant_name,),
-        ).fetchall()
         scores = [difficulty_map[r["difficulty"]] for r in rows if r["difficulty"] in difficulty_map]
         if len(scores) < PARKING_DIFFICULTY_MIN_SAMPLES:
-            return json.dumps({
+            return {
                 "has_rating": False, "sample_count": len(scores),
                 "min_required": PARKING_DIFFICULTY_MIN_SAMPLES,
-            })
+            }
         avg_score = sum(scores) / len(scores)
         label = "Easy" if avg_score < 33 else "Difficult" if avg_score > 66 else "Normal"
         manual_count = sum(1 for r in rows if r["source"] == "manual")
-        return json.dumps({
+        return {
             "has_rating": True, "sample_count": len(scores),
             "avg_score": round(avg_score, 1), "label": label,
             "manual_sample_count": manual_count,
             "auto_sample_count": len(scores) - manual_count,
-        })
+        }
+
+    def get_parking_difficulty_rating(self, restaurant_name):
+        """
+        Returns this restaurant's learned parking-difficulty rating,
+        gated on PARKING_DIFFICULTY_MIN_SAMPLES confirmed samples for
+        THIS specific restaurant. Scoring itself lives in
+        _score_parking_difficulty (see its own doc) -- this method is
+        now just the query plus the json.dumps wrapper.
+
+        stop_type = 'pickup' filter added alongside is_walking_pace's own
+        fix (docs/customer_zone_map/PROGRESS.md): before that fix, no row
+        was ever actually tagged 'pickup', so this filter alone would
+        have made every call here return "not enough data" forever on an
+        un-migrated row set -- the honest 'dropoff' backfill default on
+        pre-existing rows is exactly why that's correct, not a bug this
+        introduces.
+        """
+        rows = self.db.conn.execute(
+            "SELECT difficulty, source FROM parking_difficulty_feedback WHERE restaurant_name = ? AND stop_type = 'pickup'",
+            (restaurant_name,),
+        ).fetchall()
+        return json.dumps(self._score_parking_difficulty(rows))
+
+    def get_parking_difficulty_zones(self):
+        """
+        docs/parking_zone_map/PRD.md -- real per-restaurant parking-
+        difficulty zones for ParkingZoneMapActivity's satellite map.
+        Mirrors get_location_profitability()'s own join/loop shape
+        exactly (GROUP BY restaurant_name over pickup_location_history
+        for the GPS anchor, then a per-restaurant lookup) -- reused
+        here for a different metric, not a new query pattern.
+
+        HONEST SCOPE BOUNDARY, same as get_location_profitability's own:
+        a restaurant needs BOTH a real pickup_location_history row (the
+        only GPS anchor this app has) AND at least
+        PARKING_DIFFICULTY_MIN_SAMPLES real parking-difficulty samples
+        to be plotted. Either gap means it's silently omitted, not
+        shown with a guessed color.
+
+        stop_type = 'pickup' filter added alongside is_walking_pace's own
+        fix -- see get_parking_difficulty_rating's matching note just
+        above. Before that fix this join was very likely matching close
+        to nothing in real use (a restaurant name essentially never
+        equals a customer street address); this filter doesn't change
+        that history, it makes the query correct going forward, now that
+        genuine pickup samples actually exist to find.
+        """
+        location_rows = self.db.conn.execute("""
+            SELECT restaurant_name, AVG(lat) AS avg_lat, AVG(lon) AS avg_lon
+            FROM pickup_location_history GROUP BY restaurant_name
+        """).fetchall()
+
+        entries = []
+        for row in location_rows:
+            difficulty_rows = self.db.conn.execute(
+                "SELECT difficulty, source FROM parking_difficulty_feedback WHERE restaurant_name = ? AND stop_type = 'pickup'",
+                (row["restaurant_name"],),
+            ).fetchall()
+            score = self._score_parking_difficulty(difficulty_rows)
+            if not score["has_rating"]:
+                continue
+            entries.append({
+                "restaurant_name": row["restaurant_name"],
+                "lat": round(row["avg_lat"], 6),
+                "lon": round(row["avg_lon"], 6),
+                "avg_score": score["avg_score"],
+                "label": score["label"],
+                "sample_count": score["sample_count"],
+                "manual_sample_count": score["manual_sample_count"],
+                "auto_sample_count": score["auto_sample_count"],
+            })
+        return json.dumps({"entries": entries})
+
+    def get_customer_parking_difficulty_zones(self):
+        """
+        Real per-dropoff-address parking-difficulty zones, same shape as
+        get_parking_difficulty_zones immediately above but keyed by
+        dropoff_location_history's address instead of a restaurant name.
+
+        HISTORY: parking_difficulty_feedback is named "restaurant_name"
+        throughout, but until is_walking_pace's own fix (see its
+        docstring), the only place that ever populated the table only
+        ever checked TripManager's DROPOFF stop list -- so every existing
+        row actually carried a dropoff address, not a restaurant name.
+        That's why the stop_type column's migration backfills existing
+        rows as 'dropoff': an honest description of what they already
+        are, not a guess. Going forward, is_walking_pace tags each new
+        row with the stop it was actually measured at, and this method
+        filters to stop_type = 'dropoff' so a real customer address is
+        never conflated with a real pickup sample (or vice versa, in
+        get_parking_difficulty_zones above).
+
+        Same honest scope boundary as every other zone map in this app:
+        an address needs BOTH a dropoff_location_history row AND at
+        least PARKING_DIFFICULTY_MIN_SAMPLES samples to be plotted.
+        """
+        location_rows = self.db.conn.execute("""
+            SELECT address, AVG(lat) AS avg_lat, AVG(lon) AS avg_lon
+            FROM dropoff_location_history GROUP BY address
+        """).fetchall()
+
+        entries = []
+        for row in location_rows:
+            difficulty_rows = self.db.conn.execute(
+                "SELECT difficulty, source FROM parking_difficulty_feedback WHERE restaurant_name = ? AND stop_type = 'dropoff'",
+                (row["address"],),
+            ).fetchall()
+            score = self._score_parking_difficulty(difficulty_rows)
+            if not score["has_rating"]:
+                continue
+            entries.append({
+                "address": row["address"],
+                "lat": round(row["avg_lat"], 6),
+                "lon": round(row["avg_lon"], 6),
+                "avg_score": score["avg_score"],
+                "label": score["label"],
+                "sample_count": score["sample_count"],
+                "manual_sample_count": score["manual_sample_count"],
+                "auto_sample_count": score["auto_sample_count"],
+            })
+        return json.dumps({"entries": entries})
 
     def get_canned_replies_json(self):
         """Returns all canned replies, in their user-defined order."""

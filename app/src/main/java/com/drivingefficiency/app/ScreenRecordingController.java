@@ -162,6 +162,17 @@ class ScreenRecordingController {
     private String tripTimestamp;
     private int segmentIndex;
 
+    // Every segment this recording SESSION has produced, in order (a
+    // session can span many deliveries -- see PRD ss4a P7's own disclosed
+    // gap that recordings aren't linked to individual trips). Reset in
+    // beginCapture() since that's called once per session, not per
+    // delivery. verifiedSegmentCount tracks how many of these have
+    // already been checked by verifyNewlyFinishedSegments() so a long
+    // session with many deliveries never re-verifies the same finalized
+    // segment twice.
+    private final java.util.List<File> segmentFiles = new java.util.ArrayList<>();
+    private int verifiedSegmentCount;
+
     // Notified from releaseInternal() -- the ONE place all three ways
     // recording can stop (an explicit stop() call, this class's own
     // onStop() callback below, or a mid-setup exception in start())
@@ -316,6 +327,9 @@ class ScreenRecordingController {
             tripTimestamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
             segmentIndex = 1;
             currentFile = segmentFile();
+            segmentFiles.clear();
+            segmentFiles.add(currentFile);
+            verifiedSegmentCount = 0;
 
             mediaRecorder = newRecorder(currentFile);
             mediaRecorder.prepare();
@@ -412,6 +426,7 @@ class ScreenRecordingController {
 
             mediaRecorder = nextRecorder;
             currentFile = nextFile;
+            segmentFiles.add(nextFile);
         } catch (Exception e) {
             lastFailureReason = "segment rotation (starting next segment) failed: "
                     + e.getClass().getSimpleName() + ": " + e.getMessage();
@@ -472,6 +487,81 @@ class ScreenRecordingController {
         byte[] b = new byte[4];
         raf.readFully(b);
         return ((long) (b[0] & 0xFF) << 24) | ((b[1] & 0xFF) << 16) | ((b[2] & 0xFF) << 8) | (b[3] & 0xFF);
+    }
+
+    /**
+     * A REAL playability check, not just hasMoovBox()'s container-only
+     * scan -- confirmed real gap (found auditing this feature, per an
+     * explicit ask to "verify there is a playable file"): a file can have
+     * a closed moov box and still fail to actually play if the frame data
+     * inside is corrupt. MediaMetadataRetriever is Android's own media
+     * framework actually attempting to open the file, not a heuristic --
+     * a genuinely broken file fails setDataSource() or extractMetadata()
+     * here the same way a real video player would fail to open it.
+     * Returns false for a missing/empty file, one MediaMetadataRetriever
+     * can't open at all, or one that opens but reports no duration
+     * (present but content-free).
+     */
+    static boolean isPlayable(File file) {
+        if (file == null || !file.exists() || file.length() == 0) {
+            return false;
+        }
+        android.media.MediaMetadataRetriever retriever = new android.media.MediaMetadataRetriever();
+        try {
+            retriever.setDataSource(file.getAbsolutePath());
+            String duration = retriever.extractMetadata(
+                    android.media.MediaMetadataRetriever.METADATA_KEY_DURATION);
+            return duration != null && Long.parseLong(duration) > 0;
+        } catch (Exception e) { // exactly the class of corruption hasMoovBox() alone would miss
+            android.util.Log.w("ScreenRecordingController", "isPlayable() -- " + file.getName()
+                    + " failed to open: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            return false;
+        } finally {
+            // Real Android API quirk, confirmed by CI's own javac error
+            // (unlike MediaRecorder.release() elsewhere in this class):
+            // MediaMetadataRetriever.release() is a CHECKED
+            // java.io.IOException, not a RuntimeException -- catching
+            // only RuntimeException here left it unreported and failed
+            // the build outright, not silently.
+            try {
+                retriever.release();
+            } catch (java.io.IOException | RuntimeException ignored) {
+            }
+        }
+    }
+
+    /**
+     * Verifies every segment that has ACTUALLY finished (fully closed,
+     * moov box written) since the last call -- deliberately never
+     * touches whichever segment is still open for writing right now (a
+     * mid-write MP4 legitimately has no moov box yet; checking it would
+     * always report broken, which is not a real defect). Safe to call
+     * after EVERY individual delivery within a session, not just at
+     * session end -- see TripForegroundService.verifyScreenRecordingAfterDelivery()
+     * -- since only segments finalized SINCE the previous call are
+     * examined, nothing already-confirmed-playable is re-checked.
+     *
+     * Whether the LAST entry in segmentFiles counts as "finalized" or
+     * "still open" depends on isRecording(): true (called mid-session,
+     * a delivery just ended but recording keeps running for the rest of
+     * the dash) excludes it; false (called after stop() has already
+     * finalized the final segment too) includes it.
+     *
+     * Returns the segments that failed isPlayable() -- empty means every
+     * segment examined this call is genuinely playable, not merely that
+     * MediaRecorder.stop() didn't throw.
+     */
+    java.util.List<File> verifyNewlyFinishedSegments() {
+        int finalizedCount = isRecording() ? segmentFiles.size() - 1 : segmentFiles.size();
+        java.util.List<File> broken = new java.util.ArrayList<>();
+        while (verifiedSegmentCount < finalizedCount) {
+            File f = segmentFiles.get(verifiedSegmentCount);
+            if (!isPlayable(f)) {
+                broken.add(f);
+            }
+            verifiedSegmentCount++;
+        }
+        return broken;
     }
 
     /**

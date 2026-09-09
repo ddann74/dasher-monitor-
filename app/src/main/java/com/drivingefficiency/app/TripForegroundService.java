@@ -876,6 +876,90 @@ public class TripForegroundService extends Service {
     }
 
     /**
+     * Driver-requested: verify a screen recording is actually playable
+     * after a delivery, not just that MediaRecorder.stop() didn't throw
+     * -- a real, confirmed gap (see docs/screen_recording/PRD.md ss13.4:
+     * "doesn't crash" and "actually produces a playable recording" had
+     * been wrongly treated as the same claim). Called from BOTH places
+     * notifyRateThisDelivery() already fires, reusing their exact same
+     * guard conditions rather than re-deriving "did a delivery just
+     * genuinely complete" -- that dedup logic already had one real bug
+     * found and fixed (the auto-pause double-prompt), so piggybacking on
+     * it here means this can't independently drift out of sync with it.
+     * No-ops entirely if recording isn't enabled -- nothing to verify.
+     */
+    private void verifyScreenRecordingAfterDelivery() {
+        if (!ScreenRecordingController.isEnabled(this)) {
+            return; // recording was never supposed to be running -- nothing to verify
+        }
+        if (!screenRecordingController.isRecording()) {
+            // Enabled, but not actually active during this delivery -- a
+            // real integrity gap (consent lost, setup failed) distinct
+            // from "a file exists but is corrupt," and just as worth a
+            // driver knowing about, per the same request.
+            raiseRecordingVerificationFailedAlert(
+                    "Recording is enabled but wasn't active during this delivery"
+                            + (screenRecordingController.lastFailureReason() != null
+                                    ? " (" + screenRecordingController.lastFailureReason() + ")" : ""));
+            return;
+        }
+        // isRecording() is still true here -- verifyNewlyFinishedSegments()
+        // itself skips whichever segment is still open for writing, only
+        // examining ones that already finalized before this delivery ended.
+        reportBrokenRecordingSegments(screenRecordingController.verifyNewlyFinishedSegments());
+    }
+
+    private void reportBrokenRecordingSegments(java.util.List<java.io.File> broken) {
+        if (broken.isEmpty()) {
+            return;
+        }
+        StringBuilder names = new StringBuilder();
+        for (java.io.File f : broken) {
+            if (names.length() > 0) {
+                names.append(", ");
+            }
+            names.append(f.getName());
+        }
+        raiseRecordingVerificationFailedAlert(
+                broken.size() + " recording segment" + (broken.size() == 1 ? "" : "s")
+                        + " failed playability verification: " + names);
+    }
+
+    /**
+     * Same "explain why, don't just buzz with no context" principle as
+     * raisePermissionRevokedAlert immediately above, deliberately NOT
+     * sharing its repeating/cancellable vibration state (that pattern
+     * exists because a permission can come back mid-vibration; a
+     * recording segment that already finished broken has nothing to
+     * self-heal, so HapticFeedback's own one-shot alarm pattern is the
+     * honest shape here -- see its own doc).
+     */
+    private void raiseRecordingVerificationFailedAlert(String reason) {
+        logDiagnostic("SCREEN_RECORDING", "ALERT: " + reason);
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) {
+            String channelId = "recording_verification_failed_alert";
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                NotificationChannel channel = new NotificationChannel(
+                        channelId, "Recording Verification Alerts", NotificationManager.IMPORTANCE_HIGH);
+                channel.setDescription("Alerts if a screen recording could not be verified as playable");
+                channel.enableVibration(true);
+                manager.createNotificationChannel(channel);
+            }
+            Notification notification = new Notification.Builder(this, channelId)
+                    .setContentTitle("⚠ Screen recording problem")
+                    .setContentText(reason)
+                    .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                    .setPriority(Notification.PRIORITY_HIGH)
+                    .setDefaults(Notification.DEFAULT_SOUND)
+                    .setAutoCancel(true)
+                    .build();
+            manager.notify(9200, notification);
+        }
+        HapticFeedback.vibrateRecordingVerificationFailed(this);
+    }
+
+    /**
      * Driver-requested (2026-09-02): an alarm-style REPEATING vibration,
      * not the notification's own single default buzz -- runs until
      * either updatePermissionAlertVibration() detects every critical
@@ -1356,6 +1440,7 @@ public class TripForegroundService extends Service {
             // trip instead of two.
             if (wasTripActive && !isAutoPauseStop) {
                 notifyRateThisDelivery();
+                verifyScreenRecordingAfterDelivery();
             }
         } catch (RuntimeException e) { // covers PyException too
             logDiagnostic("ERROR", "force_end_trip on stop exception: " + android.util.Log.getStackTraceString(e));
@@ -1383,6 +1468,13 @@ public class TripForegroundService extends Service {
                     + (finishedFile != null ? " (final segment: " + finishedFile.length() + " bytes)" : "")
                     + (screenRecordingController.lastStopWasLikelyEmpty()
                             ? " -- stopped before any data was recorded, file may be empty/invalid" : ""));
+            // The final segment only becomes finalized (moov box written)
+            // by the stop() call just above -- every earlier segment this
+            // session was already checked as each delivery completed (see
+            // verifyScreenRecordingAfterDelivery()), so this call only
+            // ever examines the one segment that couldn't be checked
+            // until now.
+            reportBrokenRecordingSegments(screenRecordingController.verifyNewlyFinishedSegments());
         }
         if (fusedLocationClient != null && locationCallback != null) {
             fusedLocationClient.removeLocationUpdates(locationCallback);
@@ -1528,6 +1620,7 @@ public class TripForegroundService extends Service {
                 // Delivery" button is tapped.
                 if ("TRIP_ACTIVE".equals(lastKnownTripState) && "IDLE".equals(tripState)) {
                     notifyRateThisDelivery();
+                    verifyScreenRecordingAfterDelivery();
                 }
 
                 lastKnownTripState = tripState;
