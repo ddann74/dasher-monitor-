@@ -145,34 +145,52 @@ recording is active - no such API exists to do this reliably system-wide.
 
 ## 2. Definition of "functional" for this task
 
-- [ ] A new **Setup** toggle ("Record screen during trips") is off by
+Left unchecked since the original 2026-08-31 draft even after
+implementation - a real documentation gap, not a code gap: every item
+below was actually implemented and is covered by §6's own (checked)
+success criteria and by the PROGRESS.md history of everything built and
+fixed since. Checked off here on 2026-09-09 after re-verifying each one
+directly against the current code (not just trusting the old §6 boxes),
+cross-references below point at where.
+
+- [x] A new **Setup** toggle ("Record screen during trips") is off by
       default - recording never starts without the driver explicitly
-      opting in first.
-- [ ] Enabling the toggle immediately triggers the one-time
+      opting in first. `ScreenRecordingController.isEnabled()`:
+      `getBoolean(KEY_ENABLED, false)`.
+- [x] Enabling the toggle immediately triggers the one-time
       `MediaProjection` consent flow (from an Activity, not silently from
       the background service) - if declined, the toggle reverts to off
-      and nothing records.
-- [ ] With the toggle on and consent granted, recording starts
+      and nothing records. `PermissionsActivity`'s
+      `screenCaptureConsentLauncher` + `createScreenCaptureIntent()`.
+- [x] With the toggle on and consent granted, recording starts
       automatically when a trip starts (`startTracking()`) and stops
       automatically when it ends (`stopTracking()`) - no separate
-      manual start/stop button needed for the common case.
-- [ ] If the granted projection has been invalidated (process restart -
+      manual start/stop button needed for the common case. See §13's
+      corrected `acquireProjection()`/`beginCapture()` ordering.
+- [x] If the granted projection has been invalidated (process restart -
       see §1.1.2) when a new trip starts, this is handled visibly (an
       Activity log line and/or notification saying recording could not
       resume and consent is needed again) rather than silently recording
-      nothing while appearing to work.
-- [ ] Recorded files are written to this app's own private external
+      nothing while appearing to work. `raisePermissionRevokedAlert(
+      "Trip Capture", ...)`, same mechanism as every other revoked
+      -permission alert.
+- [x] Recorded files are written to this app's own private external
       storage (not a shared/public gallery) - same reasoning
       `tiktok-feed-filter`'s `AudioExtractor` already used for
       privacy-sensitive on-device media in a sibling repo.
-- [ ] A way to review/delete recordings exists in-app (at minimum: see
+      `recordingsDir()`: `context.getExternalFilesDir(null)`.
+- [x] A way to review/delete recordings exists in-app (at minimum: see
       how many exist and their total size, matching the existing
       Diagnostic Log's size-visibility pattern; full playback UI is a
-      stretch goal, not required for this PRD - see §5.2).
-- [ ] No change to `TripForegroundService`'s existing GPS/accessibility/
+      stretch goal, not required for this PRD - see §5.2). Exceeded, not
+      just met: §17 added a real share/view path on top of the original
+      count/size/delete-all bar.
+- [x] No change to `TripForegroundService`'s existing GPS/accessibility/
       notification lifecycle - recording is additive, gated entirely
       behind the new toggle, and its absence (toggle off, the default)
-      must leave every existing behavior completely unchanged.
+      must leave every existing behavior completely unchanged. Every
+      recording call site is reachable only through code already gated
+      on `isEnabled()`/`isRecording()`, re-confirmed while adding §15/§17.
 
 Non-goals:
 - Scoping capture to only this app's own UI - not possible on Android
