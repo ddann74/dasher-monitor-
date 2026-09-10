@@ -31,6 +31,7 @@ public class DiagnosticsActivity extends AppCompatActivity {
         }
 
         Button viewDiagnosticLogButton = findViewById(R.id.viewDiagnosticLogButton);
+        Button viewZoneActivityLogButton = findViewById(R.id.viewZoneActivityLogButton);
         Button viewDiagnosticArchivesButton = findViewById(R.id.viewDiagnosticArchivesButton);
         Button copyDiagnosticLogButton = findViewById(R.id.copyDiagnosticLogButton);
         Button shareDiagnosticLogButton = findViewById(R.id.shareDiagnosticLogButton);
@@ -49,6 +50,7 @@ public class DiagnosticsActivity extends AppCompatActivity {
                 : "Google Maps API key (geocoding + traffic): not configured (see README)");
 
         viewDiagnosticLogButton.setOnClickListener(v -> showDiagnosticLog());
+        viewZoneActivityLogButton.setOnClickListener(v -> showZoneActivityLog());
         viewDiagnosticArchivesButton.setOnClickListener(v -> showDiagnosticArchives());
         copyDiagnosticLogButton.setOnClickListener(v -> copyDiagnosticLog());
         shareDiagnosticLogButton.setOnClickListener(v -> shareDiagnosticLog());
@@ -205,6 +207,77 @@ public class DiagnosticsActivity extends AppCompatActivity {
                         .show();
             } catch (JSONException | PyException e) {
                 Toast.makeText(this, "Could not load diagnostic log: " + e.getMessage(),
+                        Toast.LENGTH_LONG).show();
+            }
+        }
+
+        /**
+         * docs/zone_activity_log/PRD.md -- raw on-screen snapshots captured
+         * whenever Dasher was open but neither an offer nor a dropoff
+         * screen matched (most likely the home/map screen), so a driver
+         * can review zone activity without ever having signed on to dash.
+         * Deliberately shows the RAW captured text, not a parsed "zone X
+         * is Y busy" summary -- see the PRD's own ss0 for why.
+         */
+        private String buildZoneActivityLogText(JSONArray entries) throws JSONException {
+            long nowSeconds = System.currentTimeMillis() / 1000L;
+            java.text.SimpleDateFormat timeFormat =
+                    new java.text.SimpleDateFormat("h:mm:ss a", java.util.Locale.getDefault());
+            StringBuilder body = new StringBuilder();
+            for (int i = 0; i < entries.length(); i++) {
+                JSONObject entry = entries.optJSONObject(i);
+                if (entry == null) {
+                    continue;
+                }
+                double ts = entry.optDouble("timestamp", 0);
+                long agoSeconds = nowSeconds - (long) ts;
+                String agoLabel = agoSeconds < 60 ? agoSeconds + "s ago"
+                        : agoSeconds < 3600 ? (agoSeconds / 60) + "m ago"
+                        : (agoSeconds / 3600) + "h ago";
+                String clockTime = timeFormat.format(new java.util.Date((long) ts * 1000));
+                String locationLabel = entry.isNull("lat") || entry.isNull("lon")
+                        ? "location unknown"
+                        : entry.optDouble("lat") + ", " + entry.optDouble("lon");
+                body.append("[").append(clockTime).append(", ").append(agoLabel)
+                        .append(", ").append(locationLabel).append("]\n")
+                        .append(entry.optString("raw_text", ""))
+                        .append("\n\n");
+            }
+            return body.toString();
+        }
+
+        private void showZoneActivityLog() {
+            try {
+                JSONObject log = new JSONObject(engine.callAttr("get_zone_activity_log").toString());
+                JSONArray entries = log.optJSONArray("entries");
+                if (entries == null || entries.length() == 0) {
+                    new AlertDialog.Builder(this)
+                            .setTitle("Zone Activity Log")
+                            .setMessage("No snapshots captured yet. Open Dasher (without dashing) "
+                                    + "and wait a couple of minutes.")
+                            .setPositiveButton("OK", null)
+                            .show();
+                    return;
+                }
+
+                String body = buildZoneActivityLogText(entries);
+
+                new AlertDialog.Builder(this)
+                        .setTitle("Zone Activity Log (newest first)")
+                        .setMessage(body)
+                        .setPositiveButton("OK", null)
+                        .setNeutralButton("Clear Log", (dialog, which) -> {
+                            try {
+                                engine.callAttr("clear_zone_activity_log");
+                                Toast.makeText(this, "Log cleared.", Toast.LENGTH_SHORT).show();
+                            } catch (RuntimeException e) { // covers PyException too
+                                Toast.makeText(this, "Could not clear log: " + e.getMessage(),
+                                        Toast.LENGTH_LONG).show();
+                            }
+                        })
+                        .show();
+            } catch (JSONException | PyException e) {
+                Toast.makeText(this, "Could not load zone activity log: " + e.getMessage(),
                         Toast.LENGTH_LONG).show();
             }
         }

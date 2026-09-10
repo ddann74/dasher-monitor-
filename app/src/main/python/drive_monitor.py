@@ -497,6 +497,21 @@ class Database:
             message TEXT
         );
 
+        -- docs/zone_activity_log/PRD.md -- raw on-screen text captured
+        -- whenever Dasher is open but neither an offer nor a dropoff
+        -- screen matched (most likely the home/map screen), so a driver
+        -- can monitor zone activity without actually signing on to dash.
+        -- Deliberately NOT structured "zone X is Y busy" data -- see the
+        -- PRD's own §0 for why (no real screenshot to build a reliable
+        -- parser against yet).
+        CREATE TABLE IF NOT EXISTS zone_activity_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp REAL,
+            lat REAL,
+            lon REAL,
+            raw_text TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS trip_feedback (
             trip_id INTEGER PRIMARY KEY,
             rating INTEGER,
@@ -3746,6 +3761,13 @@ class DriveMonitorEngine:
         self.smart_score = SmartScoreEngine(self.db)
         self.stops_buffer = StopsBuffer()
         self.trusted_contacts = TrustedContacts(self.db)
+        # docs/zone_activity_log/PRD.md ss1.2 -- throttle state for
+        # record_zone_activity_snapshot, in-memory only (a fresh app
+        # process starting mid-shift just captures its next eligible
+        # event normally; there's no correctness reason to persist this
+        # across restarts, same reasoning as every other in-memory-only
+        # debounce/throttle field in this app).
+        self._last_zone_snapshot_ts = 0.0
         self._recover_interrupted_trips()
         self._recover_abandoned_offers()
 
@@ -6370,6 +6392,73 @@ class DriveMonitorEngine:
 
     def clear_diagnostic_log(self):
         self.db.conn.execute("DELETE FROM diagnostic_log")
+        self.db.conn.commit()
+
+    # docs/zone_activity_log/PRD.md -- UNCONFIRMED reasonable defaults,
+    # same honesty status as every other threshold in this app.
+    ZONE_SNAPSHOT_MIN_INTERVAL_SECONDS = 120
+    ZONE_ACTIVITY_LOG_MAX_ROWS = 500
+
+    def record_zone_activity_snapshot(self, lines_json, lat=None, lon=None):
+        """
+        Called from DasherAccessibilityService on every Dasher
+        content-changed event where neither an offer screen nor a
+        dropoff screen matched -- most likely the home/map screen a
+        driver sees before tapping "Dash Now," captured without ever
+        going online. Deliberately NOT parsed into structured "zone X
+        is Y busy" data -- see docs/zone_activity_log/PRD.md ss0 for why
+        (no real screenshot of this screen exists yet to build a
+        reliable parser against, the same "build from real samples"
+        discipline as every other screen parser in this app).
+
+        Throttled to ZONE_SNAPSHOT_MIN_INTERVAL_SECONDS: the idle/home
+        screen can re-fire content-changed events roughly once a second
+        while it just sits open (the same re-render frequency the
+        Dash-Paused screen's own countdown timer already causes
+        elsewhere in this file), and a row per event would flood this
+        table with near-duplicates for no benefit. Returns a JSON dict
+        so the Java caller can log a diagnostic line either way without
+        needing a second round-trip to find out what happened.
+        """
+        now = time.time()
+        if now - self._last_zone_snapshot_ts < self.ZONE_SNAPSHOT_MIN_INTERVAL_SECONDS:
+            return json.dumps({"recorded": False, "reason": "throttled"})
+        self._last_zone_snapshot_ts = now
+
+        self.db.conn.execute(
+            "INSERT INTO zone_activity_log (timestamp, lat, lon, raw_text) VALUES (?, ?, ?, ?)",
+            (now, lat, lon, lines_json),
+        )
+        # Simple delete-oldest cap, not diagnostic_log's rotate-to-file
+        # behavior -- this is informational snapshot data, not an audit
+        # trail that needs to survive indefinitely (see PRD ss1.2).
+        self.db.conn.execute(
+            "DELETE FROM zone_activity_log WHERE id NOT IN "
+            "(SELECT id FROM zone_activity_log ORDER BY id DESC LIMIT ?)",
+            (self.ZONE_ACTIVITY_LOG_MAX_ROWS,),
+        )
+        self.db.conn.commit()
+        return json.dumps({"recorded": True})
+
+    def get_zone_activity_log(self, limit=100):
+        rows = self.db.conn.execute(
+            "SELECT timestamp, lat, lon, raw_text FROM zone_activity_log ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return json.dumps({
+            "entries": [
+                {
+                    "timestamp": r["timestamp"],
+                    "lat": r["lat"],
+                    "lon": r["lon"],
+                    "raw_text": r["raw_text"],
+                }
+                for r in rows
+            ]
+        })
+
+    def clear_zone_activity_log(self):
+        self.db.conn.execute("DELETE FROM zone_activity_log")
         self.db.conn.commit()
 
     def list_diagnostic_archives(self):

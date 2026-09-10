@@ -67,6 +67,7 @@
     <string name="reset_all_data">Reset All Data</string>
     <string name="test_api_connection">Test Google Maps Connection</string>
     <string name="view_diagnostic_log">View Diagnostic Log</string>
+    <string name="view_zone_activity_log">View Zone Activity Log</string>
     <string name="view_diagnostic_archives">View Log Archives</string>
     <string name="copy_diagnostic_log">Copy Log to Clipboard</string>
     <string name="share_diagnostic_log">Share Log</string>

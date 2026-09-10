@@ -843,6 +843,38 @@ public class DasherAccessibilityService extends AccessibilityService {
             if (isDropoff) {
                 handleDropoffScreen(linesJson);
             }
+
+            // docs/zone_activity_log/PRD.md -- captures whatever Dasher's
+            // own screen shows when NEITHER an offer nor a dropoff screen
+            // matched (most likely the home/map screen), so a driver can
+            // monitor zone activity without ever signing on to dash.
+            // Reuses resultJson/isDropoff already computed above -- no
+            // second screen-text read, no new getRootInActiveWindow()
+            // call. record_zone_activity_snapshot throttles/caps itself
+            // and returns {"recorded": false} harmlessly when it skips,
+            // same "safe to call on every content-changed event" shape
+            // as parse_offer_screen/is_dropoff_screen right above it.
+            boolean isOfferScreen = false;
+            try {
+                isOfferScreen = new JSONObject(resultJson).optBoolean("is_offer_screen", false);
+            } catch (JSONException ignored) {
+                // Malformed JSON here would be a real bug elsewhere (parse_offer_screen
+                // always returns a JSON object) -- fail safe by treating it as "not an
+                // offer screen" rather than throwing, since this is a best-effort
+                // capture, not a correctness-critical path.
+            }
+            if (!isOfferScreen && !isDropoff) {
+                String zoneResultJson = engine.callAttr("record_zone_activity_snapshot",
+                        linesJson, currentLat, currentLon).toString();
+                try {
+                    if (new JSONObject(zoneResultJson).optBoolean("recorded", false)) {
+                        logDiagnostic("ZONE_ACTIVITY", "Snapshot captured");
+                    }
+                } catch (JSONException ignored) {
+                    // Same reasoning as isOfferScreen's own guard above -- best-effort
+                    // logging only, never worth failing the whole event over.
+                }
+            }
         } catch (RuntimeException e) { // covers PyException too -- confirmed via a real diagnostic log:
             // an offer was detected and scored successfully, then the whole
             // process died with no further log entries for 77 seconds before
