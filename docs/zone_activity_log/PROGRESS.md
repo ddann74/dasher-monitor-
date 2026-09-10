@@ -87,4 +87,9 @@ limitation as every other Java/XML change in this repo). Structured
 zone-busyness parsing - explicitly deferred, see PRD ss0/ss2, needs a
 real screenshot of Dasher's home/map screen to design against.
 
+**Confirmed green**: both `build` check runs on commit `4a475d5`
+completed with `conclusion: success`
+(https://github.com/ddann74/dasher-monitor-/actions/runs/34487743952/job/102906260643,
+https://github.com/ddann74/dasher-monitor-/actions/runs/34487713470/job/102906158481).
+
 Remaining PRD ss3 boxes: driver confirms in real use, driver sign-off.

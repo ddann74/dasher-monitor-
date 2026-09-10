@@ -131,6 +131,10 @@ other check this event already uses.
 - [x] `python3 -m py_compile drive_monitor.py` clean
 - [x] Brace/paren balance + XML well-formedness on every touched
       Java/XML file
+- [x] Pushed to a PR; CI green on the real commit - both `build` check
+      runs on commit `4a475d5` completed with `conclusion: success`
+      (https://github.com/ddann74/dasher-monitor-/actions/runs/34487743952/job/102906260643,
+      https://github.com/ddann74/dasher-monitor-/actions/runs/34487713470/job/102906158481)
 - [ ] Driver confirms in real use: opening Dasher without dashing
       produces log entries within a couple of minutes
 - [ ] Driver sign-off
