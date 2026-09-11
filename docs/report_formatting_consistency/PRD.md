@@ -158,3 +158,31 @@ app shows 4. Standardized the configured branch to `%.2f` to match.
       environment -- verified by code reading only.
 - [ ] Driver confirms in real use that the fuel-rate subtext no longer
       changes precision after configuring and saving a real rate.
+
+## 5. Mixed 12hr/24hr clock in the full report export
+
+`export_full_report()` (`drive_monitor.py:5375`) formatted its header
+timestamp as `"%Y-%m-%d %I:%M %p"` (12-hour, e.g. "2026-09-11 02:30
+PM") while every single row timestamp in the same function's 7 table
+sections -- trips (`:5385`), safety events (`:5403`), delays (`:5410`),
+messages (`:5420`), distance accuracy (`:5439`), and outcomes
+(`:5475`) -- used `"%H:%M"`/`"%H:%M:%S"` (24-hour). One report mixing
+both clock conventions in the same document is confusing regardless of
+which one a driver personally prefers. Changed the header to
+`"%Y-%m-%d %H:%M"`, matching the 6-for-6 majority convention already
+used by every row in the report body, rather than changing 6 row
+formats to match the 1 header.
+
+### 5.1 Success criteria
+
+- [x] Header timestamp now uses 24-hour `%H:%M`, matching every row
+      timestamp in the same export
+- [x] Confirmed via reading the full function body that no other
+      12-hour format string remains in `export_full_report()`
+- [x] `python3 -m py_compile drive_monitor.py` -- clean
+- [ ] HONEST LIMIT: no Android device/emulator available in this
+      environment -- the export runs under Chaquopy on a real device;
+      verified here by code reading and a desktop Python compile check
+      only, not by generating a real report on-device.
+- [ ] Driver confirms in real use that a generated full report now
+      shows one consistent clock format throughout.

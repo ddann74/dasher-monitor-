@@ -5372,7 +5372,7 @@ class DriveMonitorEngine:
         plain text, especially in the PDF export where alignment actually
         renders visibly with the monospace font used there.
         """
-        generated_at = datetime.now().strftime("%Y-%m-%d %I:%M %p")
+        generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
         sections = [f"DASHER MONITOR -- FULL REPORT\nGenerated: {generated_at}"]
 
         trip_rows = self.db.conn.execute("""
