@@ -2,7 +2,6 @@ package com.drivingefficiency.app;
 
 import android.app.AlarmManager;
 import android.app.Notification;
-import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
@@ -215,13 +214,9 @@ public class MonitoringWatchdogReceiver extends BroadcastReceiver {
         if (manager == null) {
             return;
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                    ALERT_CHANNEL_ID, "Monitoring Failure Alerts", NotificationManager.IMPORTANCE_HIGH);
-            channel.setDescription("Alerts if Dasher Monitor stops tracking unexpectedly");
-            channel.enableVibration(true);
-            manager.createNotificationChannel(channel);
-        }
+        NotificationChannelHelper.ensureChannel(manager, ALERT_CHANNEL_ID, "Monitoring Failure Alerts",
+                NotificationManager.IMPORTANCE_HIGH,
+                "Alerts if Dasher Monitor stops tracking unexpectedly", true);
 
         long minutesStale = stalenessMs / (60 * 1000);
         Notification notification = new Notification.Builder(context, ALERT_CHANNEL_ID)

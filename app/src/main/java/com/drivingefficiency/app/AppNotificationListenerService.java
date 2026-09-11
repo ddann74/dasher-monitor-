@@ -1,7 +1,6 @@
 package com.drivingefficiency.app;
 
 import android.app.Notification;
-import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Person;
 import android.app.PendingIntent;
@@ -721,12 +720,9 @@ public class AppNotificationListenerService extends NotificationListenerService 
                 logDiagnostic("AUTO_LAUNCH", "Could not launch Dasher -- NotificationManager unavailable");
                 return;
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                NotificationChannel channel = new NotificationChannel(AUTO_LAUNCH_CHANNEL_ID,
-                        "Auto-Launch Dasher for Offers", NotificationManager.IMPORTANCE_HIGH);
-                channel.setDescription("Brings Dasher to the foreground the moment a new offer is detected");
-                manager.createNotificationChannel(channel);
-            }
+            NotificationChannelHelper.ensureChannel(manager, AUTO_LAUNCH_CHANNEL_ID,
+                    "Auto-Launch Dasher for Offers", NotificationManager.IMPORTANCE_HIGH,
+                    "Brings Dasher to the foreground the moment a new offer is detected", false);
 
             PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(
                     this, restaurantName.hashCode(), launchIntent,

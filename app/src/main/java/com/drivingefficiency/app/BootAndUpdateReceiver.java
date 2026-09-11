@@ -1,12 +1,10 @@
 package com.drivingefficiency.app;
 
 import android.app.Notification;
-import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.os.Build;
 
 import com.chaquo.python.PyException;
 import com.chaquo.python.PyObject;
@@ -85,12 +83,9 @@ public class BootAndUpdateReceiver extends BroadcastReceiver {
         if (manager == null) {
             return;
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                    RESUME_CHANNEL_ID, "Monitoring Auto-Resumed", NotificationManager.IMPORTANCE_DEFAULT);
-            channel.setDescription("Lets you know monitoring restarted itself after a reboot or update");
-            manager.createNotificationChannel(channel);
-        }
+        NotificationChannelHelper.ensureChannel(manager, RESUME_CHANNEL_ID, "Monitoring Auto-Resumed",
+                NotificationManager.IMPORTANCE_DEFAULT,
+                "Lets you know monitoring restarted itself after a reboot or update", false);
         Notification notification = new Notification.Builder(context, RESUME_CHANNEL_ID)
                 .setContentTitle("Dasher Monitor resumed")
                 .setContentText("Monitoring restarted automatically after your phone restarted.")

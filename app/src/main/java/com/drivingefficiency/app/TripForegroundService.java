@@ -2,7 +2,6 @@ package com.drivingefficiency.app;
 
 import android.Manifest;
 import android.app.Notification;
-import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
@@ -908,13 +907,9 @@ public class TripForegroundService extends Service {
         }
         String channelId = "permission_revoked_alert_" + permissionName.toLowerCase().replace(" ", "_");
         int notificationId = 9100 + Math.abs(permissionName.hashCode() % 100);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                    channelId, permissionName + " Revoked Alerts", NotificationManager.IMPORTANCE_HIGH);
-            channel.setDescription("Alerts immediately if " + permissionName + " turns off while monitoring");
-            channel.enableVibration(true);
-            manager.createNotificationChannel(channel);
-        }
+        NotificationChannelHelper.ensureChannel(manager, channelId, permissionName + " Revoked Alerts",
+                NotificationManager.IMPORTANCE_HIGH,
+                "Alerts immediately if " + permissionName + " turns off while monitoring", true);
         String titleState = alreadyOffAtStart ? " already off" : " turned off";
         Notification.Builder builder = new Notification.Builder(this, channelId)
                 .setContentTitle("\u26A0 " + permissionName + titleState)
@@ -1043,12 +1038,9 @@ public class TripForegroundService extends Service {
             if (manager == null) {
                 return;
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                NotificationChannel channel = new NotificationChannel(CONSENT_RECOVERY_CHANNEL_ID,
-                        "Auto-Recover Trip Recording", NotificationManager.IMPORTANCE_HIGH);
-                channel.setDescription("Automatically re-opens Setup to re-grant lost recording consent");
-                manager.createNotificationChannel(channel);
-            }
+            NotificationChannelHelper.ensureChannel(manager, CONSENT_RECOVERY_CHANNEL_ID,
+                    "Auto-Recover Trip Recording", NotificationManager.IMPORTANCE_HIGH,
+                    "Automatically re-opens Setup to re-grant lost recording consent", false);
             PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(
                     this, CONSENT_RECOVERY_NOTIFICATION_ID, fullScreenLaunchIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT
@@ -1146,13 +1138,9 @@ public class TripForegroundService extends Service {
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) {
             String channelId = "recording_verification_failed_alert";
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                NotificationChannel channel = new NotificationChannel(
-                        channelId, "Recording Verification Alerts", NotificationManager.IMPORTANCE_HIGH);
-                channel.setDescription("Alerts if a screen recording could not be verified as playable");
-                channel.enableVibration(true);
-                manager.createNotificationChannel(channel);
-            }
+            NotificationChannelHelper.ensureChannel(manager, channelId, "Recording Verification Alerts",
+                    NotificationManager.IMPORTANCE_HIGH,
+                    "Alerts if a screen recording could not be verified as playable", true);
             Notification notification = new Notification.Builder(this, channelId)
                     .setContentTitle("⚠ Screen recording problem")
                     .setContentText(reason)
@@ -1264,13 +1252,9 @@ public class TripForegroundService extends Service {
         NotificationManager manager = context.getSystemService(NotificationManager.class);
         if (manager != null) {
             String channelId = "monitoring_not_active_alert";
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                NotificationChannel channel = new NotificationChannel(
-                        channelId, "Dash Not Monitored Alerts", NotificationManager.IMPORTANCE_HIGH);
-                channel.setDescription("Alerts immediately if a dash starts without monitoring actually running");
-                channel.enableVibration(true);
-                manager.createNotificationChannel(channel);
-            }
+            NotificationChannelHelper.ensureChannel(manager, channelId, "Dash Not Monitored Alerts",
+                    NotificationManager.IMPORTANCE_HIGH,
+                    "Alerts immediately if a dash starts without monitoring actually running", true);
             Notification notification = new Notification.Builder(context, channelId)
                     .setContentTitle("⚠ This dash is not being tracked")
                     .setContentText("Monitoring didn't start -- open Dasher Monitor to check.")
@@ -1435,12 +1419,9 @@ public class TripForegroundService extends Service {
                 return;
             }
             String channelId = "rate_delivery_prompt";
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                NotificationChannel channel = new NotificationChannel(
-                        channelId, "Rate This Delivery", NotificationManager.IMPORTANCE_HIGH);
-                channel.setDescription("Shows the feedback page right after a delivery completes");
-                manager.createNotificationChannel(channel);
-            }
+            NotificationChannelHelper.ensureChannel(manager, channelId, "Rate This Delivery",
+                    NotificationManager.IMPORTANCE_HIGH,
+                    "Shows the feedback page right after a delivery completes", false);
             // Posted unconditionally, not only if the direct attempt above
             // threw -- a blocked BAL launch fails silently (no exception),
             // so there's no reliable way to know whether it's needed. Same
@@ -2264,12 +2245,9 @@ public class TripForegroundService extends Service {
     }
 
     private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                    CHANNEL_ID, "Trip Tracking", NotificationManager.IMPORTANCE_LOW);
-            NotificationManager manager = getSystemService(NotificationManager.class);
-            manager.createNotificationChannel(channel);
-        }
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        NotificationChannelHelper.ensureChannel(manager, CHANNEL_ID, "Trip Tracking",
+                NotificationManager.IMPORTANCE_LOW, null, false);
     }
 
     @Override
