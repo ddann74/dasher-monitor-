@@ -267,7 +267,7 @@ public class TripDetailActivity extends AppCompatActivity {
 
     private void populateTripStats(JSONObject summary) {
         LinearLayout container = findViewById(R.id.tripStatsRows);
-        addRow(container, "Distance", String.format(java.util.Locale.US, "%.2f km", summary.optDouble("distance_km", 0)));
+        addRow(container, "Distance", String.format(java.util.Locale.US, "%.1f km", summary.optDouble("distance_km", 0)));
         addRow(container, "Time efficiency", String.format(java.util.Locale.US, "%.0f%%", summary.optDouble("time_efficiency_score", 0)));
         addRow(container, "Safety score", String.format(java.util.Locale.US, "%.0f%%", summary.optDouble("safety_score", 0)));
         addRow(container, "Stops completed", String.format(java.util.Locale.US, "%.0f%%", summary.optDouble("geofence_hit_ratio", 0)));
