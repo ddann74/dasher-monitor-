@@ -1,13 +1,22 @@
 # PRD: Don't present the notification-based offer score as authoritative
 
-Status: IMPLEMENTED (all §6 boxes checked except sign-off) -- this PRD's
-own status line was stale, found and corrected during a 2026-09-02
-priority-triage pass. `launchDasherApp()` already fires unconditionally
-once a Dasher offer notification is recognized, which is functionally
-what the driver later separately asked for ("force the dasher app to
-appear in the foreground before the smart score can calculate the
-offer") -- the notification-based score is never shown as authoritative;
-the driver is pushed into the real app for the real screen-based score.
+Status: IMPLEMENTED (all §6 boxes checked except on-device confirmation
+and sign-off) -- this PRD's own status line was stale, found and
+corrected during a 2026-09-02 priority-triage pass. `launchDasherApp()`
+already fires unconditionally once a Dasher offer notification is
+recognized, which is functionally what the driver later separately
+asked for ("force the dasher app to appear in the foreground before the
+smart score can calculate the offer") -- the notification-based score is
+never shown as authoritative; the driver is pushed into the real app for
+the real screen-based score.
+CORRECTED AGAIN (2026-09-11, driver's own feature audit): the previous
+version of this status line still said "all §6 boxes checked except
+sign-off," but §4 has always disclosed that on-device confirmation of
+the full-screen intent actually firing is unverifiable in this
+environment -- that real, already-written caveat had never actually
+been given its own §6 checklist line, so "all boxes checked" wasn't
+true even before sign-off. Fixed by adding it as its own line below,
+same as every sibling PRD already does.
 Scope: this one feature only. Not a general codebase pass.
 
 ## 0. What this is / isn't
@@ -189,4 +198,9 @@ scoped accordingly.
       later parser-accuracy debugging (unchanged from today)
 - [x] `DasherAccessibilityService`'s screen-based scoring and live badge
       untouched, confirmed by diff review
+- [ ] On-device confirmation that Dasher's full-screen intent actually
+      fires and the driver no longer hears a confident (possibly wrong)
+      notification-based score (see §4 -- disclosed as unverifiable in
+      this environment, no Android device/emulator available; was
+      previously only in prose, not tracked here)
 - [ ] User sign-off

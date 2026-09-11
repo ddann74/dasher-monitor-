@@ -1,13 +1,21 @@
 # PRD: Show the feedback page directly, not via a tap-required notification
 
-Status: IMPLEMENTED (all §6 boxes checked except sign-off) -- this PRD's
-own status line was stale, found and corrected during a 2026-09-02
-priority-triage pass. This is exactly what the driver later separately
-asked for ("show me the feedback page not in the notification") --
-already the real, live behavior; if it's still only arriving via
-notification tap, the cause is `docs/feedback_prompt_never_shown/`
-(a separate, still-open reliability question about the trigger itself),
-not this delivery mechanism.
+Status: IMPLEMENTED (all §6 boxes checked except on-device confirmation
+and sign-off) -- this PRD's own status line was stale, found and
+corrected during a 2026-09-02 priority-triage pass. This is exactly what
+the driver later separately asked for ("show me the feedback page not in
+the notification") -- already the real, live behavior; if it's still
+only arriving via notification tap, the cause is
+`docs/feedback_prompt_never_shown/` (a separate, still-open reliability
+question about the trigger itself), not this delivery mechanism.
+CORRECTED AGAIN (2026-09-11, driver's own feature audit): the previous
+version of this status line still said "all §6 boxes checked except
+sign-off," but §4 has always disclosed that on-device confirmation of
+the BAL-exemption/full-screen-intent launch is unverifiable in this
+environment -- that real, already-written caveat had never actually
+been given its own §6 checklist line, so "all boxes checked" wasn't
+true even before sign-off. Fixed by adding it as its own line below,
+same as every sibling PRD already does.
 Scope: this one feature only. Not a general codebase pass.
 
 ## 0. What this is / isn't
@@ -169,4 +177,9 @@ starting.
       `MainActivity`
 - [x] No changes to `MainActivity.java`'s feedback-dialog handling,
       confirmed by diff review
+- [ ] On-device confirmation that the feedback page actually appears
+      directly after a real delivery, without a notification tap first
+      (see §4 -- disclosed as unverifiable in this environment, no
+      Android device/emulator available; was previously only in prose,
+      not tracked here)
 - [ ] User sign-off
