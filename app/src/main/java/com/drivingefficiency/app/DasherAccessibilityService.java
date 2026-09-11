@@ -976,6 +976,17 @@ public class DasherAccessibilityService extends AccessibilityService {
     }
 
     private String lastDropoffAddressKey = null;
+    // docs/dropoff_parse_failure_visibility/PRD.md -- distinguishes "no
+    // usable address parsed" from "already handled this address" and
+    // "not a dropoff screen at all," none of which shared a log line
+    // before this fix. Only guards against re-logging on every single
+    // content-changed tick while the same still-unparseable screen
+    // stays open -- reset on the next successful parse (a different
+    // delivery, or this same screen eventually rendering completely),
+    // not on any "left the screen" event, since is_dropoff_screen going
+    // false has no equivalent state-transition hook the way offers do
+    // (see handleOfferResult).
+    private boolean lastDropoffParseFailureLogged = false;
 
     /**
      * Parses the real "Deliver to X" screen, geocodes the full address
@@ -989,7 +1000,30 @@ public class DasherAccessibilityService extends AccessibilityService {
         try {
             JSONObject parsed = new JSONObject(engine.callAttr("parse_dropoff_screen", linesJson).toString());
             String fullAddress = parsed.isNull("full_address") ? null : parsed.optString("full_address", null);
-            if (fullAddress == null || fullAddress.equals(lastDropoffAddressKey)) {
+            if (fullAddress == null) {
+                // Driver-audit finding (2026-09-11): is_dropoff_screen
+                // already confirmed this IS a real dropoff screen (the
+                // caller only reaches here when that's true) -- so a
+                // null full_address here specifically means the address
+                // format on screen didn't match DropoffScreenParser's
+                // known patterns (built from only two real screenshots,
+                // per its own honesty note), not that there's nothing to
+                // parse. Previously silent: this whole method just
+                // returned, with no log line distinguishing "not a
+                // dropoff screen" from "a dropoff screen we couldn't
+                // read" -- the latter means arrival detection gets
+                // nothing at all for this delivery, worth knowing about.
+                if (!lastDropoffParseFailureLogged) {
+                    lastDropoffParseFailureLogged = true;
+                    logDiagnostic("DROPOFF", "Recognized a dropoff screen but could not parse a usable "
+                            + "address from it -- possible unfamiliar address format (business name, "
+                            + "apartment complex, etc.) or a DoorDash layout change. Arrival detection "
+                            + "will not work for this delivery.");
+                }
+                return;
+            }
+            lastDropoffParseFailureLogged = false;
+            if (fullAddress.equals(lastDropoffAddressKey)) {
                 return;
             }
             lastDropoffAddressKey = fullAddress;
