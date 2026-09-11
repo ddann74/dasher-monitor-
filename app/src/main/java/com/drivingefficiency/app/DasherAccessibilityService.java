@@ -130,6 +130,31 @@ public class DasherAccessibilityService extends AccessibilityService {
     // are what would confirm or correct that from a future real log.
     private static final long STORE_WAIT_GRACE_PERIOD_MS = 60_000;
     private static final long STORE_WAIT_TIMER_TICK_MS = 1000;
+    // docs/store_wait_timer/PRD.md §8 -- driver-audit finding
+    // (2026-09-11): arrivedAtStoreTapMs was pure in-memory state with no
+    // recovery path, unlike offers (save_pending_offer_for_recovery) or
+    // trips (_recover_interrupted_trips) which both already solved this
+    // exact "process restart mid-activity" problem. If an OEM kill (the
+    // same real, confirmed instability class behind
+    // docs/watchdog_reliability/PRD.md and docs/screen_recording/PRD.md
+    // §21) happened while a driver was genuinely waiting at a store, the
+    // overlay would vanish, the eventual "Confirm Pickup" tap would find
+    // arrivedAtStoreTapMs already null, and the whole wait -- possibly
+    // the very over-grace wait this feature exists to measure -- would
+    // be silently, permanently lost. Persisted via SharedPreferences,
+    // the same durability mechanism MonitoringWatchdogReceiver already
+    // uses for this identical class of problem (a file on disk survives
+    // a process restart; a field or static in-memory value doesn't).
+    private static final String STORE_WAIT_PREFS_NAME = "store_wait_timer_prefs";
+    private static final String KEY_ARRIVED_AT_STORE_MS = "arrived_at_store_ms";
+    // A resumed timer this old is far more likely an orphaned leftover
+    // from a pickup that was actually completed (or abandoned/unassigned)
+    // during whatever gap caused the restart, than a real, still-ongoing
+    // wait -- no real restaurant wait plausibly runs this long. Discarded
+    // rather than resumed past this age, same "don't trust indefinitely
+    // stale state blindly" reasoning as screen_recording's own orphaned-
+    // segment cleanup.
+    private static final long STORE_WAIT_MAX_RESUMABLE_AGE_MS = 2 * 60 * 60 * 1000;
     private Long arrivedAtStoreTapMs = null;
     private boolean storeWaitTimerVisible = false;
     private final android.os.Handler storeWaitTimerHandler = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -163,6 +188,8 @@ public class DasherAccessibilityService extends AccessibilityService {
     private void startStoreWaitGracePeriod() {
         cancelStoreWaitTimer(); // defensive -- clears any stale prior arrival that was never confirmed
         arrivedAtStoreTapMs = System.currentTimeMillis();
+        getSharedPreferences(STORE_WAIT_PREFS_NAME, MODE_PRIVATE).edit()
+                .putLong(KEY_ARRIVED_AT_STORE_MS, arrivedAtStoreTapMs).apply();
         logDiagnostic("STORE_WAIT", "Arrived at Store tapped -- grace period started ("
                 + (STORE_WAIT_GRACE_PERIOD_MS / 1000) + "s)");
         storeWaitTimerStartRunnable = () -> {
@@ -210,6 +237,7 @@ public class DasherAccessibilityService extends AccessibilityService {
 
         arrivedAtStoreTapMs = null;
         storeWaitTimerVisible = false;
+        getSharedPreferences(STORE_WAIT_PREFS_NAME, MODE_PRIVATE).edit().remove(KEY_ARRIVED_AT_STORE_MS).apply();
     }
 
     /**
@@ -230,6 +258,53 @@ public class DasherAccessibilityService extends AccessibilityService {
         }
         arrivedAtStoreTapMs = null;
         storeWaitTimerVisible = false;
+        getSharedPreferences(STORE_WAIT_PREFS_NAME, MODE_PRIVATE).edit().remove(KEY_ARRIVED_AT_STORE_MS).apply();
+    }
+
+    /**
+     * Resumes an in-progress store-wait timer that survived a process
+     * restart -- see STORE_WAIT_PREFS_NAME's own doc for why this exists
+     * and STORE_WAIT_MAX_RESUMABLE_AGE_MS for why a too-old value is
+     * discarded rather than trusted. Called once from onServiceConnected
+     * (fires on every fresh connection, including after a process
+     * restart -- the exact moment in-memory state would otherwise have
+     * silently reset to "nothing happened").
+     */
+    private void resumeStoreWaitTimerIfPending() {
+        android.content.SharedPreferences prefs = getSharedPreferences(STORE_WAIT_PREFS_NAME, MODE_PRIVATE);
+        long persistedMs = prefs.getLong(KEY_ARRIVED_AT_STORE_MS, 0);
+        if (persistedMs == 0) {
+            return; // nothing pending -- the ordinary case
+        }
+        long ageMs = System.currentTimeMillis() - persistedMs;
+        if (ageMs < 0 || ageMs > STORE_WAIT_MAX_RESUMABLE_AGE_MS) {
+            // Negative age (clock changed) is just as untrustworthy as
+            // too-old -- either way, more likely an orphaned leftover
+            // from an already-completed or abandoned pickup than a real,
+            // still-ongoing wait no real restaurant visit plausibly runs
+            // this long.
+            prefs.edit().remove(KEY_ARRIVED_AT_STORE_MS).apply();
+            logDiagnostic("STORE_WAIT", "Discarded a stale pending timer from a previous session ("
+                    + (ageMs / 1000) + "s old) -- too old to trust as a still-ongoing wait");
+            return;
+        }
+        arrivedAtStoreTapMs = persistedMs;
+        long remainingGraceMs = STORE_WAIT_GRACE_PERIOD_MS - ageMs;
+        if (remainingGraceMs <= 0) {
+            storeWaitTimerVisible = true;
+            storeWaitTimerHandler.post(storeWaitTimerTickRunnable);
+            logDiagnostic("STORE_WAIT", "Resumed an in-progress wait timer from before a process restart "
+                    + "-- already past the grace period, showing now");
+        } else {
+            storeWaitTimerStartRunnable = () -> {
+                storeWaitTimerVisible = true;
+                storeWaitTimerHandler.post(storeWaitTimerTickRunnable);
+                logDiagnostic("STORE_WAIT", "Grace period elapsed -- timer now visible");
+            };
+            storeWaitTimerHandler.postDelayed(storeWaitTimerStartRunnable, remainingGraceMs);
+            logDiagnostic("STORE_WAIT", "Resumed a pending grace period from before a process restart -- "
+                    + (remainingGraceMs / 1000) + "s remaining");
+        }
     }
 
     @Override
@@ -237,6 +312,7 @@ public class DasherAccessibilityService extends AccessibilityService {
         super.onServiceConnected();
         engine = PythonBridge.getEngine(this);
         checkCurrentForegroundWindow();
+        resumeStoreWaitTimerIfPending();
         // Previously this only ran ONCE, at connect time -- confirmed
         // real gap: Android's accessibility API only reports CHANGES
         // (onAccessibilityEvent), and if an expected change event never

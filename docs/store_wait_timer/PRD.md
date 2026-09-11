@@ -6,6 +6,13 @@ check). **Corrected 2026-09-09**: this header was stale, still reading
 "DRAFT -- not yet implemented" from before the code was written -- a
 documentation-drift audit found the feature fully built (see §2/§5
 below) with the header never updated to match.
+§8 (added 2026-09-11, driver's own feature audit, not a specific
+driver-reported bug): the timer's whole state used to be pure
+in-memory, with no recovery path if the process restarted mid-wait
+(the same real OEM-kill instability class already confirmed elsewhere
+in this app). Fixed by persisting it to SharedPreferences and resuming
+on reconnect, the same durability mechanism `MonitoringWatchdogReceiver`
+already uses for this identical class of problem. See §8/§9.
 
 ## 0. Origin
 
@@ -264,3 +271,86 @@ show it plainly (P1's own mitigation).
       waiting past a minute shows the overlay; tapping "Confirm Pickup"
       stops it and the duration shows up in Trip History afterward
 - [ ] Driver sign-off
+
+## 8. Follow-up (2026-09-11, driver's own feature audit): survive a process restart mid-wait
+
+A code-scouting pass -- not a specific driver-reported bug -- found
+that `arrivedAtStoreTapMs`, `storeWaitTimerVisible`, and the running
+tick-loop were all pure in-memory `DasherAccessibilityService` state,
+with no recovery path. Unlike offers
+(`save_pending_offer_for_recovery`/`_recover_abandoned_offers`) or
+trips (`_recover_interrupted_trips`), which both already solved this
+exact "process restart mid-activity" problem, a process restart while
+a driver was genuinely waiting at a store would silently drop the
+whole timer: the overlay vanishes, and the eventual "Confirm Pickup"
+tap finds `arrivedAtStoreTapMs` already `null` -- indistinguishable
+from a pickup with no matching "Arrived" tap at all. The over-grace
+wait this feature exists to measure would be permanently, silently
+lost, on exactly the kind of long, frustrating wait most worth
+capturing.
+
+### 8.1 Fix
+
+`arrivedAtStoreTapMs` is now also written to a dedicated
+SharedPreferences file the moment the grace period starts, and cleared
+whenever the timer legitimately stops or cancels (Confirm Pickup,
+unassign, or a fresh "Arrived" tap superseding a stale one).
+`onServiceConnected()` -- which fires on every fresh connection,
+including after a process restart -- now calls
+`resumeStoreWaitTimerIfPending()`: if a persisted value exists, it
+resumes tracking from it (immediately showing the timer if the grace
+period had already elapsed, or scheduling the remaining delay if not),
+recomputing everything from the real persisted timestamp rather than
+guessing.
+
+A resumed value older than `STORE_WAIT_MAX_RESUMABLE_AGE_MS` (2 hours)
+is discarded instead of resumed -- no real restaurant wait plausibly
+runs that long, so a value that old is far more likely an orphaned
+leftover from a pickup that was actually completed or abandoned during
+whatever gap caused the restart. Same "don't trust indefinitely stale
+state blindly" reasoning `screen_recording`'s own orphaned-segment
+cleanup already established for a similar problem.
+
+### 8.2 Honest limits
+
+- No Android device/emulator available in this environment, same
+  disclosed limitation as every Java-side change in this repo. Neither
+  the original gap nor this fix has been observed on a real device --
+  reasoned from `DasherAccessibilityService`'s real control flow and
+  `SharedPreferences`'s documented durability, not confirmed by
+  reproducing an actual process kill mid-wait.
+- The 2-hour staleness cutoff is a judgment call, not derived from any
+  known DoorDash timing constant -- chosen generously (real restaurant
+  waits are realistically minutes, rarely over an hour) specifically
+  to avoid discarding a genuinely still-ongoing long wait while still
+  catching an obviously orphaned one.
+- Still shares this whole feature's own original, already-disclosed
+  risk (§3): the "Arrived at Store"/"Confirm Pickup" button text was
+  never confirmed against a real screenshot. If that text is wrong,
+  this fix has nothing to resume in the first place -- unrelated to,
+  and not addressed by, this persistence work.
+
+## 9. Success criteria for §8
+
+- [x] `arrivedAtStoreTapMs` persisted via SharedPreferences on grace-
+      period start, cleared on every legitimate stop/cancel path
+      (Confirm Pickup, unassign, a fresh Arrived tap superseding a
+      stale one)
+- [x] `resumeStoreWaitTimerIfPending()` called from `onServiceConnected()`,
+      correctly recomputing whether the grace period had already
+      elapsed by the time of resume, not just blindly restarting a
+      fresh grace period
+- [x] A too-old persisted value (`STORE_WAIT_MAX_RESUMABLE_AGE_MS`,
+      2 hours) is discarded and logged, not silently resumed as a
+      nonsensical multi-hour wait
+- [x] A negative age (clock change) treated the same as too-old, not
+      trusted either
+- [x] Brace/paren balance confirmed on the touched file
+- [ ] HONEST LIMIT: no Android device/emulator available in this
+      environment -- see §8.2. Nothing here has been observed actually
+      surviving a real process restart.
+- [ ] Driver confirms in real use (or via a future diagnostic log)
+      that a genuinely interrupted wait (app force-stopped or killed
+      mid-wait, then reopened) resumes the timer correctly instead of
+      losing it.
+- [ ] Driver sign-off.
