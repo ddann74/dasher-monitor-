@@ -2,6 +2,21 @@
 
 Status: IMPLEMENTED (all §6 boxes checked except on-device confirmation
 and driver sign-off, which are never mine to check).
+CORRECTED (2026-09-11, driver's own feature audit): this status line
+was accurate to what THIS PRD built, but silent about a real bug found
+afterward, in `docs/customer_zone_map/PROGRESS.md` (2026-09-09): the
+`get_parking_difficulty_zones()` query this map runs joins against
+`pickup_location_history`, but the only writer of
+`parking_difficulty_feedback` (`is_walking_pace`) had never actually
+distinguished a pickup stop from a dropoff stop -- every real row
+carried a dropoff address under the `restaurant_name` column despite
+its name, so this map's own join was very likely matching close to
+nothing in real production use. FIXED there via a new `stop_type`
+column (tagged going forward, existing rows backfilled), and this
+map's query now filters `stop_type = 'pickup'`. The fix has its own
+real migration/backfill tests (see that PROGRESS.md); like everything
+else in this PRD, whether zones actually populate on a real device
+after the fix remains unconfirmed here -- see the new §6 line below.
 
 ## 0. Origin
 
@@ -218,4 +233,8 @@ silent guess requiring sign-off before starting.
 - [ ] Driver confirms on-device: the satellite basemap actually loads,
       zones appear at roughly the right real-world locations, tapping
       one shows correct detail
+- [ ] Driver confirms zones now actually populate in real use, after
+      the `stop_type` join fix (see status line above and
+      `docs/customer_zone_map/PROGRESS.md`) -- before that fix, this
+      map's query was very likely matching close to nothing
 - [ ] Driver sign-off

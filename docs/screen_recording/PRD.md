@@ -1,13 +1,26 @@
 # PRD: In-app screen recording during a trip
 
-Status: IMPLEMENTED (all §6 boxes checked except sign-off) -- this
-PRD's own status line was stale, found and corrected during a
-2026-09-02 ralph-loop continuation pass. Went through two additional
-premortem/silent-failure audit passes after initial implementation
-(see PROGRESS.md) that found and fixed a real delete-race and a silent
-consent-staleness gap. This introduces a genuinely new, privacy-
-sensitive capability this app has never had before - read §1.3 and §5
-before signing off, not just the checklist.
+Status: CODE COMPLETE PER §6 -- NOT CONFIRMED WORKING IN THE FIELD.
+CORRECTED (2026-09-11, driver's own feature audit): this line used to
+read plain "IMPLEMENTED (all §6 boxes checked except sign-off)," which
+was true of the checklist but not of reality -- the only real field
+evidence this feature has ever had (§21's 2026-09-09/09-11 diagnostic
+log) showed **zero successful recordings across the entire 2+ day
+window**, and §21.3 documents a genuine, still-open Android platform
+limitation with no code fix. §21/§23/§25 are real fixes for the causes
+that log found, but those fixes are themselves unconfirmed in the
+field too -- nothing in this file should be read as "confirmed working
+for the driver," anywhere, until a NEW real log or explicit driver
+confirmation says otherwise. Every individual section's own
+"IMPLEMENTED"/"FIXED" label below means "this specific code change is
+complete and reasoned through," never "confirmed working end-to-end."
+This PRD's status line was ALSO previously found stale once before,
+during a 2026-09-02 ralph-loop continuation pass. Went through two
+additional premortem/silent-failure audit passes after initial
+implementation (see PROGRESS.md) that found and fixed a real
+delete-race and a silent consent-staleness gap. This introduces a
+genuinely new, privacy-sensitive capability this app has never had
+before - read §1.3 and §5 before signing off, not just the checklist.
 §7 (added 2026-09-02, DRAFT; IMPLEMENTED 2026-09-09 per the driver's
 explicit go-ahead): the driver asked to capture screen recording by
 default. §7.6/§7.7 - a proactive first-run explanation dialog, not a
@@ -425,6 +438,13 @@ this is the least independently-verifiable PRD in this repo so far.
 - [x] No change to existing GPS/accessibility/notification behavior when
       the toggle is off (diff-reviewed - every new code path is gated
       behind `ScreenRecordingController.isEnabled()`/`hasPendingConsent()`)
+- [ ] Confirmed working in real field use -- explicitly NOT true as of
+      2026-09-11: the only real diagnostic log this feature has ever
+      had (§21) showed zero successful recordings across 2+ real days.
+      §21/§23/§25 fix the causes that log found, but those fixes are
+      themselves unconfirmed; this box stays unchecked until a NEW real
+      log, or explicit driver confirmation, shows an actual recording
+      was produced.
 - [ ] User sign-off
 
 ## 7. Driver request (2026-09-02, DRAFT - NOT implemented, not approved): capture by default
