@@ -864,14 +864,37 @@ public class TripForegroundService extends Service {
             manager.createNotificationChannel(channel);
         }
         String titleState = alreadyOffAtStart ? " already off" : " turned off";
-        Notification notification = new Notification.Builder(this, channelId)
+        Notification.Builder builder = new Notification.Builder(this, channelId)
                 .setContentTitle("\u26A0 " + permissionName + titleState)
                 .setContentText(consequenceText + " until this is re-enabled.")
                 .setSmallIcon(android.R.drawable.ic_dialog_alert)
                 .setPriority(Notification.PRIORITY_HIGH)
                 .setDefaults(Notification.DEFAULT_SOUND | Notification.DEFAULT_VIBRATE)
-                .setAutoCancel(true)
-                .build();
+                .setAutoCancel(true);
+        // docs/screen_recording/PRD.md ss21 -- a real 2.5-day diagnostic
+        // log showed this exact alert firing on every single trip start
+        // with zero recordings ever made: this notification had no
+        // setContentIntent at all, so tapping it did nothing. Re-granting
+        // requires opening Setup AND knowing the already-"on" switch has to
+        // be toggled off and back on (refreshScreenRecordingStatus()'s text
+        // explains that, but only to a driver who already got there some
+        // other way). Deep-links straight to the fix instead of leaving the
+        // driver to rediscover it. Reuses the same "auto-fire the real OS
+        // consent dialog on open" pattern MainActivity's first-run flow
+        // already established (EXTRA_AUTO_REQUEST_RECORDING_CONSENT) --
+        // just a different entry point, since the switch here is already
+        // checked and toggling setChecked(true) on an already-true value
+        // would not fire its listener.
+        if ("Trip Capture".equals(permissionName)) {
+            Intent tapIntent = new Intent(this, PermissionsActivity.class);
+            tapIntent.putExtra(PermissionsActivity.EXTRA_AUTO_REREQUEST_RECORDING_CONSENT, true);
+            tapIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            PendingIntent tapPendingIntent = PendingIntent.getActivity(this, notificationId, tapIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT
+                            | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0));
+            builder.setContentIntent(tapPendingIntent);
+        }
+        Notification notification = builder.build();
         manager.notify(notificationId, notification);
         // Real, direct evidence for "was this caused by a reinstall" --
         // rather than relying on memory of when the APK was last

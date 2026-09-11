@@ -34,6 +34,18 @@ public class PermissionsActivity extends AppCompatActivity {
       * instead of needing a second manual tap on the Switch. */
     static final String EXTRA_AUTO_REQUEST_RECORDING_CONSENT = "auto_request_recording_consent";
 
+    /** docs/screen_recording/PRD.md §21 -- set by TripForegroundService's
+      * "Trip Capture" revoked-alert notification when tapped, so re-
+      * granting consent after a lost grant is one tap instead of the
+      * driver having to open Setup unprompted AND separately know to
+      * toggle the already-"on" switch off and back on. Deliberately a
+      * SEPARATE extra from EXTRA_AUTO_REQUEST_RECORDING_CONSENT above:
+      * that one relies on setChecked(true) firing the listener on a real
+      * false -> true transition (first-run only) -- here the switch is
+      * already checked, so setChecked(true) would be a no-op and never
+      * fire it. This calls requestScreenRecordingConsent() directly. */
+    static final String EXTRA_AUTO_REREQUEST_RECORDING_CONSENT = "auto_rerequest_recording_consent";
+
     private PyObject engine;
     private TextView permissionStatusText;
     private Switch screenRecordingSwitch;
@@ -322,6 +334,14 @@ public class PermissionsActivity extends AppCompatActivity {
         // false too.
         if (getIntent().getBooleanExtra(EXTRA_AUTO_REQUEST_RECORDING_CONSENT, false)) {
             screenRecordingSwitch.setChecked(true);
+        }
+        // §21 -- the switch is already checked here (that's the whole
+        // problem this alert exists for: preference on, real grant lost),
+        // so re-request directly rather than going through setChecked,
+        // which wouldn't fire the listener on a true -> true no-op.
+        if (getIntent().getBooleanExtra(EXTRA_AUTO_REREQUEST_RECORDING_CONSENT, false)
+                && screenRecordingSwitch.isChecked() && !ScreenRecordingController.hasPendingConsent()) {
+            requestScreenRecordingConsent();
         }
         viewRecordingsButton.setOnClickListener(v -> showRecordingsList());
         deleteAllRecordingsButton.setOnClickListener(v -> {
