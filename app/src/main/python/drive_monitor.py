@@ -4639,15 +4639,6 @@ class DriveMonitorEngine:
         self.db.conn.execute("DELETE FROM canned_replies WHERE id = ?", (reply_id,))
         self.db.conn.commit()
 
-    def get_last_parking_gap_for_feedback(self):
-        """Wrapper -- see TripManager.get_last_parking_gap_for_feedback for the actual logic."""
-        result = self.trip_manager.get_last_parking_gap_for_feedback()
-        return json.dumps(result) if result is not None else json.dumps(None)
-
-    def clear_last_parking_gap_for_feedback(self):
-        """Wrapper -- see TripManager.clear_last_parking_gap_for_feedback for the actual logic."""
-        self.trip_manager.clear_last_parking_gap_for_feedback()
-
     def get_database_file_path(self):
         """The real on-disk path to the SQLite database file -- needed by
         Java so it knows exactly what file to replace during a restore."""
@@ -4851,26 +4842,6 @@ class DriveMonitorEngine:
               merchant_wait_rating, customer_rating, overall_rating, time.time()))
         self.db.conn.commit()
 
-    def recalculate_personal_calibration(self):
-        """
-        CRITICAL BUG FIX, same class as add_pickup's (see its own comment
-        above): this wrapper was completely missing from DriveMonitorEngine
-        -- only SmartScoreEngine had recalculate_personal_calibration.
-        Every real call from Java (MainActivity's showFeedbackDialog, right
-        after save_trip_feedback succeeds) threw AttributeError, caught by
-        the surrounding try/catch, which then wrongly toasted "Could not
-        save feedback" even though the rating HAD already been saved --
-        and skipped the parking-difficulty-feedback and
-        clear_last_parking_gap_for_feedback calls after it in the same try
-        block, since Java aborts the rest of a try on an uncaught throw.
-        Net effect: the whole personal-calibration learning loop this
-        method exists for has likely never actually run from a real
-        feedback submission, despite testing correctly against
-        SmartScoreEngine directly. Found by tracing the real call path
-        instead of assuming it worked because the underlying logic did.
-        """
-        return self.smart_score.recalculate_personal_calibration()
-
     def get_last_parking_gap_for_feedback(self):
         """
         Same missing-wrapper bug as recalculate_personal_calibration above
@@ -4881,8 +4852,26 @@ class DriveMonitorEngine:
         context label never actually showed, and finalPendingParkingRestaurant
         stayed null every time, so record_parking_difficulty_feedback was
         never reachable either.
+
+        SECOND real bug found while removing this method's own duplicate
+        definition (fresh 2026-09-11 audit, docs/
+        duplicate_definition_cleanup/PRD.md): this wrapper was returning
+        TripManager's raw dict/None directly, un-serialized -- but its
+        only real caller (MainActivity.showFeedbackDialog,
+        engine.callAttr("get_last_parking_gap_for_feedback").toString())
+        calls .toString() and parses the result as JSON, checking the
+        literal string "null" and otherwise passing it to
+        `new JSONObject(...)`. A raw Python dict's/None's str() is NOT
+        valid JSON (single-quoted keys, "None" instead of "null"), so
+        that parse always failed, silently caught by the same try/catch
+        this docstring already describes -- meaning the measured park-
+        to-walk-duration context has likely never actually shown in the
+        feedback dialog, even after the missing-wrapper bug above was
+        fixed. Restored the json.dumps() call the file's own now-removed
+        dead duplicate of this exact method already had correctly.
         """
-        return self.trip_manager.get_last_parking_gap_for_feedback()
+        result = self.trip_manager.get_last_parking_gap_for_feedback()
+        return json.dumps(result) if result is not None else json.dumps(None)
 
     def clear_last_parking_gap_for_feedback(self):
         """Same missing-wrapper bug as the two methods above."""
@@ -6363,7 +6352,23 @@ class DriveMonitorEngine:
         self.smart_score.record_live_weather(precipitation_mm, wind_speed_kmh, temperature_c)
 
     def recalculate_personal_calibration(self):
-        """Wrapper -- see SmartScoreEngine.recalculate_personal_calibration for the actual logic."""
+        """
+        CRITICAL BUG FIX, same class as add_pickup's (see its own comment
+        above): this wrapper was completely missing from DriveMonitorEngine
+        -- only SmartScoreEngine had recalculate_personal_calibration.
+        Every real call from Java (MainActivity's showFeedbackDialog, right
+        after save_trip_feedback succeeds) threw AttributeError, caught by
+        the surrounding try/catch, which then wrongly toasted "Could not
+        save feedback" even though the rating HAD already been saved --
+        and skipped the parking-difficulty-feedback and
+        clear_last_parking_gap_for_feedback calls after it in the same try
+        block, since Java aborts the rest of a try on an uncaught throw.
+        Net effect: the whole personal-calibration learning loop this
+        method exists for has likely never actually run from a real
+        feedback submission, despite testing correctly against
+        SmartScoreEngine directly. Found by tracing the real call path
+        instead of assuming it worked because the underlying logic did.
+        """
         return self.smart_score.recalculate_personal_calibration()
 
     def get_personal_calibration_summary(self):
