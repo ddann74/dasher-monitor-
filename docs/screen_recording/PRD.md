@@ -91,6 +91,14 @@ log alone couldn't tell them apart. Every consent-recovery entry point
 now tags which path opened Setup; also fixed a real bug found while
 building this (one shared, racily-mutated `Intent` across three launch
 paths). See §25/§26.
+§27 (added 2026-09-11, IMPLEMENTED): driver asked for audio alongside
+video, confirmed as microphone (ambient car sound), not app/device
+audio. `RECORD_AUDIO` declared and requested at runtime, decided once
+per trip so it can't drift mid-recording, real MediaRecorder
+source/encoder ordering followed, both proactive-consent surfaces
+(first-run dialog, Setup subtext) updated to disclose it before the
+driver grants anything, and denying it degrades to video-only rather
+than blocking recording. See §27/§28.
 Scope: this one feature only. Not a general codebase pass.
 
 ## 0. What this is / isn't
@@ -1671,4 +1679,112 @@ independently-tagged `Intent` instances up front
       `auto_launch_direct` or, if the direct launch was blocked,
       `auto_launch_fullscreen_notification` (in which case n2 isn't
       fully confirmed either way -- worth noting which one appeared).
+- [ ] Driver sign-off.
+
+## 27. Driver-requested (2026-09-11): "I want audio recorded also"
+
+Driver confirmed (asked directly, given the two real options) that this
+means the microphone -- ambient sound in the car (voice, passengers,
+phone calls), not just whatever Dasher itself plays. That's a genuine
+privacy step up from video-only capture, not a minor addition, and is
+disclosed as such in both proactive-consent surfaces this app already
+has: the first-run explanation dialog (`MainActivity.
+maybeShowScreenRecordingDefaultPrompt`) and the Setup screen's own
+subtext (`R.string.screen_recording_subtext`).
+
+### 27.1 What changed
+
+- `AndroidManifest.xml`: `RECORD_AUDIO` declared. This is a dangerous
+  permission (Android 6+) -- the manifest entry alone grants nothing;
+  it has to be requested at runtime too.
+- `PermissionsActivity.requestScreenRecordingConsent()`: now requests
+  `RECORD_AUDIO` first, via a new `audioPermissionLauncher`
+  (`ActivityResultContracts.RequestPermission()`), BEFORE the existing
+  `launchScreenCaptureConsent()` step. Proceeds to the real
+  screen-capture consent dialog regardless of the driver's answer --
+  denying microphone access was deliberately never wired to block
+  recording itself, only its audio track. Logged either way
+  (`"Microphone permission granted"` / `"...denied -- recording will
+  proceed video-only"`).
+- `ScreenRecordingController`: new `hasAudioPermission(Context)`
+  (plain permission check, not cached at the class level the way the
+  MediaProjection grant is -- a permission check is cheap and the OS
+  can revoke it independently at any time). New per-trip field
+  `audioEnabledForThisTrip`, decided once in `beginCapture()` and
+  reused by every segment `rotateSegment()` creates for that same
+  trip -- deliberately NOT re-checked mid-trip, so a trip can't
+  silently gain or lose its audio track partway through if the OS
+  revokes the permission a few minutes in.
+- `newRecorder()`: when audio is enabled, adds
+  `setAudioSource(MediaRecorder.AudioSource.MIC)` and, after
+  `setOutputFormat()`, `setAudioEncoder(AAC)` + a 128kbps/44.1kHz
+  encoding config -- ordinary AAC settings, nothing exotic. Real
+  Android platform requirement, not a style choice: `setAudioSource()`/
+  `setVideoSource()` must both be called BEFORE `setOutputFormat()`,
+  while `setAudioEncoder()`/`setVideoEncoder()` must come AFTER it --
+  get this backwards and `MediaRecorder` throws
+  `IllegalStateException`. Verified by reading Android's own
+  documented `MediaRecorder` state machine, not observed on a device.
+- `TripForegroundService`'s "Started recording for this trip" log line
+  now says explicitly whether that trip has audio or not, via the new
+  `ScreenRecordingController.isAudioEnabledForThisTrip()` getter --
+  same "never make the driver discover this by opening a file in a
+  player" reasoning as everything else logged in this PRD.
+- `PermissionsActivity.refreshScreenRecordingStatus()`: same treatment
+  as the existing "consent needs to be re-granted" line -- if
+  recording is on but microphone permission isn't currently granted,
+  that's now visible right on the Setup screen, not just discoverable
+  after the fact.
+
+### 27.2 Honest limits
+
+- No Android device/emulator available in this environment, same as
+  every other section of this PRD -- none of this (the permission
+  request flow, whether `MediaRecorder` actually accepts this
+  audio/video source combination together, whether the resulting file
+  actually has a playable audio track) has been observed running.
+  Verified by reading Android's documented `MediaRecorder` API and
+  this class's own existing, already-working video-only pattern.
+- If the driver denies `RECORD_AUDIO`, recording proceeds video-only
+  for that entire trip (see `audioEnabledForThisTrip`'s own doc for
+  why it's not re-checked mid-trip) -- by design, not a bug, but worth
+  restating: there's no "ask again mid-trip" path. Re-granting later
+  requires reopening Setup and toggling the recording switch off/back
+  on, same mechanism as re-granting the MediaProjection consent itself.
+- This does NOT touch the separate app/device-audio-playback capture
+  API (`AudioPlaybackCaptureConfiguration`) -- that was the other
+  option put to the driver and explicitly not chosen. If DoorDash's
+  own app audio (notification dings, etc.) is ever wanted too, that's
+  a different, additional mechanism, not something this section's
+  microphone capture already covers.
+
+## 28. Success criteria for §27
+
+- [x] `RECORD_AUDIO` declared in `AndroidManifest.xml`
+- [x] Requested at runtime via `audioPermissionLauncher`, before the
+      screen-capture consent dialog, proceeding either way
+- [x] `ScreenRecordingController.hasAudioPermission()` added;
+      `audioEnabledForThisTrip` decided once per trip in
+      `beginCapture()`, reused by every segment rotation
+- [x] `newRecorder()` sets audio source/encoder in the correct order
+      relative to `setOutputFormat()` (source before, encoder after)
+- [x] Diagnostic log states explicitly whether each trip's recording
+      has audio, not left to be discovered by opening the file
+- [x] Setup screen surfaces a missing-microphone-permission state the
+      same way it already surfaces a missing-consent state
+- [x] First-run dialog and Setup subtext both updated to disclose
+      microphone capture before the driver grants anything
+- [x] Brace/paren balance and XML well-formedness confirmed on every
+      touched file (a real double-hyphen-in-XML-comment mistake, the
+      same class of error §23 already hit once, was caught here before
+      commit, not left for CI)
+- [ ] HONEST LIMIT: no Android device/emulator available in this
+      environment -- see §27.2. Nothing here has been observed
+      recording an actual audio track, only read against documented
+      `MediaRecorder`/`ActivityResultContracts` behavior.
+- [ ] Driver confirms: granting microphone access on the next
+      recording enable actually produces a file with a real, audible
+      audio track, not just a bigger-than-before silent video.
+- [ ] Driver confirms: denying microphone access still records video
+      successfully (doesn't break the existing video-only path).
 - [ ] Driver sign-off.

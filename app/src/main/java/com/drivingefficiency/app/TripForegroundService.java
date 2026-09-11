@@ -549,7 +549,14 @@ public class TripForegroundService extends Service {
                 }
                 isScreenRecordingActive = started;
                 if (started) {
-                    logDiagnostic("SCREEN_RECORDING", "Started recording for this trip");
+                    // §27 -- audio is requested but never guaranteed (the
+                    // driver can deny RECORD_AUDIO independently of the
+                    // MediaProjection consent), so every trip's log says
+                    // explicitly which this one got rather than leaving it
+                    // to be discovered by opening the file in a player.
+                    logDiagnostic("SCREEN_RECORDING", "Started recording for this trip ("
+                            + (screenRecordingController.isAudioEnabledForThisTrip()
+                                    ? "with audio" : "video only -- microphone permission not granted") + ")");
                 } else if (!typePromoted) {
                     // Logged inside startForegroundWithRecording() itself
                     // (it has the actual SecurityException message); this

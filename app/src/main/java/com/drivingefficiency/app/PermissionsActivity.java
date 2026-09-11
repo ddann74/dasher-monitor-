@@ -106,6 +106,25 @@ public class PermissionsActivity extends AppCompatActivity {
                 }
             });
 
+    /** docs/screen_recording/PRD.md §27 -- microphone audio alongside
+      * video, driver-requested. RECORD_AUDIO is a dangerous permission
+      * (Android 6+), requested here rather than left to a manifest
+      * declaration alone. Proceeds to the real screen-capture consent
+      * dialog regardless of the answer -- denying microphone access was
+      * never meant to block recording itself, just its audio track (see
+      * ScreenRecordingController.hasAudioPermission()'s own doc). */
+    private final ActivityResultLauncher<String> audioPermissionLauncher =
+            registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
+                logDiagnostic("SCREEN_RECORDING", granted
+                        ? "Microphone permission granted"
+                        : "Microphone permission denied -- recording will proceed video-only");
+                MediaProjectionManager manager = (MediaProjectionManager)
+                        getSystemService(MEDIA_PROJECTION_SERVICE);
+                if (manager != null) {
+                    launchScreenCaptureConsent(manager);
+                }
+            });
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -459,6 +478,15 @@ public class PermissionsActivity extends AppCompatActivity {
                     + "on) since the app was last restarted -- the next trip will not record "
                     + "until then.\n\n");
         }
+        // §27 -- same "make it visible right where the Switch is" reasoning
+        // as the consent gap above: microphone access can be denied or
+        // later revoked (Settings -> App -> Permissions) independently of
+        // everything else here, and recording still proceeds without it --
+        // silently video-only, unless this text says so.
+        if (screenRecordingSwitch.isChecked() && !ScreenRecordingController.hasAudioPermission(this)) {
+            text.append("Microphone permission isn't granted -- recordings will be video only, "
+                    + "no audio. Turn off and back on to be asked again.\n\n");
+        }
         int count = ScreenRecordingController.recordingsCount(this);
         if (count == 0) {
             text.append(getString(R.string.screen_recording_status_default));
@@ -490,6 +518,20 @@ public class PermissionsActivity extends AppCompatActivity {
             screenRecordingSwitch.setChecked(false);
             return;
         }
+        // §27 -- ask for microphone access first, so the very first trip
+        // after enabling has a real chance to include audio instead of
+        // silently starting audio-less and only picking it up whenever
+        // Setup next happens to be reopened. audioPermissionLauncher's
+        // own callback continues to launchScreenCaptureConsent() either
+        // way once the driver answers.
+        if (!ScreenRecordingController.hasAudioPermission(this)) {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO);
+            return;
+        }
+        launchScreenCaptureConsent(manager);
+    }
+
+    private void launchScreenCaptureConsent(MediaProjectionManager manager) {
         // §23 -- arm the accessibility-service auto-tap for the real OS
         // dialog this call is about to trigger. Must happen BEFORE
         // launch() below, or the dialog could appear and be missed before

@@ -26,6 +26,15 @@
          screen capture by itself. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
+    <!-- docs/screen_recording/PRD.md §27: driver-requested microphone audio
+         alongside screen recording, a real privacy step up from
+         video-only, since it captures ambient sound (voice, passengers,
+         phone calls), not just Dasher's own screen. Runtime-requested
+         (dangerous permission, Android 6+) in PermissionsActivity right
+         before the MediaProjection consent dialog; recording still
+         proceeds video-only if denied, never blocked entirely on it. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <!-- Bluetooth assist (car connect/disconnect) -->
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />

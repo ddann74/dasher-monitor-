@@ -26,7 +26,7 @@
     <string name="rate_threshold_hint">Rate threshold ($ per hour)</string>
     <string name="save_rate_threshold">Save Rate Threshold</string>
     <string name="screen_recording_heading">Screen Recording</string>
-    <string name="screen_recording_subtext">Records the WHOLE device screen for the duration of each trip, using Android\'s own screen-capture permission -- not just this app\'s UI. If you switch to another app mid-trip (messages, banking, anything), that is captured too. Off by default. Recordings are saved privately on this device only, never uploaded anywhere.</string>
+    <string name="screen_recording_subtext">Records the WHOLE device screen for the duration of each trip, using Android\'s own screen-capture permission -- not just this app\'s UI. If you switch to another app mid-trip (messages, banking, anything), that is captured too. Also records audio from the microphone -- everything audible in the car, not just your voice -- if microphone permission is granted; recording still proceeds video-only if you deny it. Off by default. Recordings are saved privately on this device only, never uploaded anywhere.</string>
     <string name="screen_recording_toggle">Record screen during trips</string>
     <string name="screen_recording_status_default">No recordings yet.</string>
     <string name="view_recordings">View/Share Recordings</string>

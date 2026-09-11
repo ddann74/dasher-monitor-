@@ -1,8 +1,10 @@
 package com.drivingefficiency.app;
 
+import android.Manifest;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
 import android.media.MediaRecorder;
@@ -10,6 +12,7 @@ import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
 import android.util.DisplayMetrics;
 import android.view.WindowManager;
+import androidx.core.app.ActivityCompat;
 
 import java.io.File;
 import java.text.SimpleDateFormat;
@@ -61,6 +64,13 @@ import java.util.Locale;
  *   most one chunk's worth of footage instead of the whole trip (PRD
  *   ss11, "crash-recovery gap"). Most real trips still produce exactly
  *   one file, since they run under SEGMENT_DURATION_MS.
+ * - Also records MICROPHONE audio (PRD ss27), driver-requested -- a real
+ *   privacy step up from video-only, since it captures whatever's
+ *   audible in the car (voice, passengers, phone calls), not just
+ *   Dasher's own screen. RECORD_AUDIO is a SEPARATE runtime permission
+ *   from the MediaProjection consent grant; denying it never blocks
+ *   recording, only its audio track -- decided once per trip in
+ *   beginCapture() via hasAudioPermission(), not re-checked mid-trip.
  */
 class ScreenRecordingController {
 
@@ -130,6 +140,17 @@ class ScreenRecordingController {
     static void setEnabled(Context context, boolean enabled) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit().putBoolean(KEY_ENABLED, enabled).apply();
+    }
+
+    /** docs/screen_recording/PRD.md §27 -- RECORD_AUDIO is a dangerous
+      * permission (Android 6+), requested at runtime by
+      * PermissionsActivity right before the MediaProjection consent
+      * dialog. Checked fresh, not cached at the class level -- unlike
+      * the MediaProjection grant, a plain permission check is cheap and
+      * the OS can revoke it independently at any time. */
+    static boolean hasAudioPermission(Context context) {
+        return ActivityCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED;
     }
 
     /**
@@ -407,6 +428,13 @@ class ScreenRecordingController {
     private int capturedWidth;
     private int capturedHeight;
     private int capturedDensity;
+    /** docs/screen_recording/PRD.md §27 -- decided once per trip, in
+      * beginCapture(), not re-checked on every segment rotation: a trip
+      * shouldn't silently gain or lose its audio track mid-recording if
+      * the OS revokes the permission a few minutes in (an edge case, but
+      * a confusing file to review if it happened) -- rotateSegment()
+      * reuses whatever beginCapture() decided for the whole trip. */
+    private boolean audioEnabledForThisTrip;
 
     /**
      * Actually starts capturing -- MUST be called only after
@@ -445,6 +473,7 @@ class ScreenRecordingController {
             segmentFiles.add(currentFile);
             verifiedSegmentCount = 0;
             wasEverRecordingThisSession = false;
+            audioEnabledForThisTrip = hasAudioPermission(service);
 
             mediaRecorder = newRecorder(currentFile);
             mediaRecorder.prepare();
@@ -487,10 +516,27 @@ class ScreenRecordingController {
         return new File(recordingsDir(activeService), "trip_" + tripTimestamp + suffix + ".mp4");
     }
 
+    /**
+     * docs/screen_recording/PRD.md §27 -- driver asked for microphone
+     * audio alongside video. Real Android platform requirement, not a
+     * style choice: setAudioSource()/setVideoSource() MUST both be
+     * called before setOutputFormat(), or MediaRecorder throws
+     * IllegalStateException -- setAudioEncoder() is the opposite, it
+     * has to come after setOutputFormat(), same as the existing
+     * setVideoEncoder() call right below it.
+     */
     private MediaRecorder newRecorder(File file) {
         MediaRecorder recorder = new MediaRecorder();
+        if (audioEnabledForThisTrip) {
+            recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+        }
         recorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
         recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+        if (audioEnabledForThisTrip) {
+            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
+            recorder.setAudioEncodingBitRate(128 * 1000);
+            recorder.setAudioSamplingRate(44100);
+        }
         recorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
         recorder.setVideoSize(capturedWidth, capturedHeight);
         recorder.setVideoFrameRate(30);
@@ -818,6 +864,14 @@ class ScreenRecordingController {
 
     boolean isRecording() {
         return mediaRecorder != null;
+    }
+
+    /** docs/screen_recording/PRD.md §27 -- only meaningful after a
+      * successful beginCapture(); lets the caller log whether this
+      * trip's recording actually has an audio track, since a driver has
+      * no other way to know that without opening a file in a player. */
+    boolean isAudioEnabledForThisTrip() {
+        return audioEnabledForThisTrip;
     }
 
     File currentFile() {

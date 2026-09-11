@@ -404,9 +404,11 @@ public class MainActivity extends AppCompatActivity {
                             + "so you can review a delivery later if something goes wrong.\n\n"
                             + "Screen recording captures your ENTIRE screen -- not just this app -- "
                             + "for the whole trip. If you switch to messages, banking, or anything "
-                            + "else mid-trip, that's captured too. Recordings stay private on this "
-                            + "device only, never uploaded anywhere, and you can turn this off "
-                            + "anytime in Setup.")
+                            + "else mid-trip, that's captured too. It also records audio from the "
+                            + "microphone -- everything audible in the car, not just your voice -- "
+                            + "if you grant that separately; recording still works video-only if you "
+                            + "don't. Recordings stay private on this device only, never uploaded "
+                            + "anywhere, and you can turn this off anytime in Setup.")
                     .setCancelable(false)
                     .setPositiveButton("Enable Screen Recording", (dialog, which) -> {
                         ScreenRecordingController.setDefaultPromptShown(this);
