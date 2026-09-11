@@ -50,6 +50,12 @@ public class PermissionsActivity extends AppCompatActivity {
     private TextView permissionStatusText;
     private Switch screenRecordingSwitch;
     private TextView screenRecordingStatusText;
+    /** §23 -- true only when this screen was opened automatically (by
+      * TripForegroundService's auto-recovery, or its notification tap)
+      * specifically to re-grant lost recording consent, never when the
+      * driver opened Setup themselves. Drives auto-finish() once the
+      * consent dialog is answered -- see screenCaptureConsentLauncher. */
+    private boolean autoLaunchedForConsentRecovery = false;
 
     // ComponentActivity (an ancestor of AppCompatActivity, which this
     // class already extends) provides registerForActivityResult directly
@@ -59,6 +65,10 @@ public class PermissionsActivity extends AppCompatActivity {
     // a real Android platform requirement for this API, not a style choice.
     private final ActivityResultLauncher<Intent> screenCaptureConsentLauncher =
             registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+                // A real result already arrived -- the auto-tap window (§23)
+                // has done its job either way (or was never needed, for a
+                // manual tap), nothing left for it to watch for.
+                ScreenRecordingController.disarmConsentDialogAutoTap();
                 if (result.getResultCode() == RESULT_OK && result.getData() != null) {
                     ScreenRecordingController.setPendingConsent(result.getResultCode(), result.getData());
                     ScreenRecordingController.setEnabled(this, true);
@@ -75,6 +85,14 @@ public class PermissionsActivity extends AppCompatActivity {
                     logDiagnostic("SCREEN_RECORDING", "Consent denied or dialog dismissed -- staying off");
                 }
                 refreshScreenRecordingStatus();
+                // §23 -- this screen was auto-launched purely to recover a
+                // lost consent grant (the driver never asked to open
+                // Setup); once the dialog is answered (auto-tapped or,
+                // if that heuristic missed, manually), get out of the way
+                // instead of leaving Setup sitting in the foreground.
+                if (autoLaunchedForConsentRecovery) {
+                    finish();
+                }
             });
 
     @Override
@@ -341,6 +359,7 @@ public class PermissionsActivity extends AppCompatActivity {
         // which wouldn't fire the listener on a true -> true no-op.
         if (getIntent().getBooleanExtra(EXTRA_AUTO_REREQUEST_RECORDING_CONSENT, false)
                 && screenRecordingSwitch.isChecked() && !ScreenRecordingController.hasPendingConsent()) {
+            autoLaunchedForConsentRecovery = true;
             requestScreenRecordingConsent();
         }
         viewRecordingsButton.setOnClickListener(v -> showRecordingsList());
@@ -442,6 +461,11 @@ public class PermissionsActivity extends AppCompatActivity {
             screenRecordingSwitch.setChecked(false);
             return;
         }
+        // §23 -- arm the accessibility-service auto-tap for the real OS
+        // dialog this call is about to trigger. Must happen BEFORE
+        // launch() below, or the dialog could appear and be missed before
+        // the window opens.
+        ScreenRecordingController.armConsentDialogAutoTap();
         screenCaptureConsentLauncher.launch(manager.createScreenCaptureIntent());
     }
 

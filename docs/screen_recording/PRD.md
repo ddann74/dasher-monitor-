@@ -60,6 +60,15 @@ attempt, on a never-before-used consent token, also failed --
 apparently from the token going stale after sitting unused for the ~8
 minutes between being granted in Setup and the trip actually starting,
 not from reuse. No code fix for that exists yet; see §21.3 for why.
+§23 (added 2026-09-11, FIXED, with real disclosed limits): driver
+followed up on §21 -- "I don't want to have to tap anything ... done
+automatically." Auto-launches Setup with zero interaction at trip
+start, and auto-taps the real OS consent dialog itself via the
+existing accessibility service (a narrow, time-boxed, documented
+exception to its "Dasher content only" rule). Android still always
+shows the real dialog -- no app can remove that -- this only answers
+it automatically. Deliberately NOT extended to mid-trip drops (a
+disclosed safety trade-off, see §23.3). See §23/§24.
 Scope: this one feature only. Not a general codebase pass.
 
 ## 0. What this is / isn't
@@ -1458,4 +1467,110 @@ disclosed, open limitation rather than papered over as fixed.
 - [ ] Driver confirms: after this fix, tapping a "Trip Capture
       revoked" notification opens Setup and immediately shows the real
       OS consent dialog, and granting it makes the next trip record.
+- [ ] Driver sign-off.
+
+## 23. Driver-asked (2026-09-11): "I don't want to have to tap anything, I want it done automatically, without me having to do anything"
+
+Direct follow-up to §21/§22: a tappable notification is still one tap.
+The driver explicitly asked for zero interaction. Ground truth stated
+plainly first: Android does not allow any app to silently grant itself
+a screen-recording consent, ever, regardless of what other permissions
+it holds -- the real OS dialog is guaranteed to appear, by design, as a
+deliberate privacy boundary. This section does not remove that dialog;
+it removes the driver's own need to physically answer it.
+
+Two changes, both scoped as narrowly as possible:
+
+**23.1 Auto-launch Setup with zero interaction.** Previously, recovery
+still required the driver to tap the §21 notification themselves.
+`TripForegroundService.autoLaunchPermissionsActivityForConsentRecovery()`
+now fires automatically the moment "no consent held" is detected at
+trip start, reusing `AppNotificationListenerService.launchDasherApp()`'s
+own already-proven 3-layer Background Activity Launch workaround
+verbatim (overlay-exemption + direct `startActivity()`, then a
+full-screen-intent notification fallback) rather than inventing a new
+one. Deliberately NOT also called from `checkTripCaptureHealth()`'s
+mid-trip check -- see §23.3.
+
+**23.2 Auto-tap the real OS dialog itself.** Once Setup opens (auto-
+launched or manually), it already re-fires the real consent dialog
+(§21/§22). `DasherAccessibilityService.tryAutoTapConsentDialog()` now
+watches for that dialog, ONLY for a short armed window immediately
+around this app's own call to `createScreenCaptureIntent()`
+(`ScreenRecordingController.armConsentDialogAutoTap()` /
+`isExpectingConsentDialog()`), and taps the real affirmative button on
+the driver's behalf -- handling both a single confirm dialog and
+Android 14+'s two-step "Entire screen vs a single app, then Start now"
+flow, never tapping anything matching a cancel/deny label.
+
+This is the one deliberate, narrow exception to this class's
+documented "only ever reads Dasher's own content" rule -- scoped by
+TIME (the arm/disarm window), not by package name, specifically
+because the dialog's real owning package is unconfirmed across Android
+versions/OEM skins and a wrong package check would silently disable
+the whole thing. See `tryAutoTapConsentDialog()`'s own doc and the
+updated `accessibility_service_config.xml` comment for the full
+reasoning.
+
+**23.3 Deliberately NOT automated: mid-trip drops.** Popping a
+full-screen Activity over whatever the driver is looking at (a live
+delivery, turn-by-turn navigation) WHILE a trip is already under way
+is a real safety trade-off this round chose not to take. Auto-launch
+only fires at trip start (before or right as driving begins, matching
+this app's own existing risk posture for the new-offer auto-launch
+feature); a drop discovered mid-trip by the periodic health check
+still only gets the §21 tappable notification, on purpose.
+
+**23.4 HONEST LIMITS, not implementation shortcuts:**
+- The consent dialog still genuinely appears on screen, briefly, even
+  when everything works -- this automates answering it, not removing
+  it. Nothing can remove it; that would require an Android platform
+  change, not an app-level one.
+- The auto-tap is a real screen-reading heuristic matched against
+  English button labels this environment could not confirm against an
+  actual device, OS version, or OEM skin (this exact driver's is
+  OPPO ColorOS, confirmed `knownAggressiveOem=true` in the §21 log).
+  If the real wording doesn't match, this silently does nothing and
+  falls back to the still-fully-functional §21/§22 tappable
+  notification -- not a silent failure, just a degraded (one-tap)
+  recovery instead of a zero-tap one.
+- Auto-launching Setup is still subject to the same Background
+  Activity Launch restrictions §23.1's reused mechanism has always
+  had -- a blocked launch fails silently, same honesty gap already
+  documented for the Dasher offer auto-launch.
+- No Android device/emulator available in this environment for any of
+  §23 -- none of this could be triggered and observed on a real
+  device, only read against Android's documented `AccessibilityNodeInfo`,
+  `PendingIntent`, and `MediaProjectionManager` behavior.
+
+## 24. Success criteria for §23
+
+- [x] `ScreenRecordingController.armConsentDialogAutoTap()` /
+      `isExpectingConsentDialog()` / `disarmConsentDialogAutoTap()`
+      added, armed only in `requestScreenRecordingConsent()`, disarmed
+      on every real result (success or decline) and on a terminal tap
+- [x] `TripForegroundService.autoLaunchPermissionsActivityForConsentRecovery()`
+      added, called only from the trip-start "no consent held" branch
+- [x] `DasherAccessibilityService.tryAutoTapConsentDialog()` added,
+      gated on the armed window, never on package name alone; handles
+      the single-dialog and two-step-picker cases; never taps a
+      cancel/deny-labeled control
+- [x] `PermissionsActivity` auto-finishes after an auto-launched
+      recovery's dialog is answered, so Setup doesn't linger in the
+      foreground
+- [x] `accessibility_service_config.xml`'s comment updated to disclose
+      this narrow exception to the "only reads Dasher's content" rule
+- [x] Brace/paren balance confirmed on every touched file
+- [ ] HONEST LIMIT: no Android device/emulator available in this
+      environment -- see §23.4. Every mechanism here is read directly
+      against documented Android platform behavior and this codebase's
+      own already-field-tested `launchDasherApp()` precedent, not
+      observed running.
+- [ ] Driver confirms: after a process restart clears consent, the
+      NEXT trip starting recovers with genuinely zero taps -- Setup
+      opens itself, the real OS dialog appears and is answered
+      automatically, and that trip (or the one after) records.
+- [ ] Driver confirms the real button wording on their device (OPPO
+      ColorOS) actually matches what the auto-tap looks for -- if not,
+      report the exact dialog text so the matcher can be corrected.
 - [ ] Driver sign-off.

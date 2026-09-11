@@ -524,6 +524,14 @@ public class TripForegroundService extends Service {
                 // name instead.
                 raisePermissionRevokedAlert("Trip Capture",
                         "Re-grant consent in Setup - this trip's capture is not active");
+                // §23 -- driver-requested: don't just wait for a tap on the
+                // alert above, actively try to recover with zero
+                // interaction. Kept as a SEPARATE call, not a replacement --
+                // this can silently fail (BAL block, both notification
+                // layers suppressed) the same way launchDasherApp's own
+                // auto-launch can, so the tappable alert stays the
+                // guaranteed fallback either way.
+                autoLaunchPermissionsActivityForConsentRecovery();
             } else {
                 boolean typePromoted = startForegroundWithRecording(buildNotificationForMode("GENERAL"));
                 boolean started = false;
@@ -905,6 +913,94 @@ public class TripForegroundService extends Service {
                 : " revoked while monitoring active -- immediate notification raised. ";
         logDiagnostic("ALERT", permissionName + eventDescription + buildInstallTimingNote());
         startPermissionAlertVibration();
+    }
+
+    private static final String CONSENT_RECOVERY_CHANNEL_ID = "screen_recording_consent_recovery_channel";
+    private static final int CONSENT_RECOVERY_NOTIFICATION_ID = 9210;
+
+    /**
+     * docs/screen_recording/PRD.md §23 -- driver-requested full
+     * automation: don't just wait for a tap on the §21 alert, actively
+     * try to open Setup and re-grant lost recording consent with ZERO
+     * driver interaction. Mirrors AppNotificationListenerService.
+     * launchDasherApp()'s own proven 3-layer Background Activity Launch
+     * workaround exactly (an overlay window first, for the genuine BAL
+     * exemption it provides, then a direct startActivity() attempt, then
+     * a full-screen-intent notification as the reliable-when-locked
+     * fallback) -- reusing an already field-tested mechanism rather than
+     * inventing a new one.
+     *
+     * Deliberately called ONLY from startTracking()'s trip-start check,
+     * never from checkTripCaptureHealth()'s mid-trip check: popping a
+     * full-screen Activity over whatever the driver is looking at (a
+     * live delivery, navigation) WHILE a trip is already under way is a
+     * real, disclosed safety trade-off this PRD round chose not to take
+     * -- the §21 tappable notification remains the only recovery path
+     * for a mid-trip drop.
+     *
+     * HONEST LIMIT: same as launchDasherApp -- a blocked BAL launch
+     * fails SILENTLY, so this can't confirm the direct switch actually
+     * worked, only that it was attempted. The full-screen-intent
+     * notification (and the §21 tappable alert raised right before this
+     * is called) both still fire regardless, as independent fallbacks.
+     */
+    private void autoLaunchPermissionsActivityForConsentRecovery() {
+        try {
+            Intent launchIntent = new Intent(this, PermissionsActivity.class);
+            launchIntent.putExtra(PermissionsActivity.EXTRA_AUTO_REREQUEST_RECORDING_CONSENT, true);
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+
+            OverlayHelper.showMessage(this, "Re-enabling trip recording...",
+                    6 * 1000, android.graphics.Color.parseColor("#CC1565C0"), () -> {
+                        try {
+                            startActivity(launchIntent);
+                        } catch (RuntimeException e) {
+                            logDiagnostic("ERROR", "Consent-recovery overlay tap-to-launch exception: "
+                                    + android.util.Log.getStackTraceString(e));
+                        }
+                    });
+            try {
+                startActivity(launchIntent);
+                logDiagnostic("SCREEN_RECORDING", "Auto-launch: attempted direct foreground launch of "
+                        + "Setup to re-grant consent -- not confirmable whether it actually switched, "
+                        + "see class docs");
+            } catch (RuntimeException e) {
+                logDiagnostic("SCREEN_RECORDING", "Auto-launch: direct foreground launch attempt failed/"
+                        + "blocked (" + e.getClass().getSimpleName() + ") -- falling back to "
+                        + "full-screen-intent notification");
+            }
+
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager == null) {
+                return;
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                NotificationChannel channel = new NotificationChannel(CONSENT_RECOVERY_CHANNEL_ID,
+                        "Auto-Recover Trip Recording", NotificationManager.IMPORTANCE_HIGH);
+                channel.setDescription("Automatically re-opens Setup to re-grant lost recording consent");
+                manager.createNotificationChannel(channel);
+            }
+            PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(
+                    this, CONSENT_RECOVERY_NOTIFICATION_ID, launchIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT
+                            | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0));
+            Notification notification = new Notification.Builder(this, CONSENT_RECOVERY_CHANNEL_ID)
+                    .setContentTitle("Re-enabling trip recording")
+                    .setContentText("Recovering lost recording consent automatically")
+                    .setSmallIcon(android.R.drawable.ic_menu_directions)
+                    .setPriority(Notification.PRIORITY_HIGH)
+                    .setCategory(Notification.CATEGORY_CALL)
+                    .setFullScreenIntent(fullScreenPendingIntent, true)
+                    .setContentIntent(fullScreenPendingIntent)
+                    .setAutoCancel(true)
+                    .build();
+            manager.notify(CONSENT_RECOVERY_NOTIFICATION_ID, notification);
+            logDiagnostic("SCREEN_RECORDING", "Auto-launch: requested Setup foreground via "
+                    + "full-screen-intent notification to re-grant consent with zero driver interaction");
+        } catch (RuntimeException e) {
+            logDiagnostic("ERROR", "autoLaunchPermissionsActivityForConsentRecovery exception: "
+                    + android.util.Log.getStackTraceString(e));
+        }
     }
 
     /**

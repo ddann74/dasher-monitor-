@@ -4,11 +4,17 @@
   needs to observe window state changed events from ANY app to detect
   when the Dasher app is or isn't in the foreground, which drives DASHER
   vs GENERAL mode detection (see report requirement re: navigation
-  efficiency monitor). This does NOT mean other apps' on screen content
-  is read: the code in DasherAccessibilityService only ever calls
-  getRootInActiveWindow() slash reads text nodes when the event's
-  package is Dasher's. For every other app, only the bare package name
-  is inspected.
+  efficiency monitor). For every app except Dasher, the code in
+  DasherAccessibilityService only ever inspects the bare package name --
+  with ONE narrow, deliberate exception (docs/screen_recording/PRD.md
+  §23, tryAutoTapConsentDialog()): for a few seconds immediately after
+  this app's own call to request screen-recording consent, it reads
+  clickable button labels (never general text) from whatever window is
+  currently active, specifically to auto-tap the real OS consent dialog
+  that call itself just triggered. That window is scoped by TIME (a
+  short arm/disarm flag set only around that one call), not by package,
+  so it can never fire outside that narrow moment -- see that method's
+  own doc for the full reasoning.
 
   typeViewClicked was added specifically to detect Accept/Decline taps
   on the offer screen (accept/decline outcome tracking); like every
