@@ -691,6 +691,70 @@ class Database:
                 self.conn.execute(f"ALTER TABLE offer_distance_accuracy ADD COLUMN {new_column} REAL")
         self.conn.commit()
 
+        self.vacuum_status = self._ensure_incremental_auto_vacuum()
+
+    def _ensure_incremental_auto_vacuum(self):
+        """
+        docs/sqlite_incremental_vacuum/PRD.md -- driver-audit finding
+        (2026-09-11): diagnostic_log/zone_activity_log/the three now-
+        rotation-capped history tables (docs/history_table_rotation/
+        PRD.md) all do a real bulk DELETE on rotation -- but in
+        SQLite's default `auto_vacuum=NONE` mode, a deleted row's page
+        becomes a free page INSIDE the file, not reclaimed disk space.
+        The .db file's high-water mark only ever grows, even though row
+        counts stay flat after rotation kicks in.
+
+        `PRAGMA auto_vacuum=INCREMENTAL` fixes this GOING FORWARD for a
+        brand-new database (empty, no tables yet) -- SQLite tracks free
+        pages instead of just leaving them in place, reclaimable later
+        via `PRAGMA incremental_vacuum` (see log_diagnostic's own
+        periodic call). But every existing install already has a real
+        database file created under the old default -- setting this
+        PRAGMA on an already-populated database does NOT retroactively
+        take effect; SQLite requires an actual `VACUUM` (rewrites the
+        whole file) to convert an existing database's auto_vacuum mode.
+
+        Run ONCE per Database instance (this method is only called from
+        _create_schema, itself only called from __init__/reopen), not
+        on every single app launch -- checked via `PRAGMA auto_vacuum`
+        actually reporting 2 (INCREMENTAL) already, not a separate
+        persisted "have I done this before" flag, so this is naturally
+        idempotent and self-correcting even if it's ever interrupted
+        partway through.
+
+        HONEST RISK, not hidden: VACUUM needs roughly the current file
+        size again in free disk space to build the rewritten copy
+        before swapping it in. This app's real database is small by
+        construction (diagnostic_log/zone_activity_log capped at 500
+        rows, the three real history tables now capped at 50,000 rows
+        of a few small columns each -- see history_table_rotation), so
+        this is expected to complete quickly on any real device, but
+        that's reasoned from row-count caps, not measured against a
+        real device's actual file size. Wrapped in its own try/except:
+        a failure (disk full, mid-operation kill) must never prevent
+        the app from starting -- SQLite's own VACUUM is transactional
+        and safe to fail, leaving the database exactly as it was before
+        the attempt, just still un-converted (tried again next launch).
+        """
+        try:
+            current_mode = self.conn.execute("PRAGMA auto_vacuum").fetchone()[0]
+            if current_mode == 2:
+                return {"action": "already_incremental"}
+            self.conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
+            if current_mode == 0:
+                # An existing database with real data -- the PRAGMA above
+                # alone doesn't convert it; only a real VACUUM does. A
+                # brand-new, still-empty database would report mode 0
+                # too, but VACUUM on an empty file is instant, so running
+                # it unconditionally here rather than trying to also
+                # detect "empty vs. has real data" is simpler and no
+                # slower for the case that doesn't need it.
+                self.conn.execute("VACUUM")
+                return {"action": "converted"}
+            return {"action": "pragma_set_mode_" + str(current_mode)}
+        except sqlite3.Error as e:
+            return {"action": "failed", "error": f"{type(e).__name__}: {e}"}
+
 
 # ------------------------------------------------------------------------- #
 # Smart Score Engine ("Profit Advisor")
@@ -1601,6 +1665,27 @@ def haversine_meters(lat1, lon1, lat2, lon2):
     return 2 * R * math.asin(math.sqrt(a))
 
 
+def _reclaim_deleted_pages(conn):
+    """
+    docs/sqlite_incremental_vacuum/PRD.md -- companion to
+    Database._ensure_incremental_auto_vacuum(). A deleted row's page
+    only becomes reclaimable if that PRAGMA already converted this
+    database to auto_vacuum=INCREMENTAL mode; calling
+    `incremental_vacuum` when it hasn't (an existing pre-fix database
+    the one-time VACUUM failed to convert, e.g. from a disk-full error)
+    is a documented, harmless no-op, not an error -- so this is safe to
+    call unconditionally after any real delete, without re-checking the
+    current auto_vacuum mode here. Called only when the caller's own
+    DELETE actually removed at least one row -- pointless to invoke on
+    every rotation check when the table is still under its cap and
+    nothing was deleted.
+    """
+    try:
+        conn.execute("PRAGMA incremental_vacuum")
+    except sqlite3.Error:
+        pass  # never let a reclaim attempt block or fail the real operation that triggered it
+
+
 def _rotate_table_keep_recent(conn, table, max_rows):
     """
     docs/history_table_rotation/PRD.md -- driver-audit finding
@@ -1613,7 +1698,10 @@ def _rotate_table_keep_recent(conn, table, max_rows):
     accel_dynamics_history, park_to_walk_gap_history all use `INSERT
     ... ON CONFLICT(id) DO UPDATE`) or restaurant_wait_history (keyed
     by restaurant_name, so it's naturally bounded by how many distinct
-    restaurants a driver actually visits, not by trip count).
+    restaurants a driver actually visits, not by trip count). Also now
+    used by record_zone_activity_snapshot's own rotation
+    (docs/zone_activity_log/PRD.md), which used to duplicate this exact
+    SQL inline before this consolidation.
 
     Same simple delete-oldest-past-cap shape as
     DriveMonitorEngine.record_zone_activity_snapshot's own
@@ -1634,11 +1722,13 @@ def _rotate_table_keep_recent(conn, table, max_rows):
     the f-string below is safe for that reason, not because inputs are
     escaped or validated.
     """
-    conn.execute(
+    cursor = conn.execute(
         f"DELETE FROM {table} WHERE id NOT IN "
         f"(SELECT id FROM {table} ORDER BY id DESC LIMIT ?)",
         (max_rows,),
     )
+    if cursor.rowcount > 0:
+        _reclaim_deleted_pages(conn)
 
 
 def _sample_stdev(values):
@@ -3804,6 +3894,18 @@ class DriveMonitorEngine:
         db_path = os.path.join(files_dir, "drive_monitor.db")
         self._db_path = db_path
         self.db = Database(db_path)
+        # docs/sqlite_incremental_vacuum/PRD.md -- one-time-per-database
+        # conversion result, worth a visible record the same way every
+        # other real startup action in this app is logged (e.g. screen
+        # recording's own "removed N unfinalized segments" line) --
+        # never previously anything but silent.
+        vacuum_action = self.db.vacuum_status.get("action")
+        if vacuum_action == "converted":
+            self.log_diagnostic("DATABASE", "Converted to incremental auto-vacuum mode "
+                    + "(one-time, reclaims disk space from deleted rows going forward)")
+        elif vacuum_action == "failed":
+            self.log_diagnostic("ERROR", "Incremental auto-vacuum conversion failed: "
+                    + str(self.db.vacuum_status.get("error")) + " -- will retry next launch")
         self.trip_manager = TripManager(self.db)
         self.smart_score = SmartScoreEngine(self.db)
         self.stops_buffer = StopsBuffer()
@@ -6352,6 +6454,7 @@ class DriveMonitorEngine:
         ]
         for table in tables:
             self.db.conn.execute(f"DELETE FROM {table}")
+        _reclaim_deleted_pages(self.db.conn)
         self.db.conn.commit()
         self.stops_buffer = StopsBuffer()
 
@@ -6408,6 +6511,7 @@ class DriveMonitorEngine:
                 f.write(f"[{when}] {row['category']}: {row['message']}\n")
 
         self.db.conn.execute("DELETE FROM diagnostic_log")
+        _reclaim_deleted_pages(self.db.conn)
         self.db.conn.commit()
 
     def get_diagnostic_log(self, limit=200):
@@ -6454,6 +6558,7 @@ class DriveMonitorEngine:
 
     def clear_diagnostic_log(self):
         self.db.conn.execute("DELETE FROM diagnostic_log")
+        _reclaim_deleted_pages(self.db.conn)
         self.db.conn.commit()
 
     # docs/zone_activity_log/PRD.md -- UNCONFIRMED reasonable defaults,
@@ -6493,12 +6598,12 @@ class DriveMonitorEngine:
         )
         # Simple delete-oldest cap, not diagnostic_log's rotate-to-file
         # behavior -- this is informational snapshot data, not an audit
-        # trail that needs to survive indefinitely (see PRD ss1.2).
-        self.db.conn.execute(
-            "DELETE FROM zone_activity_log WHERE id NOT IN "
-            "(SELECT id FROM zone_activity_log ORDER BY id DESC LIMIT ?)",
-            (self.ZONE_ACTIVITY_LOG_MAX_ROWS,),
-        )
+        # trail that needs to survive indefinitely (see PRD ss1.2). Same
+        # shared helper docs/history_table_rotation/PRD.md's three real
+        # history tables use -- was its own duplicate copy of this exact
+        # SQL before that PRD consolidated it (and picked up the
+        # incremental-vacuum reclaim from doing so, for free).
+        _rotate_table_keep_recent(self.db.conn, "zone_activity_log", self.ZONE_ACTIVITY_LOG_MAX_ROWS)
         self.db.conn.commit()
         return json.dumps({"recorded": True})
 
@@ -6521,6 +6626,7 @@ class DriveMonitorEngine:
 
     def clear_zone_activity_log(self):
         self.db.conn.execute("DELETE FROM zone_activity_log")
+        _reclaim_deleted_pages(self.db.conn)
         self.db.conn.commit()
 
     def list_diagnostic_archives(self):

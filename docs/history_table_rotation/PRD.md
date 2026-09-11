@@ -92,11 +92,13 @@ derived constant.
   names, never anything derived from driver input; flagged explicitly
   in the helper's own docstring so a future reader doesn't mistake this
   for a general-purpose, input-safe utility.
-- Does not address the SQLite `VACUUM`/page-reuse question a broader
-  reading of the same audit also raised (deleted rows becoming free
-  pages inside the file, not shrinking it) -- that's a separate,
-  not-yet-addressed finding from the same audit pass, out of scope
-  here.
+- Did not, at the time this was written, address the SQLite `VACUUM`/
+  page-reuse question a broader reading of the same audit also raised
+  (deleted rows becoming free pages inside the file, not shrinking it)
+  -- **now addressed** in the direct follow-up,
+  `docs/sqlite_incremental_vacuum/PRD.md`, which this rotation feeds
+  directly (its `_rotate_table_keep_recent` calls are what actually
+  produce the deletes that PRD reclaims disk space from).
 
 ## 4. Success criteria
 
