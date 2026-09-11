@@ -96,3 +96,41 @@ this app's established convention of never relying on a raw
 - [ ] Driver confirms in real use that this report's factor comparison
       no longer shows trailing ".0"-style raw doubles next to the
       formatted $/km lines above it.
+
+## 3. Unify Smart Score display convention across screens
+
+The live overlay badge (`DasherAccessibilityService.java:1334`,
+`AppNotificationListenerService.java:797`, `TutorialActivity.java:226`)
+and Trip Detail's offer-assessment card (`activity_trip_detail.xml`'s
+static `/100` sibling `TextView` next to `offerScoreNumberText`) both
+anchor the Smart Score with an explicit "/100" -- e.g. "82/100" -- so a
+driver has a fixed scale to read the number against. Five other places
+that show the exact same 0-100 metric omitted that anchor and showed
+a bare number instead, reading like a different, unscaled figure:
+
+- `TripHistoryActivity.java:336` -- Address Book, per-restaurant avg
+- `TripHistoryActivity.java:425` -- restaurant visit history dialog
+- `TripHistoryActivity.java:487,490,493` -- Accept/Decline Stats
+  dialog, avg score by outcome (accepted/declined/timed out)
+- `TripHistoryActivity.java:886` -- Weather vs. Pay correlation dialog
+- `LocationProfitabilityMapActivity.java:157` -- map marker tap detail
+
+All six added `/100` immediately after the score figure (before any
+trailing stdev/label suffix already on that line), matching the live
+badge and Trip Detail's convention exactly rather than inventing a new
+one.
+
+### 3.1 Success criteria
+
+- [x] All 6 identified bare-number Smart Score displays now show
+      `/100`, matching the live badge and Trip Detail
+- [x] `/100` placed immediately after the score, before any existing
+      stdev/label suffix on the same line, not appended at the end of
+      the whole formatted string
+- [x] Grepped the full app for every remaining `Smart Score`/
+      `avg_smart_score` display site to confirm none were missed
+- [x] Brace/paren balance check on both modified files -- clean
+- [ ] HONEST LIMIT: no Android device/emulator available in this
+      environment -- verified by code reading only.
+- [ ] Driver confirms in real use that every Smart Score figure across
+      the app now reads against the same "/100" scale.

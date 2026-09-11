@@ -333,7 +333,7 @@ public class TripHistoryActivity extends AppCompatActivity {
                     if (!entry.isNull("avg_smart_score")) {
                         String stdevSuffix = entry.isNull("stdev_smart_score") ? ""
                                 : String.format(" (sd %.1f)", entry.optDouble("stdev_smart_score", 0));
-                        body.append(String.format("   Avg Smart Score: %.1f%s (%d offer%s)\n",
+                        body.append(String.format("   Avg Smart Score: %.1f/100%s (%d offer%s)\n",
                                 entry.optDouble("avg_smart_score", 0), stdevSuffix,
                                 entry.optInt("smart_score_samples", 0),
                                 entry.optInt("smart_score_samples", 0) == 1 ? "" : "s"));
@@ -422,7 +422,7 @@ public class TripHistoryActivity extends AppCompatActivity {
 
                 StringBuilder body = new StringBuilder();
                 if (!result.isNull("avg_smart_score")) {
-                    body.append(String.format("Avg Smart Score: %.1f", result.optDouble("avg_smart_score", 0)));
+                    body.append(String.format("Avg Smart Score: %.1f/100", result.optDouble("avg_smart_score", 0)));
                     if (!result.isNull("stdev_smart_score")) {
                         body.append(String.format(" (stdev %.1f)", result.optDouble("stdev_smart_score", 0)));
                     }
@@ -484,13 +484,13 @@ public class TripHistoryActivity extends AppCompatActivity {
                         stats.optInt("timed_out_count", 0)));
                 body.append(String.format("Acceptance rate: %.1f%%\n\n", stats.optDouble("acceptance_rate_pct", 0)));
                 if (!stats.isNull("avg_score_accepted")) {
-                    body.append(String.format("Avg Smart Score, accepted: %.1f\n", stats.optDouble("avg_score_accepted", 0)));
+                    body.append(String.format("Avg Smart Score, accepted: %.1f/100\n", stats.optDouble("avg_score_accepted", 0)));
                 }
                 if (!stats.isNull("avg_score_declined")) {
-                    body.append(String.format("Avg Smart Score, declined: %.1f\n", stats.optDouble("avg_score_declined", 0)));
+                    body.append(String.format("Avg Smart Score, declined: %.1f/100\n", stats.optDouble("avg_score_declined", 0)));
                 }
                 if (!stats.isNull("avg_score_timed_out")) {
-                    body.append(String.format("Avg Smart Score, timed out: %.1f\n", stats.optDouble("avg_score_timed_out", 0)));
+                    body.append(String.format("Avg Smart Score, timed out: %.1f/100\n", stats.optDouble("avg_score_timed_out", 0)));
                 }
                 if (!stats.isNull("avg_payout_accepted")) {
                     body.append(String.format("Avg payout, accepted: $%.2f", stats.optDouble("avg_payout_accepted", 0)));
@@ -883,7 +883,7 @@ public class TripHistoryActivity extends AppCompatActivity {
                             : String.format("$%.2f/hr", bucket.optDouble("avg_dollar_per_hr"))));
             lines.append(String.format("  %s\n",
                     bucket.isNull("avg_smart_score") ? "Smart Score n/a"
-                            : String.format("Smart Score %.0f avg", bucket.optDouble("avg_smart_score"))));
+                            : String.format("Smart Score %.0f/100 avg", bucket.optDouble("avg_smart_score"))));
             return lines.toString();
         }
 

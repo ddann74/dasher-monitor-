@@ -154,7 +154,7 @@ public class LocationProfitabilityMapActivity extends AppCompatActivity {
 
     private void showEntryDetail(JSONObject entry) {
         String message = String.format(
-                "Avg Smart Score: %.1f (%s)\nAvg rate: $%.2f/km   $%.2f/hr\nBased on %d offer%s",
+                "Avg Smart Score: %.1f/100 (%s)\nAvg rate: $%.2f/km   $%.2f/hr\nBased on %d offer%s",
                 entry.optDouble("avg_smart_score", 0), entry.optString("label", ""),
                 entry.optDouble("avg_dollar_per_km", 0), entry.optDouble("avg_dollar_per_hr", 0),
                 entry.optInt("sample_count", 0), entry.optInt("sample_count", 0) == 1 ? "" : "s");
