@@ -1,8 +1,9 @@
 # PRD: Report/data-display formatting consistency
 
-Status: IN PROGRESS (2026-09-11), driver's own feature-audit finding --
+Status: IMPLEMENTED (2026-09-11), driver's own feature-audit finding --
 not a specific driver-reported bug. Driver asked to fix all findings
-"top to down" in the ranked order the scouting pass presented them.
+"top to down" in the ranked order the scouting pass presented them;
+see ss9 for overall status and the 2 findings corrected along the way.
 
 ## 0. What this is / isn't
 
@@ -289,3 +290,67 @@ touching them found neither is actually the same value class as a
       environment -- verified by code reading only.
 - [ ] Driver confirms in real use that Acceptance rate now reads as a
       whole percentage, consistent with Trip Detail/Trip List.
+
+## 8. Missing share-of-total suffix in the feedback dialog's phase timings
+
+`MainActivity.showFeedbackDialog()` (~line 700-761) has its own
+phase-timing breakdown, already disclosed in an existing code comment
+as a known, deliberately-left duplicate of `TripDetailActivity`'s
+"Where The Time Went" card ("docs/feedback_dialog_phase_timings/
+PRD.md ss4A ... NOW REDUNDANT ... left as a small, low-cost
+duplication rather than risk editing this method further"). Both show
+the same 5 phases from the same `phase_breakdown` object, but only
+Trip Detail's card appended each phase's `formatPercentOfTotal()`
+share of the whole trip (e.g. "12m 30s -- 24% of total"); the feedback
+dialog showed just the raw duration with no share-of-total context,
+even though it has the same `start_time`/`end_time` fields available
+on the exact same `summary` object it already fetches (confirmed via
+`_build_trip_summary_dict` in `drive_monitor.py`, shared by both
+`get_last_trip_summary` and `get_trip_summary_by_id` -- the same
+Python function backs both screens).
+
+Added a `formatPercentOfTotal()` helper to `MainActivity` (identical
+computation to `TripDetailActivity`'s own, a small enough duplicate
+function that duplicating it was preferable to threading a shared
+utility class through both call sites for one 3-line method), computed
+`totalTripSeconds` the same way Trip Detail does
+(`end_time - start_time`), and appended the same `" -- N%"` suffix to
+each of the 5 phase lines, guarded the same way (`totalTripSeconds > 0`)
+so a malformed/zero-duration trip degrades to showing just the raw
+duration instead of a divide-by-zero or a nonsense percentage.
+
+### 8.1 Success criteria
+
+- [x] All 5 phase lines in the feedback dialog now show the same
+      "-- N% of total"-style suffix Trip Detail's card shows for the
+      identical data
+- [x] Reused the exact same computation (`Math.round((phaseSeconds /
+      totalSeconds) * 100)`) as `TripDetailActivity.formatPercentOfTotal`,
+      not a reinvented one that could drift from it
+- [x] Same zero-duration guard as Trip Detail (`totalTripSeconds > 0`)
+      before computing a percentage
+- [x] Confirmed via reading `_build_trip_summary_dict` that
+      `start_time`/`end_time` are genuinely present on the same
+      `summary` object this method already fetches, not assumed
+- [x] Brace/paren balance check on the modified file -- clean
+- [ ] HONEST LIMIT: no Android device/emulator available in this
+      environment -- verified by code reading only, not by triggering
+      the actual post-trip feedback dialog on a device.
+- [ ] Driver confirms in real use that the feedback dialog's phase
+      breakdown now shows the same percent-of-total figures as Trip
+      Detail's card for the same trip.
+
+## 9. Overall status
+
+All 8 ranked findings from the report-formatting scouting pass have
+been addressed, in the exact top-to-bottom order requested. Two of the
+8 original findings (in sections 6 and 7) turned out, on closer
+reading of the actual code, to be partially incorrect -- Address
+Book's omission and Personal Calibration/Pay Trend's extra decimal are
+both pre-existing, deliberate design choices, not bugs -- and were
+left untouched with the reasoning documented in place rather than
+"fixed" to match a finding that didn't hold up, consistent with this
+repo's established practice (see `docs/history_table_rotation/
+PRD.md` ss0 for the same kind of correction on an earlier audit).
+
+- [ ] Driver sign-off on all 8 sections above.

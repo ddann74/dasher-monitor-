@@ -732,27 +732,43 @@ public class MainActivity extends AppCompatActivity {
                 JSONObject phaseBreakdown = summary.optBoolean("found", false)
                         ? summary.optJSONObject("phase_breakdown") : null;
                 if (phaseBreakdown != null && phaseBreakdown.length() > 0) {
+                    double totalTripSeconds = summary.optDouble("end_time", 0) - summary.optDouble("start_time", 0);
                     TextView phaseTimingText = new TextView(this);
                     StringBuilder phaseBody = new StringBuilder("Where the time went:\n");
                     if (!phaseBreakdown.isNull("driving_to_pickup_seconds")) {
-                        phaseBody.append(String.format("Driving to pickup: %s\n",
-                                formatMinutesSeconds(phaseBreakdown.optDouble("driving_to_pickup_seconds", 0))));
+                        double seconds = phaseBreakdown.optDouble("driving_to_pickup_seconds", 0);
+                        String percentSuffix = totalTripSeconds > 0
+                                ? " -- " + formatPercentOfTotal(seconds, totalTripSeconds) : "";
+                        phaseBody.append(String.format("Driving to pickup: %s%s\n",
+                                formatMinutesSeconds(seconds), percentSuffix));
                     }
                     if (!phaseBreakdown.isNull("wait_at_restaurant_seconds")) {
-                        phaseBody.append(String.format("Waiting at restaurant: %s\n",
-                                formatMinutesSeconds(phaseBreakdown.optDouble("wait_at_restaurant_seconds", 0))));
+                        double seconds = phaseBreakdown.optDouble("wait_at_restaurant_seconds", 0);
+                        String percentSuffix = totalTripSeconds > 0
+                                ? " -- " + formatPercentOfTotal(seconds, totalTripSeconds) : "";
+                        phaseBody.append(String.format("Waiting at restaurant: %s%s\n",
+                                formatMinutesSeconds(seconds), percentSuffix));
                     }
                     if (!phaseBreakdown.isNull("driving_to_dropoff_seconds")) {
-                        phaseBody.append(String.format("Driving to dropoff: %s\n",
-                                formatMinutesSeconds(phaseBreakdown.optDouble("driving_to_dropoff_seconds", 0))));
+                        double seconds = phaseBreakdown.optDouble("driving_to_dropoff_seconds", 0);
+                        String percentSuffix = totalTripSeconds > 0
+                                ? " -- " + formatPercentOfTotal(seconds, totalTripSeconds) : "";
+                        phaseBody.append(String.format("Driving to dropoff: %s%s\n",
+                                formatMinutesSeconds(seconds), percentSuffix));
                     }
                     if (!phaseBreakdown.isNull("parking_to_walking_seconds")) {
-                        phaseBody.append(String.format("Parking to walking: %s\n",
-                                formatMinutesSeconds(phaseBreakdown.optDouble("parking_to_walking_seconds", 0))));
+                        double seconds = phaseBreakdown.optDouble("parking_to_walking_seconds", 0);
+                        String percentSuffix = totalTripSeconds > 0
+                                ? " -- " + formatPercentOfTotal(seconds, totalTripSeconds) : "";
+                        phaseBody.append(String.format("Parking to walking: %s%s\n",
+                                formatMinutesSeconds(seconds), percentSuffix));
                     }
                     if (!phaseBreakdown.isNull("completing_dropoff_seconds")) {
-                        phaseBody.append(String.format("Completing dropoff: %s\n",
-                                formatMinutesSeconds(phaseBreakdown.optDouble("completing_dropoff_seconds", 0))));
+                        double seconds = phaseBreakdown.optDouble("completing_dropoff_seconds", 0);
+                        String percentSuffix = totalTripSeconds > 0
+                                ? " -- " + formatPercentOfTotal(seconds, totalTripSeconds) : "";
+                        phaseBody.append(String.format("Completing dropoff: %s%s\n",
+                                formatMinutesSeconds(seconds), percentSuffix));
                     }
                     phaseTimingText.setText(phaseBody.toString());
                     int bottomMargin = (int) (12 * getResources().getDisplayMetrics().density);
@@ -942,5 +958,17 @@ public class MainActivity extends AppCompatActivity {
         int minutes = rounded / 60;
         int seconds = rounded % 60;
         return minutes > 0 ? minutes + "m " + seconds + "s" : seconds + "s";
+    }
+
+    /**
+     * Same computation as TripDetailActivity's own formatPercentOfTotal --
+     * this dialog's phase-timing breakdown is a disclosed duplicate of that
+     * screen's "Where The Time Went" card (see the comment above the call
+     * site in showFeedbackDialog), and previously showed only the raw
+     * duration with no share-of-total suffix, unlike that card.
+     */
+    private String formatPercentOfTotal(double phaseSeconds, double totalSeconds) {
+        long pct = Math.round((phaseSeconds / totalSeconds) * 100);
+        return pct + "%";
     }
 }
