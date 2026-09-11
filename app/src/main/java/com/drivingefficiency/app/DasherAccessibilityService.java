@@ -1804,4 +1804,38 @@ public class DasherAccessibilityService extends AccessibilityService {
     public void onInterrupt() {
         foregroundCheckHandler.removeCallbacks(foregroundCheckRunnable);
     }
+
+    /**
+     * Real, confirmed gap (feature-audit finding, not a driver report):
+     * foregroundCheckRunnable (see onServiceConnected above) reposts
+     * itself forever via a Handler on the main Looper, and onInterrupt
+     * above was the ONLY place ever cancelling it -- but onInterrupt is
+     * Android's "stop giving feedback right now" signal, unrelated to
+     * the service actually being unbound, and isn't reliably called on
+     * every real disable path. onUnbind is the actual callback Android
+     * invokes when the driver disables this service under Settings ->
+     * Accessibility (or the system force-unbinds it) -- without this
+     * override, that self-repost loop kept running every 20s forever
+     * (the app process stays alive via TripForegroundService), each
+     * firing calling checkCurrentForegroundWindow -> getWindows(), an
+     * AccessibilityService-only API that throws IllegalStateException
+     * once disconnected -- caught and logged, so never a crash, but an
+     * indefinite diagnostic-log spam loop and a leaked service instance
+     * (the Runnable is a non-static inner class holding an implicit
+     * reference to it) for the remaining life of the process.
+     * onDestroy is overridden too as a second safety net for whichever
+     * teardown path actually fires on a given OS/OEM -- removeCallbacks
+     * on an already-empty queue is a harmless no-op either way.
+     */
+    @Override
+    public boolean onUnbind(Intent intent) {
+        foregroundCheckHandler.removeCallbacks(foregroundCheckRunnable);
+        return super.onUnbind(intent);
+    }
+
+    @Override
+    public void onDestroy() {
+        foregroundCheckHandler.removeCallbacks(foregroundCheckRunnable);
+        super.onDestroy();
+    }
 }
