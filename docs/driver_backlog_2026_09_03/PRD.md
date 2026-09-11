@@ -1118,3 +1118,120 @@ Android SDK/emulator/device.
       missing sometimes (which would rule this specific cause out)
 - [ ] Driver sign-off.
 
+## 21. Follow-up (2026-09-11, driver's own feature audit): §15's bounds-matching hardened again, a real drift risk this time
+
+A code-scouting pass (not a specific driver-reported bug) re-read the
+full Accept/Decline detection chain §15 already hardened once
+(byte-exact bounds equality -> tolerant matching, 2026-09-03) and found
+a second, concrete gap in the SAME mechanism, not previously named.
+
+### 21.1 The gap
+
+`scanAndRecordAcceptDeclineNodeBounds()` took its bounds snapshot
+exactly ONCE, at the moment an offer was first detected
+(`offerShownAtMs = System.currentTimeMillis()`'s own call site). That
+snapshot is what `checkNodeBoundsMatch()` compares every later event
+against for the rest of that offer's pending window.
+
+This is a real risk, not a hypothetical one: `OfferScreenParser.
+extract_countdown_seconds` (drive_monitor.py) confirms the offer
+screen carries a live accept/decline countdown, ticking every second.
+A driver who takes even a few seconds to read an offer and decide --
+completely normal behavior -- is deciding against a screen that has
+already re-rendered at least once since the bounds snapshot was taken.
+If that re-render shifts the Accept/Decline buttons by more than
+§15's own `NODE_MATCH_BOUNDS_TOLERANCE_PX` (24px), a real, correctly-
+landed tap would no longer match the stale recorded bounds -- exactly
+the same downstream consequence §15 already established: silently
+falls into the `record_offer_timeout` bucket instead, and
+`recalculate_personal_calibration` excludes timeouts from calibration
+entirely, so the real accept/decline signal is lost, not just
+mislabeled.
+
+### 21.2 Fix
+
+`scanAndRecordAcceptDeclineNodeBounds()` split into two methods:
+
+- `scanAndRecordAcceptDeclineNodeBounds()` -- unchanged purpose (reset
+  + initial scan for a NEWLY detected offer), now just resets then
+  delegates to the method below.
+- `refreshAcceptDeclineNodeBounds()` -- the actual scan logic, now also
+  called from `checkNodeBoundsMatch()` on every qualifying check for
+  the SAME still-pending offer, not just once. Keeps the comparison
+  target fresh against whatever DoorDash's screen currently shows,
+  instead of a snapshot that ages for as long as the driver takes to
+  decide.
+
+Two things this fix deliberately does NOT do, both reasoned through
+explicitly rather than accidental:
+
+1. **Does not clear bounds on a momentary miss.** A single scan that
+   doesn't find a button (mid-recompose, or the button already gone
+   because the tap that triggered this very check just landed) leaves
+   the previous known-good value in place rather than nulling it --
+   nulling here would have reintroduced a new failure mode while
+   fixing the staleness one.
+2. **Does reset between DIFFERENT offers.** Only
+   `scanAndRecordAcceptDeclineNodeBounds()` (the new-offer entry point)
+   clears first; `refreshAcceptDeclineNodeBounds()` alone never does --
+   otherwise a stale bounds pair from an offer that timed out without
+   ever matching could wrongly survive and match a tap meant for the
+   NEXT, completely different offer.
+
+The `NODE_SCAN` diagnostic line is now logged only on a genuine first
+find or an actual bounds change between scans, not on every single
+refresh -- this runs far more often than before (once per qualifying
+event during the whole pending window, not once), and logging
+identically every time would have spammed the rotation-capped
+diagnostic log for no new information. A logged "(moved since last
+scan)" is itself the direct evidence this fix exists to surface.
+
+### 21.3 Honestly scoped, same as §15
+
+Whether a real tap was ever actually being missed because of staleness
+specifically (as opposed to §15's already-fixed byte-exact-equality
+gap, or the click-event-never-fires theory this whole 3-layer system
+was built around) remains unconfirmed -- no diagnostic log or device
+evidence either way. This is defensive hardening of a second, newly-
+identified risk in an already-real mechanism, not a confirmed bug fix.
+Same "if the driver notices anything still missing, that's real
+evidence worth reopening this with" standard §15 already set.
+
+**Not attempted**, same reasoning as §15: no backfill of historical
+`timed_out` rows that might actually have been real, missed
+accept/decline taps -- no reliable way to tell which ones were
+affected by staleness specifically.
+
+## 22. Success criteria for §21
+
+- [x] Read the full bounds-matching mechanism §15 already hardened
+      before touching it again, rather than assuming it still needed
+      the same fix
+- [x] Found a genuinely NEW, previously-unnamed risk (staleness from
+      the confirmed live countdown re-render), not a re-diagnosis of
+      §15's already-fixed byte-exact-equality gap
+- [x] `refreshAcceptDeclineNodeBounds()` extracted and called from both
+      the original new-offer entry point and every `checkNodeBoundsMatch`
+      check, without introducing a "transient miss clears a known-good
+      value" regression
+- [x] Confirmed the new-offer reset path still clears between different
+      offers, so a stale bounds pair can't leak from one offer to the
+      next
+- [x] `NODE_SCAN` logging throttled to genuine finds/changes only, given
+      this now runs far more frequently than its original one-time call
+- [x] Explicitly NOT framed as a confirmed bug fix -- honestly scoped as
+      hardening of a second named risk, unconfirmed either way without
+      real evidence
+- [x] Brace/paren balance confirmed on the touched file
+- [ ] HONEST LIMIT: no Android device/emulator available in this
+      environment -- whether the offer screen's real re-render behavior
+      actually shifts button positions by more than 24px, and whether
+      this fix actually catches a tap that the old snapshot would have
+      missed, has not been observed, only reasoned through from the
+      confirmed existence of a live countdown.
+- [ ] Driver confirms in real use (or via a future diagnostic log) that
+      Accept/Decline outcomes are now showing up correctly, especially
+      for offers where the driver took several seconds to decide -- the
+      exact case this fix targets.
+- [ ] Driver sign-off.
+

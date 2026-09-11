@@ -413,34 +413,100 @@ public class DasherAccessibilityService extends AccessibilityService {
      * clickable target, the standard fix for "text lives on a
      * non-clickable child of the real clickable row/card" layouts.
      */
+    /** Called exactly once, when a NEW offer is first detected (see that
+      * call site) -- resets any bounds left over from a previous offer,
+      * then does an initial scan via refreshAcceptDeclineNodeBounds().
+      * The reset matters here specifically: without it, a stale bounds
+      * pair from an offer that timed out without ever matching (so
+      * never got explicitly cleared -- see recordLastOfferOutcome) could
+      * otherwise survive into the NEXT offer and wrongly match a tap
+      * against this new offer's completely different button position. */
     private void scanAndRecordAcceptDeclineNodeBounds() {
         acceptNodeBounds = null;
         declineNodeBounds = null;
+        refreshAcceptDeclineNodeBounds();
+    }
+
+    /**
+     * Driver-audit finding (2026-09-11): the bounds snapshot used to be
+     * taken exactly once, at offer-detection time
+     * (scanAndRecordAcceptDeclineNodeBounds()'s only call site, before
+     * this fix). That goes stale the moment the screen re-renders for
+     * any reason -- and it genuinely does: the offer screen has a real,
+     * confirmed live accept/decline countdown
+     * (OfferScreenParser.extract_countdown_seconds ticks every second).
+     * A driver who takes even a few seconds to read and decide -- normal
+     * behavior, not an edge case -- could easily be tapping against
+     * button positions that shifted since that one snapshot was taken,
+     * especially if the shift exceeds the 24px tolerance
+     * (NODE_MATCH_BOUNDS_TOLERANCE_PX). Fixed by calling this from
+     * checkNodeBoundsMatch() on every check for the same still-pending
+     * offer, keeping the comparison target fresh instead of stale.
+     *
+     * Deliberately does NOT clear an already-known bounds just because
+     * THIS pass didn't find it -- a transient miss (the screen is
+     * mid-recompose, or the button was already removed because the tap
+     * that triggered this very check just landed) must not wipe out a
+     * still-good previous value from a moment ago. Callers that need a
+     * genuine reset between DIFFERENT offers use
+     * scanAndRecordAcceptDeclineNodeBounds() above instead, which resets
+     * first, THEN calls this.
+     */
+    private void refreshAcceptDeclineNodeBounds() {
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) {
             return;
         }
         try {
+            android.graphics.Rect foundAcceptBounds = null;
+            android.graphics.Rect foundDeclineBounds = null;
             for (AccessibilityNodeInfo node : root.findAccessibilityNodeInfosByText("Accept")) {
                 AccessibilityNodeInfo clickable = nearestClickableAncestor(node);
-                if (clickable != null && acceptNodeBounds == null) {
+                if (clickable != null && foundAcceptBounds == null) {
                     android.graphics.Rect bounds = new android.graphics.Rect();
                     clickable.getBoundsInScreen(bounds);
-                    acceptNodeBounds = bounds;
+                    foundAcceptBounds = bounds;
                 }
             }
             for (AccessibilityNodeInfo node : root.findAccessibilityNodeInfosByText("Decline")) {
                 AccessibilityNodeInfo clickable = nearestClickableAncestor(node);
-                if (clickable != null && declineNodeBounds == null) {
+                if (clickable != null && foundDeclineBounds == null) {
                     android.graphics.Rect bounds = new android.graphics.Rect();
                     clickable.getBoundsInScreen(bounds);
-                    declineNodeBounds = bounds;
+                    foundDeclineBounds = bounds;
                 }
             }
-            logDiagnostic("NODE_SCAN", "Accept node found=" + (acceptNodeBounds != null)
-                    + ", Decline node found=" + (declineNodeBounds != null));
+            // Only overwrite on an actual find -- see this method's own
+            // doc for why a miss must not clear a previously known-good
+            // value. Logged only when something actually changed from
+            // the previous scan (a genuine initial find, or real drift
+            // between refreshes) -- this now runs on every qualifying
+            // event during a pending offer, not just once, so logging
+            // unconditionally every time would spam the rotation-capped
+            // diagnostic log with identical lines for no new information.
+            // A logged CHANGE is itself useful evidence: it's exactly
+            // the "did the countdown re-render shift the buttons"
+            // question this whole fix exists to answer.
+            boolean acceptIsNewFind = foundAcceptBounds != null && acceptNodeBounds == null;
+            boolean acceptMoved = foundAcceptBounds != null && acceptNodeBounds != null
+                    && !foundAcceptBounds.equals(acceptNodeBounds);
+            boolean declineIsNewFind = foundDeclineBounds != null && declineNodeBounds == null;
+            boolean declineMoved = foundDeclineBounds != null && declineNodeBounds != null
+                    && !foundDeclineBounds.equals(declineNodeBounds);
+            if (acceptIsNewFind || acceptMoved || declineIsNewFind || declineMoved) {
+                logDiagnostic("NODE_SCAN", "Accept node found=" + (foundAcceptBounds != null)
+                        + (acceptMoved ? " (moved since last scan)" : "")
+                        + ", Decline node found=" + (foundDeclineBounds != null)
+                        + (declineMoved ? " (moved since last scan)" : ""));
+            }
+            if (foundAcceptBounds != null) {
+                acceptNodeBounds = foundAcceptBounds;
+            }
+            if (foundDeclineBounds != null) {
+                declineNodeBounds = foundDeclineBounds;
+            }
         } catch (RuntimeException e) {
-            logDiagnostic("ERROR", "scanAndRecordAcceptDeclineNodeBounds exception: "
+            logDiagnostic("ERROR", "refreshAcceptDeclineNodeBounds exception: "
                     + android.util.Log.getStackTraceString(e));
         }
     }
@@ -467,6 +533,15 @@ public class DasherAccessibilityService extends AccessibilityService {
      * to rule out accessibility focus landing on the button
      * automatically as the screen loads -- not a real tap.
      *
+     * Driver-audit finding (2026-09-11): re-scans the current bounds
+     * (refreshAcceptDeclineNodeBounds()) on every call, not just once at
+     * offer-detection time -- the offer screen's own live countdown
+     * means it genuinely keeps re-rendering while the driver decides,
+     * so comparing against a stale one-time snapshot risked missing a
+     * real tap that landed correctly on buttons that had simply moved
+     * since. See that method's own doc for why a transient miss during
+     * this refresh can't wipe out an already-known-good value.
+     *
      * HONESTY NOTE: this is a best-effort heuristic, not a certainty.
      * It's entirely possible NO event type fires on these buttons at
      * all, in which case this won't help either -- logged clearly as
@@ -480,6 +555,7 @@ public class DasherAccessibilityService extends AccessibilityService {
         if (System.currentTimeMillis() - offerShownAtMs < NODE_MATCH_MIN_DELAY_MS) {
             return; // too soon -- likely just the screen loading, not a real tap
         }
+        refreshAcceptDeclineNodeBounds();
         AccessibilityNodeInfo source = event.getSource();
         if (source == null) {
             return;
