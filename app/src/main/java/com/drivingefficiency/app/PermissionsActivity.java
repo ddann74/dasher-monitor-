@@ -820,7 +820,7 @@ public class PermissionsActivity extends AppCompatActivity {
         boolean configured = fuelSettings.optBoolean("configured", false);
         double effectiveRate = fuelSettings.optDouble("effective_cost_per_km", 0.12);
         fuelCostSubtext.setText(configured
-                ? String.format("Currently using your configured rate: $%.4f/km "
+                ? String.format("Currently using your configured rate: $%.2f/km "
                         + "(%.1f L/100km at $%.2f/L). Change and save again any time.",
                         effectiveRate, fuelSettings.optDouble("fuel_efficiency_l_per_100km"),
                         fuelSettings.optDouble("fuel_price_per_liter"))

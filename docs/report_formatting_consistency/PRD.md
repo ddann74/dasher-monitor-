@@ -134,3 +134,27 @@ one.
       environment -- verified by code reading only.
 - [ ] Driver confirms in real use that every Smart Score figure across
       the app now reads against the same "/100" scale.
+
+## 4. Fuel-rate precision flip in the same ternary
+
+`PermissionsActivity.java`'s `applyFuelCostSubtext()` (~line 822-829)
+formats the exact same `effectiveRate` variable two different ways
+depending on which branch of one ternary runs: `"$%.4f/km"` when the
+driver has configured their own rate, `"$%.2f/km"` when showing the
+flat default -- so saving a real rate made the displayed precision
+get MORE precise instead of staying constant, even though it's
+literally the same double variable either way. Every other $/km figure
+app-wide (Trip History reports, Weather vs. Pay, Address Book, the
+live offer badge, Trip Detail) uses 2 decimals; nothing else in the
+app shows 4. Standardized the configured branch to `%.2f` to match.
+
+### 4.1 Success criteria
+
+- [x] Both branches of the ternary format `effectiveRate` as `%.2f`
+- [x] Confirmed via grep that 2 decimals is the app-wide convention
+      for every other $/km display, not an arbitrary choice
+- [x] Brace/paren balance check on the modified file -- clean
+- [ ] HONEST LIMIT: no Android device/emulator available in this
+      environment -- verified by code reading only.
+- [ ] Driver confirms in real use that the fuel-rate subtext no longer
+      changes precision after configuring and saving a real rate.
