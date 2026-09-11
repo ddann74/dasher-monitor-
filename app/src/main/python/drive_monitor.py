@@ -691,6 +691,29 @@ class Database:
                 self.conn.execute(f"ALTER TABLE offer_distance_accuracy ADD COLUMN {new_column} REAL")
         self.conn.commit()
 
+        # Real-audit finding (fresh scouting pass, 2026-09-11): stops/
+        # events/delays/messages are permanently-growing, never-rotated
+        # per-trip tables (unlike the three tables docs/
+        # history_table_rotation/PRD.md deliberately capped -- these ARE
+        # the trip-history record itself, correctly never rotated), and
+        # every one of them is queried by `WHERE trip_id = ?` (or grouped/
+        # ordered by trip_id) in _build_trip_summary_dict -- used by both
+        # get_last_trip_summary and get_trip_summary_by_id, i.e. opening
+        # ANY single trip's detail screen -- and in export_full_report,
+        # with no supporting index anywhere in this file (confirmed via
+        # grep before this fix). SQLite fell back to a full table scan on
+        # every one of those lookups, getting slower with every additional
+        # day of continued app use as these tables grow with no cap.
+        # CREATE INDEX IF NOT EXISTS is itself the safe, idempotent
+        # migration for both a fresh database and an existing one -- no
+        # PRAGMA table_info column-existence check needed the way
+        # ALTER TABLE ADD COLUMN above needs one.
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_stops_trip_id ON stops(trip_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_events_trip_id ON events(trip_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_delays_trip_id ON delays(trip_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_trip_id ON messages(trip_id)")
+        self.conn.commit()
+
         self.vacuum_status = self._ensure_incremental_auto_vacuum()
 
     def _ensure_incremental_auto_vacuum(self):
