@@ -87,6 +87,13 @@ public class AppNotificationListenerService extends NotificationListenerService 
     private final List<String> pendingLowPriorityMessages = new ArrayList<>();
     private final Handler batchHandler = new Handler(Looper.getMainLooper());
     private static final long BATCH_WINDOW_MS = 15 * 1000;
+    // docs/screen_recognition_canary/PRD.md -- generous enough for
+    // launchDasherApp's own multi-layer launch (a blocked direct/
+    // full-screen attempt degrading to a manual overlay tap) plus a
+    // normal screen render, without waiting so long that a real
+    // accept/decline decision would already be over regardless.
+    private final Handler offerScreenCanaryHandler = new Handler(Looper.getMainLooper());
+    private static final long OFFER_SCREEN_CANARY_DELAY_MS = 20 * 1000;
     // Driver backlog #4 (docs/driver_backlog_2026_09_03/PRD.md): "keep
     // reading aloud every 30 secs until i acknowledge."
     private static final long ACKNOWLEDGE_REMINDER_INTERVAL_MS = 30 * 1000;
@@ -409,6 +416,7 @@ public class AppNotificationListenerService extends NotificationListenerService 
             // its existing honest "no score available" text instead of a
             // possibly-wrong number.
             launchDasherApp(restaurantName, -1);
+            scheduleOfferScreenRecognitionCanary(restaurantName);
 
             JSONObject score = result.optJSONObject("smart_score");
             if (score != null) {
@@ -466,6 +474,42 @@ public class AppNotificationListenerService extends NotificationListenerService 
             // VoiceAnnouncer and HapticFeedback directly (real Java-side work), not just Python/JSON.
             logDiagnostic("ERROR", "handleDasherNotification exception: " + android.util.Log.getStackTraceString(e));
         }
+    }
+
+    /**
+     * docs/screen_recognition_canary/PRD.md -- driver-audit finding
+     * (2026-09-11): every one of this codebase's screen parsers (offer,
+     * dropoff, store-wait, etc.) independently returns false/null on a
+     * mismatch with no general signal distinguishing "nothing to
+     * recognize right now" from "DoorDash changed something and we can
+     * no longer recognize what we're looking at." This is the one place
+     * with an independent, ALREADY-confirmed-real offer (this
+     * notification's own parse, not a guess) to check the screen-based
+     * parser's own confirmation against.
+     *
+     * Deliberately does NOT fire if Dasher never came to the foreground
+     * at all since this notification -- that's the separate, already-
+     * disclosed Background-Activity-Launch uncertainty (see
+     * launchDasherApp's own doc), not new information, and conflating
+     * the two would misattribute a launch failure as a parser failure.
+     * Only fires when Dasher DID come to the foreground but the
+     * screen-based parser still never confirmed an offer screen in that
+     * same window -- the one combination that specifically points at a
+     * parser mismatch, not a launch mismatch.
+     */
+    private void scheduleOfferScreenRecognitionCanary(String restaurantName) {
+        final long notificationMs = System.currentTimeMillis();
+        offerScreenCanaryHandler.postDelayed(() -> {
+            long dasherForegroundMs = DasherAccessibilityService.lastDasherForegroundMs;
+            long offerScreenConfirmedMs = DasherAccessibilityService.lastOfferScreenConfirmedMs;
+            if (dasherForegroundMs > notificationMs && offerScreenConfirmedMs <= notificationMs) {
+                logDiagnostic("SCREEN_MISMATCH", "Notification confirmed an offer (" + restaurantName
+                        + ") and Dasher came to the foreground, but the screen-based parser never "
+                        + "recognized an offer screen within " + (OFFER_SCREEN_CANARY_DELAY_MS / 1000)
+                        + "s -- possible DoorDash UI change, or the offer/decision window simply "
+                        + "closed before this check ran.");
+            }
+        }, OFFER_SCREEN_CANARY_DELAY_MS);
     }
 
     /**

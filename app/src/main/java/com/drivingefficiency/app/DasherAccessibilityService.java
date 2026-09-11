@@ -1094,6 +1094,21 @@ public class DasherAccessibilityService extends AccessibilityService {
     // this can't prove either way with certainty.
     public static volatile long lastDasherForegroundMs = 0;
 
+    /** Driver-audit finding (2026-09-11), docs/screen_recognition_canary/PRD.md
+      * -- set the moment `parse_offer_screen` confirms `is_offer_screen
+      * == true` for a real accessibility event, regardless of whether a
+      * score was computable yet. Read by
+      * AppNotificationListenerService's own delayed check to answer a
+      * question nothing in this codebase could answer before: when a
+      * notification independently confirms an offer arrived and Dasher
+      * came to the foreground, did the screen-based parser ever actually
+      * recognize the offer screen it should be looking at right now, or
+      * has it silently stopped matching anything (the same "DoorDash
+      * changed its UI and nothing noticed" risk flagged across several
+      * parsers in this codebase, never previously given a general
+      * detector). */
+    public static volatile long lastOfferScreenConfirmedMs = 0;
+
     /**
      * Surfaces the Smart Score that drive_monitor.py already calculates on
      * every offer -- previously computed and then silently discarded. Shows
@@ -1164,6 +1179,15 @@ public class DasherAccessibilityService extends AccessibilityService {
                 }
                 return;
             }
+
+            // docs/screen_recognition_canary/PRD.md -- set as soon as
+            // is_offer_screen is confirmed true, regardless of whether a
+            // score is computable yet (below). This is the "the
+            // screen-based parser genuinely recognized an offer screen
+            // just now" signal AppNotificationListenerService's own
+            // delayed check cross-references against its independent
+            // notification-based detection.
+            lastOfferScreenConfirmedMs = System.currentTimeMillis();
 
             JSONObject score = parsed.optJSONObject("smart_score");
             if (score == null) {
