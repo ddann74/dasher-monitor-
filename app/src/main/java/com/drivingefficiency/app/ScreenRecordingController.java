@@ -95,6 +95,33 @@ class ScreenRecordingController {
         pendingResultData = null;
     }
 
+    // docs/screen_recording/PRD.md §23 -- driver-requested full automation:
+    // re-granting consent should need zero manual interaction, not just a
+    // one-tap notification (§21). Android itself still always shows the
+    // real OS consent dialog (no API lets an app silently grant this to
+    // itself -- confirmed, not a gap in this codebase); this instead lets
+    // DasherAccessibilityService auto-tap THAT dialog on the driver's
+    // behalf. Armed for a short window immediately before, and only
+    // immediately before, this app's own call to createScreenCaptureIntent()
+    // (see PermissionsActivity.requestScreenRecordingConsent()) -- this
+    // timing window, not a package-name check, is what keeps the
+    // accessibility service from ever touching any OTHER app's dialogs;
+    // see that class's own doc for why a package check alone isn't used.
+    private static volatile long expectingConsentDialogUntilMs = 0;
+    private static final long CONSENT_DIALOG_AUTO_TAP_WINDOW_MS = 20_000;
+
+    static void armConsentDialogAutoTap() {
+        expectingConsentDialogUntilMs = System.currentTimeMillis() + CONSENT_DIALOG_AUTO_TAP_WINDOW_MS;
+    }
+
+    static boolean isExpectingConsentDialog() {
+        return System.currentTimeMillis() < expectingConsentDialogUntilMs;
+    }
+
+    static void disarmConsentDialogAutoTap() {
+        expectingConsentDialogUntilMs = 0;
+    }
+
     static boolean isEnabled(Context context) {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .getBoolean(KEY_ENABLED, false);

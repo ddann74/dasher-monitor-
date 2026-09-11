@@ -42,6 +42,33 @@ crash fixed via a new try/catch around the type-declaration call
 itself, independent of ordering. "Doesn't crash" and "actually
 produces a playable recording" are now treated as two separate claims
 needing separate confirmation - see §13.4. See §13/§14; PROGRESS.md.
+§21 (added 2026-09-11, CRITICAL, FIXED): driver asked "there don't
+appear to be any screen recordings, could you explain why," with a
+real 2026-09-09/09-11 diagnostic log attached. That log showed ZERO
+successful recordings across 2+ real days: one process crash (OEM
+kill, confirmed knownAggressiveOem=true) cleared the in-memory consent
+grant early on 09-09, and every trip after that logged "no consent
+held" and fired a "Trip Capture revoked" alert notification -- which
+had no `setContentIntent` at all, so tapping it did nothing. The
+driver had no way to discover, from the alert itself, that the fix was
+"open Setup, toggle the switch off and back on." Fixed by deep-linking
+that specific alert straight to PermissionsActivity with a new extra
+that re-fires the real OS consent dialog immediately. See §21/§22;
+also documents a SEPARATE, NOT fixed, genuine Android platform
+limitation found in the same log (§21.3): the very first recording
+attempt, on a never-before-used consent token, also failed --
+apparently from the token going stale after sitting unused for the ~8
+minutes between being granted in Setup and the trip actually starting,
+not from reuse. No code fix for that exists yet; see §21.3 for why.
+§23 (added 2026-09-11, FIXED, with real disclosed limits): driver
+followed up on §21 -- "I don't want to have to tap anything ... done
+automatically." Auto-launches Setup with zero interaction at trip
+start, and auto-taps the real OS consent dialog itself via the
+existing accessibility service (a narrow, time-boxed, documented
+exception to its "Dasher content only" rule). Android still always
+shows the real dialog -- no app can remove that -- this only answers
+it automatically. Deliberately NOT extended to mid-trip drops (a
+disclosed safety trade-off, see §23.3). See §23/§24.
 Scope: this one feature only. Not a general codebase pass.
 
 ## 0. What this is / isn't
@@ -1302,4 +1329,248 @@ Fixed by:
       failure paths (would need an actual mid-trip permission-revoke
       or rotation failure to observe directly - unlikely to occur
       naturally during a normal field test)
+- [ ] Driver sign-off.
+
+## 21. Driver-asked (2026-09-11): "there don't appear to be any screen recordings, could you explain why"
+
+A real diagnostic log (`dasher_monitor_full_history20.txt`, 6747
+lines, 2026-09-09 16:54 through 2026-09-11 22:23) was attached. Every
+`SCREEN_RECORDING`-tagged line in it, in order:
+
+1. `16:54:16` Consent granted -- recording will start with the next trip
+2. `17:02:22` Enabled and consent held, but starting the recorder
+   failed: `SecurityException: Don't re-use the resultData to
+   retrieve the same projection instance, and don't use a token that
+   has timed out. ...` (the FIRST-EVER attempt to use this token --
+   see §21.3)
+3. `17:51:26` Removed 1 unfinalized recording segment(s) left over
+   from a previous crash (a real process crash/OEM kill happened
+   ~17:50 -- `DEVICE: manufacturer=OPPO model=CPH2591
+   knownAggressiveOem=true` -- between the two log lines above and
+   this one)
+4. `22:50:36`, `22:55:16`, 09-09 `23:16:34`, `23:20:56`, 09-10
+   `08:19:47`, `09:54:35`, `10:49:05`, 09-11 `21:59:23`, `22:23:49` --
+   nine separate trips, every one: "Enabled, but no consent held
+   (process likely restarted since it was last granted) - this trip
+   will not be recorded"
+5. `09:54:50`, `21:59:38` -- two "Periodic capture health check: NOT
+   running" lines (the §19 fix, already deployed and working exactly
+   as designed -- it correctly detected and logged the ongoing
+   failure, it just couldn't fix it)
+
+**Net result across this entire 2+ day, cross-day log: zero
+successful recordings.** Two distinct, separately-confirmed causes:
+
+### 21.1 Root cause A (accounts for 9 of the 11 failed trips): the fix notification had no tap action
+
+The consent grant is deliberately held only in memory (see this file's
+class-level design in `ScreenRecordingController` -- correct behavior,
+matching the real OS grant's own lifetime) and is cleared by any
+process restart. The 17:50 OEM kill cleared it once, correctly, per
+design. From then on the ONLY way to recover is the driver manually
+reopening Setup and toggling the already-"on" switch off then back on
+(confirmed in `PermissionsActivity.refreshScreenRecordingStatus()`,
+which already prints exactly that instruction -- but only to a driver
+who is already looking at that screen).
+
+The actual bug: `TripForegroundService.raisePermissionRevokedAlert()`
+built every "Trip Capture revoked" notification with no
+`setContentIntent` at all. Confirmed directly in the source --
+`Notification.Builder(...).setContentTitle(...).setContentText(...)
+...build()`, nothing wiring a `PendingIntent`. Tapping it did nothing.
+Across 2+ real days of driving, this alert fired on every single trip
+start and, with no tap action and no other cue that the switch itself
+needs re-toggling (not just leaving Setup open), was apparently always
+dismissed rather than acted on.
+
+**Fix**: `raisePermissionRevokedAlert()` now attaches a
+`setContentIntent` specifically when `permissionName` is `"Trip
+Capture"`, launching `PermissionsActivity` with a new extra,
+`EXTRA_AUTO_REREQUEST_RECORDING_CONSENT`. `PermissionsActivity` was
+already able to auto-fire the real OS consent dialog on open for the
+first-run case (`EXTRA_AUTO_REQUEST_RECORDING_CONSENT`, driven by
+`setChecked(true)` on a real false -> true transition) -- that
+mechanism doesn't fire here, since the switch is already checked and
+`setChecked(true)` on an unchanged value never calls the listener. The
+new extra instead calls `requestScreenRecordingConsent()` directly
+when the switch is checked but no consent is currently held, so one
+tap on the notification re-opens the exact real OS consent dialog with
+no extra navigation.
+
+### 21.2 Root cause B (accounts for the 09-09 22:50 restart itself): a real OEM background kill
+
+`knownAggressiveOem=true` (OPPO), confirmed by
+`SCREEN_RECORDING: Removed 1 unfinalized recording segment(s) left
+over from a previous crash` at 17:51:26 -- this app's process was
+killed by the OS roughly an hour after the driver finished Setup, well
+before any trip had successfully recorded anything. This class of kill
+is already the documented, known-unsolvable-at-the-app-level subject
+of `docs/watchdog_reliability/PRD.md` (the watchdog there recovers GPS
+monitoring after exactly this kind of kill -- it was never meant to,
+and can't, preserve an in-memory OS consent grant across it). Not a
+new finding, not something §21.1's fix changes -- restated here only
+because it's the event that triggered the specific 2+ day failure
+window this section investigates.
+
+### 21.3 Separate, NOT fixed: the very first attempt, on a token that had never been used before, also failed
+
+Line 2 above is NOT explained by §21.1 or §21.2 -- it happened at
+17:02:22, eight minutes after consent was granted at 16:54:16, in the
+SAME process (`hasPendingConsent()` returned true; no restart occurred
+until ~17:50, confirmed by there being only one `SERVICE: onCreate()`
+line before this point). This was the first and only attempted use of
+that token. The exception text covers two distinct Android-side
+rejections in one message -- reuse of already-consumed `resultData`,
+or a token that "has timed out" -- and reuse is ruled out here since
+nothing else in this codebase calls `getMediaProjection()` more than
+once per granted token (confirmed reading `acquireProjection()`).
+That leaves timeout: the ~8 minutes between the driver finishing the
+consent dialog and Start Monitoring actually being tapped (spent
+working through the OTHER permissions on the same Setup screen --
+location, overlay, notification access, accessibility, battery
+exemption, visible in the surrounding log) appears to have been enough
+for Android to invalidate the grant on its own, independent of any
+restart.
+
+This is a genuine constraint of the platform API, not a bug in this
+codebase's own logic, and this app's whole "grant once during Setup,
+consume whenever the next trip happens to start" design is
+structurally exposed to it -- worse, several real trips in this exact
+log start from a background trigger with no Activity available at all
+(`DRIVING_DETECTION: Auto-started monitoring from detected driving
+motion (Dasher was never opened)` at 22:50:36), so consent flatly
+cannot be requested at the moment those trips start; it can only ever
+be requested ahead of time, in Setup, exactly as today. There is no
+code fix proposed for this in this PRD round -- speculatively
+shortening the gap (e.g. moving the recording toggle to the end of the
+Setup flow) might reduce how often the same driver hits this specific
+8-minute-class window, but there is no confirmed real timeout
+duration to design against (Android does not document one), and no
+device available in this environment to measure it. Flagged here as a
+disclosed, open limitation rather than papered over as fixed.
+
+## 22. Success criteria for §21
+
+- [x] `raisePermissionRevokedAlert()`'s "Trip Capture" alert carries a
+      `setContentIntent` that opens `PermissionsActivity`
+- [x] `PermissionsActivity` re-fires the real OS consent dialog
+      directly (not via the no-op `setChecked(true)` path) when opened
+      via the new extra with the switch already on and no consent held
+- [x] §21.3's first-use-token-timeout finding documented as a genuine
+      open platform limitation, not silently folded into "fixed"
+- [ ] HONEST LIMIT, same as every prior section: no Android
+      device/emulator available in this environment -- the notification
+      tap flow and the re-fired consent dialog could not be triggered
+      and observed on a real device, only read against Android's
+      documented `PendingIntent`/`Notification.Builder` and
+      `ActivityResultLauncher` behavior.
+- [ ] Driver confirms: after this fix, tapping a "Trip Capture
+      revoked" notification opens Setup and immediately shows the real
+      OS consent dialog, and granting it makes the next trip record.
+- [ ] Driver sign-off.
+
+## 23. Driver-asked (2026-09-11): "I don't want to have to tap anything, I want it done automatically, without me having to do anything"
+
+Direct follow-up to §21/§22: a tappable notification is still one tap.
+The driver explicitly asked for zero interaction. Ground truth stated
+plainly first: Android does not allow any app to silently grant itself
+a screen-recording consent, ever, regardless of what other permissions
+it holds -- the real OS dialog is guaranteed to appear, by design, as a
+deliberate privacy boundary. This section does not remove that dialog;
+it removes the driver's own need to physically answer it.
+
+Two changes, both scoped as narrowly as possible:
+
+**23.1 Auto-launch Setup with zero interaction.** Previously, recovery
+still required the driver to tap the §21 notification themselves.
+`TripForegroundService.autoLaunchPermissionsActivityForConsentRecovery()`
+now fires automatically the moment "no consent held" is detected at
+trip start, reusing `AppNotificationListenerService.launchDasherApp()`'s
+own already-proven 3-layer Background Activity Launch workaround
+verbatim (overlay-exemption + direct `startActivity()`, then a
+full-screen-intent notification fallback) rather than inventing a new
+one. Deliberately NOT also called from `checkTripCaptureHealth()`'s
+mid-trip check -- see §23.3.
+
+**23.2 Auto-tap the real OS dialog itself.** Once Setup opens (auto-
+launched or manually), it already re-fires the real consent dialog
+(§21/§22). `DasherAccessibilityService.tryAutoTapConsentDialog()` now
+watches for that dialog, ONLY for a short armed window immediately
+around this app's own call to `createScreenCaptureIntent()`
+(`ScreenRecordingController.armConsentDialogAutoTap()` /
+`isExpectingConsentDialog()`), and taps the real affirmative button on
+the driver's behalf -- handling both a single confirm dialog and
+Android 14+'s two-step "Entire screen vs a single app, then Start now"
+flow, never tapping anything matching a cancel/deny label.
+
+This is the one deliberate, narrow exception to this class's
+documented "only ever reads Dasher's own content" rule -- scoped by
+TIME (the arm/disarm window), not by package name, specifically
+because the dialog's real owning package is unconfirmed across Android
+versions/OEM skins and a wrong package check would silently disable
+the whole thing. See `tryAutoTapConsentDialog()`'s own doc and the
+updated `accessibility_service_config.xml` comment for the full
+reasoning.
+
+**23.3 Deliberately NOT automated: mid-trip drops.** Popping a
+full-screen Activity over whatever the driver is looking at (a live
+delivery, turn-by-turn navigation) WHILE a trip is already under way
+is a real safety trade-off this round chose not to take. Auto-launch
+only fires at trip start (before or right as driving begins, matching
+this app's own existing risk posture for the new-offer auto-launch
+feature); a drop discovered mid-trip by the periodic health check
+still only gets the §21 tappable notification, on purpose.
+
+**23.4 HONEST LIMITS, not implementation shortcuts:**
+- The consent dialog still genuinely appears on screen, briefly, even
+  when everything works -- this automates answering it, not removing
+  it. Nothing can remove it; that would require an Android platform
+  change, not an app-level one.
+- The auto-tap is a real screen-reading heuristic matched against
+  English button labels this environment could not confirm against an
+  actual device, OS version, or OEM skin (this exact driver's is
+  OPPO ColorOS, confirmed `knownAggressiveOem=true` in the §21 log).
+  If the real wording doesn't match, this silently does nothing and
+  falls back to the still-fully-functional §21/§22 tappable
+  notification -- not a silent failure, just a degraded (one-tap)
+  recovery instead of a zero-tap one.
+- Auto-launching Setup is still subject to the same Background
+  Activity Launch restrictions §23.1's reused mechanism has always
+  had -- a blocked launch fails silently, same honesty gap already
+  documented for the Dasher offer auto-launch.
+- No Android device/emulator available in this environment for any of
+  §23 -- none of this could be triggered and observed on a real
+  device, only read against Android's documented `AccessibilityNodeInfo`,
+  `PendingIntent`, and `MediaProjectionManager` behavior.
+
+## 24. Success criteria for §23
+
+- [x] `ScreenRecordingController.armConsentDialogAutoTap()` /
+      `isExpectingConsentDialog()` / `disarmConsentDialogAutoTap()`
+      added, armed only in `requestScreenRecordingConsent()`, disarmed
+      on every real result (success or decline) and on a terminal tap
+- [x] `TripForegroundService.autoLaunchPermissionsActivityForConsentRecovery()`
+      added, called only from the trip-start "no consent held" branch
+- [x] `DasherAccessibilityService.tryAutoTapConsentDialog()` added,
+      gated on the armed window, never on package name alone; handles
+      the single-dialog and two-step-picker cases; never taps a
+      cancel/deny-labeled control
+- [x] `PermissionsActivity` auto-finishes after an auto-launched
+      recovery's dialog is answered, so Setup doesn't linger in the
+      foreground
+- [x] `accessibility_service_config.xml`'s comment updated to disclose
+      this narrow exception to the "only reads Dasher's content" rule
+- [x] Brace/paren balance confirmed on every touched file
+- [ ] HONEST LIMIT: no Android device/emulator available in this
+      environment -- see §23.4. Every mechanism here is read directly
+      against documented Android platform behavior and this codebase's
+      own already-field-tested `launchDasherApp()` precedent, not
+      observed running.
+- [ ] Driver confirms: after a process restart clears consent, the
+      NEXT trip starting recovers with genuinely zero taps -- Setup
+      opens itself, the real OS dialog appears and is answered
+      automatically, and that trip (or the one after) records.
+- [ ] Driver confirms the real button wording on their device (OPPO
+      ColorOS) actually matches what the auto-tap looks for -- if not,
+      report the exact dialog text so the matcher can be corrected.
 - [ ] Driver sign-off.

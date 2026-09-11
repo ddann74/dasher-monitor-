@@ -597,6 +597,19 @@ public class DasherAccessibilityService extends AccessibilityService {
         boolean isDasher = packageName.equals(DASHER_PACKAGE);
 
         try {
+            // --- 0. Screen recording consent dialog auto-tap (docs/
+            // screen_recording/PRD.md §23) --- deliberately runs BEFORE
+            // the Dasher-only gate below: the consent dialog is never
+            // Dasher's own window. See tryAutoTapConsentDialog()'s own
+            // doc for why this is the one exception to this class's
+            // "only ever reads Dasher's content" rule, and why it's
+            // scoped by time rather than by package name.
+            if ((event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+                    || event.getEventType() == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+                    && ScreenRecordingController.isExpectingConsentDialog()) {
+                tryAutoTapConsentDialog(packageName);
+            }
+
             // --- 1. Mode detection (see class doc) ---
             // Debounced: a single reading of a DIFFERENT package is not
             // enough to commit a real mode change on its own -- confirmed
@@ -1438,6 +1451,96 @@ public class DasherAccessibilityService extends AccessibilityService {
                         logDiagnostic("WEATHER", "Query failed: " + message + " (" + getNetworkInfo() + ")");
                     }
                 });
+    }
+
+    /** Set as a side effect of findConsentDialogButton() -- whichever of
+      * the two candidates it returns, this says which one, so the caller
+      * knows whether a further dialog step (mode picker -> confirm) is
+      * still expected before disarming the auto-tap window. */
+    private AccessibilityNodeInfo consentDialogEntireScreenMatch;
+    private AccessibilityNodeInfo consentDialogAffirmativeMatch;
+
+    /**
+     * docs/screen_recording/PRD.md §23 -- driver-requested: re-granting
+     * screen-recording consent after it's lost should need zero manual
+     * interaction. Auto-taps the real OS MediaProjection consent dialog
+     * THIS app itself just triggered (see
+     * ScreenRecordingController.armConsentDialogAutoTap() /
+     * PermissionsActivity.requestScreenRecordingConsent()) -- the dialog
+     * still genuinely appears and still requires a real tap, Android
+     * gives no API to skip that; this just performs that tap on the
+     * driver's behalf instead of leaving it to them.
+     *
+     * PRIVACY NOTE: this is the one deliberate exception to this class's
+     * own "only ever reads Dasher's content" rule (see the accessibility
+     * service's XML config comment, now updated to match). It is scoped
+     * by TIME, not by package name -- isExpectingConsentDialog() is only
+     * ever true for a few seconds immediately after this app's own call
+     * to createScreenCaptureIntent(), so there's no window where this
+     * could act on some unrelated app's dialog. A package check was
+     * deliberately NOT used as the primary guard: the dialog's actual
+     * owning package varies by Android version/OEM skin (unconfirmed --
+     * no real device available in this environment to check), and
+     * getting that wrong would silently disable this whole feature.
+     * Button text is inspected here ONLY, never logged in full and never
+     * fed into collectVisibleText's general Dasher-content path.
+     *
+     * HONEST LIMIT: Android 14+ can show a two-step flow (pick "Entire
+     * screen" vs "A single app", THEN a "Start now" confirm) instead of
+     * one dialog -- this handles both by preferring an "entire screen"
+     * option when present, otherwise a "start now"/"allow"/"ok"
+     * affirmative button, and disarms the window only after a terminal
+     * (non-"entire screen") tap. Never taps anything matching a
+     * cancel/deny/negative label. Best-effort: if the real dialog's
+     * wording doesn't match any of these (a different Android version or
+     * OEM skin), this silently does nothing and the tappable notification
+     * (§21) remains the fallback -- not a guarantee, since there's no
+     * device here to confirm the real button text against.
+     */
+    private void tryAutoTapConsentDialog(String packageName) {
+        if (packageName.isEmpty() || packageName.equals(DASHER_PACKAGE) || packageName.equals(getPackageName())) {
+            return; // this app's own Setup screen, or Dasher -- never the system dialog
+        }
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) {
+            return;
+        }
+        consentDialogEntireScreenMatch = null;
+        consentDialogAffirmativeMatch = null;
+        collectConsentDialogButtons(root);
+        AccessibilityNodeInfo target = consentDialogEntireScreenMatch != null
+                ? consentDialogEntireScreenMatch : consentDialogAffirmativeMatch;
+        if (target != null) {
+            boolean isTerminal = (target == consentDialogAffirmativeMatch);
+            boolean clicked = target.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            logDiagnostic("SCREEN_RECORDING", "Auto-tap: clicked \"" + target.getText()
+                    + "\" in package \"" + packageName + "\" (clicked=" + clicked
+                    + ", terminal=" + isTerminal + ")");
+            if (isTerminal) {
+                ScreenRecordingController.disarmConsentDialogAutoTap();
+            }
+        }
+    }
+
+    private void collectConsentDialogButtons(AccessibilityNodeInfo node) {
+        if (node == null) {
+            return;
+        }
+        CharSequence text = node.getText();
+        String lower = text != null ? text.toString().trim().toLowerCase(java.util.Locale.US) : "";
+        if (node.isClickable() && !lower.isEmpty()
+                && !lower.contains("cancel") && !lower.contains("deny")
+                && !lower.contains("don't") && !lower.contains("dont") && !lower.contains("no thanks")) {
+            if (lower.contains("entire screen")) {
+                consentDialogEntireScreenMatch = node;
+            } else if (lower.contains("start now") || lower.equals("allow") || lower.equals("ok")) {
+                consentDialogAffirmativeMatch = node;
+            }
+        }
+        int childCount = node.getChildCount();
+        for (int i = 0; i < childCount; i++) {
+            collectConsentDialogButtons(node.getChild(i));
+        }
     }
 
     /**
