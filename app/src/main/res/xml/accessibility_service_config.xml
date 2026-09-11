@@ -5,7 +5,7 @@
   when the Dasher app is or isn't in the foreground, which drives DASHER
   vs GENERAL mode detection (see report requirement re: navigation
   efficiency monitor). For every app except Dasher, the code in
-  DasherAccessibilityService only ever inspects the bare package name --
+  DasherAccessibilityService only ever inspects the bare package name,
   with ONE narrow, deliberate exception (docs/screen_recording/PRD.md
   §23, tryAutoTapConsentDialog()): for a few seconds immediately after
   this app's own call to request screen-recording consent, it reads
@@ -13,8 +13,15 @@
   currently active, specifically to auto-tap the real OS consent dialog
   that call itself just triggered. That window is scoped by TIME (a
   short arm/disarm flag set only around that one call), not by package,
-  so it can never fire outside that narrow moment -- see that method's
+  so it can never fire outside that narrow moment; see that method's
   own doc for the full reasoning.
+
+  NOTE: XML comments cannot contain a double hyphen anywhere in their
+  body (not just at the very end) or Android's resource compiler fails
+  to parse this whole file with a SAXParseException, confirmed by a
+  real CI failure on this exact file. Comments here use single hyphens
+  or semicolons instead of the double-hyphen em-dash style used
+  elsewhere in this codebase's Java comments.
 
   typeViewClicked was added specifically to detect Accept/Decline taps
   on the offer screen (accept/decline outcome tracking); like every
