@@ -69,6 +69,15 @@ exception to its "Dasher content only" rule). Android still always
 shows the real dialog -- no app can remove that -- this only answers
 it automatically. Deliberately NOT extended to mid-trip drops (a
 disclosed safety trade-off, see §23.3). See §23/§24.
+§25 (added 2026-09-11, FIXED): driver asked whether the diagnostic log
+actually confirms the field-test checklist's items. An audit found it
+mostly does, with real visual-only exceptions, plus one closable gap
+that directly undermined §21-§23: the checklist's own n1 (tapped
+recovery) and n2 (zero-tap recovery) items logged identically, so the
+log alone couldn't tell them apart. Every consent-recovery entry point
+now tags which path opened Setup; also fixed a real bug found while
+building this (one shared, racily-mutated `Intent` across three launch
+paths). See §25/§26.
 Scope: this one feature only. Not a general codebase pass.
 
 ## 0. What this is / isn't
@@ -1573,4 +1582,73 @@ still only gets the §21 tappable notification, on purpose.
 - [ ] Driver confirms the real button wording on their device (OPPO
       ColorOS) actually matches what the auto-tap looks for -- if not,
       report the exact dialog text so the matcher can be corrected.
+- [ ] Driver sign-off.
+
+## 25. Driver-asked (2026-09-11): "will the diagnostic log capture all the checklist items to confirm how they operate"
+
+An audit of the field-test checklist's 19 items against actual
+`logDiagnostic` call sites found the coverage genuinely mixed -- most
+items are at least partially log-verifiable, several are visual-only
+by nature (a video actually playing, a map tile actually rendering),
+and a few had real, closable gaps. One gap directly undermined the
+§21-§23 work just shipped: checklist items n1 ("tap the Trip Capture
+alert") and n2 ("touch nothing, let it auto-recover") both opened
+`PermissionsActivity` via the exact same code path and logged
+IDENTICAL lines from there on -- there was no way to tell, from the
+log alone, whether a given consent recovery actually happened with
+zero taps (n2, the thing §23 was built to prove) or required a real
+tap (n1, or a degraded fallback).
+
+**Fix**: every caller that can open `PermissionsActivity` for consent
+recovery now tags a `EXTRA_CONSENT_RECOVERY_SOURCE` string before
+handing off its Intent, and `onCreate()` logs which one fired, with an
+explicit note on what that source can and can't prove:
+
+- `alert_notification_tap` (the §21 alert's own tap) and
+  `auto_launch_overlay_tap` (§23's overlay tapped) -- both unambiguous
+  real taps.
+- `auto_launch_direct` -- §23's bare `startActivity()` succeeding
+  unblocked; the one genuinely zero-tap case, and the only one that
+  actually confirms n2.
+- `auto_launch_fullscreen_notification` -- §23's full-screen-intent
+  fallback. Deliberately logged as AMBIGUOUS, not claimed as zero-tap:
+  Android's own documented behavior is that this either auto-launches
+  while locked or silently degrades to an ordinary heads-up
+  notification the driver has to tap when unlocked, and there is no
+  API that reports back which one actually happened.
+
+A real implementation bug found and fixed while building this: the
+original §23 code reused ONE mutable `Intent` object across all three
+launch paths (direct call, overlay's tap callback, the notification's
+`PendingIntent`), relying on setting its extra right before each use.
+The overlay's tap callback can fire arbitrarily late -- whenever the
+driver taps it, if ever -- so by the time it ran, the shared Intent's
+extra could already have been overwritten by whichever path set it
+last, misattributing the source. Fixed by building three separate,
+independently-tagged `Intent` instances up front
+(`buildConsentRecoveryLaunchIntent(String source)`), one per path.
+
+## 26. Success criteria for §25
+
+- [x] `PermissionsActivity.EXTRA_CONSENT_RECOVERY_SOURCE` added
+- [x] All three §23 auto-launch paths (direct, overlay tap, full-screen
+      notification) tag a distinct source via separate `Intent`
+      instances, not a shared mutated one
+- [x] The §21 alert's own tap intent tags `alert_notification_tap`
+- [x] `onCreate()` logs the source with an explicit note on what it
+      does/doesn't prove, specifically calling out
+      `auto_launch_fullscreen_notification` as ambiguous rather than
+      claiming it as zero-tap
+- [x] Field-test checklist artifact's n1/n2 items updated to reference
+      checking this specific log line
+- [x] Brace/paren balance confirmed on both touched files
+- [ ] HONEST LIMIT: no Android device/emulator available in this
+      environment -- the source-tagging itself could not be observed
+      firing on a real device, only read against documented Android
+      `Intent`/`PendingIntent` extra-passing semantics.
+- [ ] Driver confirms: after n1 (tapping the alert), the log shows
+      `alert_notification_tap`; after n2 (touching nothing), it shows
+      `auto_launch_direct` or, if the direct launch was blocked,
+      `auto_launch_fullscreen_notification` (in which case n2 isn't
+      fully confirmed either way -- worth noting which one appeared).
 - [ ] Driver sign-off.

@@ -46,6 +46,17 @@ public class PermissionsActivity extends AppCompatActivity {
       * fire it. This calls requestScreenRecordingConsent() directly. */
     static final String EXTRA_AUTO_REREQUEST_RECORDING_CONSENT = "auto_rerequest_recording_consent";
 
+    /** docs/screen_recording/PRD.md §25 -- the field-test checklist's own
+      * n1/n2 items ask the driver to confirm the §21 tappable-alert path
+      * and the §23 zero-tap auto-launch path SEPARATELY, but both set
+      * EXTRA_AUTO_REREQUEST_RECORDING_CONSENT above and produced
+      * IDENTICAL log lines from here on -- there was no way to tell which
+      * one actually ran from the log alone. Every caller that can trigger
+      * this Activity for consent recovery now tags which path it used;
+      * see onCreate()'s handling of this extra for the values and what
+      * each one can and can't prove. */
+    static final String EXTRA_CONSENT_RECOVERY_SOURCE = "consent_recovery_source";
+
     private PyObject engine;
     private TextView permissionStatusText;
     private Switch screenRecordingSwitch;
@@ -360,6 +371,24 @@ public class PermissionsActivity extends AppCompatActivity {
         if (getIntent().getBooleanExtra(EXTRA_AUTO_REREQUEST_RECORDING_CONSENT, false)
                 && screenRecordingSwitch.isChecked() && !ScreenRecordingController.hasPendingConsent()) {
             autoLaunchedForConsentRecovery = true;
+            // §25 -- makes n1 (tapped the alert) and n2 (touched nothing)
+            // distinguishable in the log, which they weren't before: both
+            // set the extra above and logged identically from here on.
+            String source = getIntent().getStringExtra(EXTRA_CONSENT_RECOVERY_SOURCE);
+            String interpretation;
+            if ("alert_notification_tap".equals(source) || "auto_launch_overlay_tap".equals(source)) {
+                interpretation = " (a real tap -- confirms n1's path, not n2's)";
+            } else if ("auto_launch_direct".equals(source)) {
+                interpretation = " (genuinely zero-tap -- confirms n2's path worked)";
+            } else if ("auto_launch_fullscreen_notification".equals(source)) {
+                interpretation = " (ambiguous by Android's own design -- this fires whether the OS "
+                        + "auto-launched it while locked or degraded to a heads-up notification the "
+                        + "driver had to tap; not distinguishable from here either way)";
+            } else {
+                interpretation = " (unknown -- caller didn't tag its source)";
+            }
+            logDiagnostic("SCREEN_RECORDING", "Consent recovery Setup opened via: "
+                    + (source != null ? source : "unknown") + interpretation);
             requestScreenRecordingConsent();
         }
         viewRecordingsButton.setOnClickListener(v -> showRecordingsList());

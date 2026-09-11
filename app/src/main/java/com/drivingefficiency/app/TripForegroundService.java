@@ -896,6 +896,11 @@ public class TripForegroundService extends Service {
         if ("Trip Capture".equals(permissionName)) {
             Intent tapIntent = new Intent(this, PermissionsActivity.class);
             tapIntent.putExtra(PermissionsActivity.EXTRA_AUTO_REREQUEST_RECORDING_CONSENT, true);
+            // §25 -- a real tap on THIS notification is unambiguous; tags
+            // it distinctly from §23's auto-launch paths so the field-test
+            // checklist's n1 (tap the alert) and n2 (touch nothing) are
+            // actually distinguishable in the log afterward.
+            tapIntent.putExtra(PermissionsActivity.EXTRA_CONSENT_RECOVERY_SOURCE, "alert_notification_tap");
             tapIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             PendingIntent tapPendingIntent = PendingIntent.getActivity(this, notificationId, tapIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT
@@ -944,23 +949,43 @@ public class TripForegroundService extends Service {
      * notification (and the §21 tappable alert raised right before this
      * is called) both still fire regardless, as independent fallbacks.
      */
+    /**
+     * docs/screen_recording/PRD.md §25 -- three genuinely distinct paths
+     * can end up opening PermissionsActivity from here (direct launch,
+     * overlay tap, full-screen-intent notification), and the field-test
+     * checklist's n1/n2 items need to tell which one actually ran from
+     * the log alone. A SEPARATE Intent per path, each tagged before it's
+     * handed off, rather than one shared mutable Intent whose extra gets
+     * overwritten -- the overlay's tap callback can fire arbitrarily late
+     * (whenever the driver taps it, if at all), so reusing one Intent
+     * object across all three would race with whichever tag was set last,
+     * not necessarily the one that actually matches how it was opened.
+     */
+    private Intent buildConsentRecoveryLaunchIntent(String source) {
+        Intent intent = new Intent(this, PermissionsActivity.class);
+        intent.putExtra(PermissionsActivity.EXTRA_AUTO_REREQUEST_RECORDING_CONSENT, true);
+        intent.putExtra(PermissionsActivity.EXTRA_CONSENT_RECOVERY_SOURCE, source);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        return intent;
+    }
+
     private void autoLaunchPermissionsActivityForConsentRecovery() {
         try {
-            Intent launchIntent = new Intent(this, PermissionsActivity.class);
-            launchIntent.putExtra(PermissionsActivity.EXTRA_AUTO_REREQUEST_RECORDING_CONSENT, true);
-            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            Intent directLaunchIntent = buildConsentRecoveryLaunchIntent("auto_launch_direct");
+            Intent overlayLaunchIntent = buildConsentRecoveryLaunchIntent("auto_launch_overlay_tap");
+            Intent fullScreenLaunchIntent = buildConsentRecoveryLaunchIntent("auto_launch_fullscreen_notification");
 
             OverlayHelper.showMessage(this, "Re-enabling trip recording...",
                     6 * 1000, android.graphics.Color.parseColor("#CC1565C0"), () -> {
                         try {
-                            startActivity(launchIntent);
+                            startActivity(overlayLaunchIntent);
                         } catch (RuntimeException e) {
                             logDiagnostic("ERROR", "Consent-recovery overlay tap-to-launch exception: "
                                     + android.util.Log.getStackTraceString(e));
                         }
                     });
             try {
-                startActivity(launchIntent);
+                startActivity(directLaunchIntent);
                 logDiagnostic("SCREEN_RECORDING", "Auto-launch: attempted direct foreground launch of "
                         + "Setup to re-grant consent -- not confirmable whether it actually switched, "
                         + "see class docs");
@@ -981,7 +1006,7 @@ public class TripForegroundService extends Service {
                 manager.createNotificationChannel(channel);
             }
             PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(
-                    this, CONSENT_RECOVERY_NOTIFICATION_ID, launchIntent,
+                    this, CONSENT_RECOVERY_NOTIFICATION_ID, fullScreenLaunchIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT
                             | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0));
             Notification notification = new Notification.Builder(this, CONSENT_RECOVERY_CHANNEL_ID)
