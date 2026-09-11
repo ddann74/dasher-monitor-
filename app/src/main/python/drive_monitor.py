@@ -1601,6 +1601,46 @@ def haversine_meters(lat1, lon1, lat2, lon2):
     return 2 * R * math.asin(math.sqrt(a))
 
 
+def _rotate_table_keep_recent(conn, table, max_rows):
+    """
+    docs/history_table_rotation/PRD.md -- driver-audit finding
+    (2026-09-11): shared by every genuinely-unbounded history table
+    (pickup_location_history, dropoff_location_history,
+    offer_distance_accuracy) -- a real, growing-forever table that
+    inserts one new row per delivery, unlike the "history"-named tables
+    that turned out to already be single-row running-average upserts
+    (delivery_speed_history, walking_speed_history,
+    accel_dynamics_history, park_to_walk_gap_history all use `INSERT
+    ... ON CONFLICT(id) DO UPDATE`) or restaurant_wait_history (keyed
+    by restaurant_name, so it's naturally bounded by how many distinct
+    restaurants a driver actually visits, not by trip count).
+
+    Same simple delete-oldest-past-cap shape as
+    DriveMonitorEngine.record_zone_activity_snapshot's own
+    ZONE_ACTIVITY_LOG_MAX_ROWS rotation, not diagnostic_log's
+    rotate-to-archive-file behavior -- unlike a debug log, losing the
+    OLDEST rows here means losing the earliest real learning samples
+    for whichever restaurant/address they belonged to, a real,
+    accepted tradeoff for bounding storage growth rather than a
+    data-quality decision made lightly. Every caller uses a
+    deliberately generous limit (tens of thousands of rows, not
+    diagnostic_log's 500) specifically so this practically never
+    triggers in realistic use -- it exists as a genuine ceiling against
+    truly pathological/multi-year growth, not as an active pruning
+    policy.
+
+    `table` is always one of this file's own hardcoded literal table
+    names at every real call site, never derived from driver input --
+    the f-string below is safe for that reason, not because inputs are
+    escaped or validated.
+    """
+    conn.execute(
+        f"DELETE FROM {table} WHERE id NOT IN "
+        f"(SELECT id FROM {table} ORDER BY id DESC LIMIT ?)",
+        (max_rows,),
+    )
+
+
 def _sample_stdev(values):
     """
     Sample standard deviation (n-1 denominator) -- shared by
@@ -3680,6 +3720,11 @@ class TripManager:
 
         return delivery_speed_event
 
+    # docs/history_table_rotation/PRD.md -- same "generous ceiling, not
+    # an active pruning policy" reasoning as
+    # DriveMonitorEngine.PICKUP_LOCATION_HISTORY_MAX_ROWS.
+    OFFER_DISTANCE_ACCURACY_MAX_ROWS = 50_000
+
     def _persist_pickup_job_row(self, job, deadhead_km, now_ts,
                                  distance_at_departure_km=None, cumulative_km_now=None):
         """
@@ -3746,6 +3791,8 @@ class TripManager:
             job.get("accepted_ts"), job.get("payout"), estimated_hourly_rate,
             round(actual_hourly_rate, 2) if actual_hourly_rate is not None else None,
         ))
+        _rotate_table_keep_recent(self.db.conn, "offer_distance_accuracy",
+                                   self.OFFER_DISTANCE_ACCURACY_MAX_ROWS)
 
 
 # ------------------------------------------------------------------------- #
@@ -4058,6 +4105,17 @@ class DriveMonitorEngine:
                 best_match, best_count = row["restaurant_name"], row["cnt"]
         return best_match if best_match is not None else name
 
+    # docs/history_table_rotation/PRD.md -- UNCONFIRMED reasonable
+    # defaults, same honesty status as every other threshold in this
+    # app (ZONE_SNAPSHOT_MIN_INTERVAL_SECONDS, etc.). Deliberately far
+    # larger than DIAGNOSTIC_LOG_ROTATION_LIMIT (500) or
+    # ZONE_ACTIVITY_LOG_MAX_ROWS (500) -- this is real learning data
+    # (zone maps, profitability), not a debug log, so the ceiling is
+    # sized to practically never trigger in realistic use rather than
+    # to actively keep the table small.
+    PICKUP_LOCATION_HISTORY_MAX_ROWS = 50_000
+    DROPOFF_LOCATION_HISTORY_MAX_ROWS = 50_000
+
     def record_pickup_location(self, restaurant_name, lat, lon):
         """
         Starts persisting real, geocoded pickup coordinates going
@@ -4089,6 +4147,8 @@ class DriveMonitorEngine:
             INSERT INTO pickup_location_history (restaurant_name, lat, lon, timestamp)
             VALUES (?, ?, ?, ?)
         """, (canonical_name, lat, lon, time.time()))
+        _rotate_table_keep_recent(self.db.conn, "pickup_location_history",
+                                   self.PICKUP_LOCATION_HISTORY_MAX_ROWS)
         self.db.conn.commit()
 
     def record_dropoff_location(self, address, lat, lon):
@@ -4108,6 +4168,8 @@ class DriveMonitorEngine:
             INSERT INTO dropoff_location_history (address, lat, lon, timestamp)
             VALUES (?, ?, ?, ?)
         """, (address, lat, lon, time.time()))
+        _rotate_table_keep_recent(self.db.conn, "dropoff_location_history",
+                                   self.DROPOFF_LOCATION_HISTORY_MAX_ROWS)
         self.db.conn.commit()
 
     def _best_zone_from_pickup_rows(self, rows, min_samples):
