@@ -186,3 +186,52 @@ formats to match the 1 header.
       only, not by generating a real report on-device.
 - [ ] Driver confirms in real use that a generated full report now
       shows one consistent clock format throughout.
+
+## 6. Unify the missing-value placeholder
+
+`export_full_report()`'s Distance Accuracy section
+(`drive_monitor.py:5444-5445`) used `"N/A"` (uppercase) for a job
+whose dropoff isn't linkable yet, while the same function's Outcomes
+section (`:5487`) -- and every one of the 6 `"n/a"` sites already in
+`TripHistoryActivity.java`'s Rejected Offers Report -- used lowercase
+`"n/a"`. Counted actual (non-comment) occurrences across the whole
+codebase: lowercase `n/a` was already the 7-to-2 majority convention,
+and the exclusive one on the Java side. Changed the 2 Python `"N/A"`
+sites to lowercase `"n/a"` to match, rather than the reverse.
+
+### 6.1 Corrected finding: Address Book's omission is NOT the same bug
+
+The original scouting pass also flagged Address Book
+(`TripHistoryActivity.java:305,310,323,328`) as inconsistent for
+omitting a missing-value line entirely instead of showing a
+placeholder. Reading that code before touching it found this is a
+different, already-deliberate pattern, not an oversight -- each block
+is guarded by `if (!entry.isNull(...))` with an existing code comment
+explicitly justifying it: "omitted (not shown as 0/n-a) when this
+restaurant has no offer_outcomes rows with that specific value yet --
+same 'omit rather than guess' rule as every other field on this
+screen." That comment predates this audit and reflects a real, named
+design decision (never fabricate a 0 or a placeholder for data that
+was never collected), genuinely different from the Rejected Offers
+Report and full-report export cases -- both of which show a FIXED
+set of columns/slots in a sentence or table row where omitting just
+one slot would break the surrounding structure, so a placeholder is
+the only option there. Left Address Book's omission behavior
+untouched; unifying it with an inline placeholder would have reversed
+a documented, intentional decision, not fixed a real inconsistency.
+
+### 6.2 Success criteria
+
+- [x] Both `export_full_report()` sections and the Rejected Offers
+      Report now use the same lowercase `n/a` placeholder
+- [x] Confirmed the majority (7-to-2) convention via grep before
+      picking a direction, not an arbitrary choice
+- [x] Correctly distinguished Address Book's deliberate omit-the-line
+      pattern (already justified by an existing code comment) from a
+      real formatting inconsistency, rather than blindly "fixing" it
+- [x] `python3 -m py_compile drive_monitor.py` -- clean
+- [ ] HONEST LIMIT: no Android device/emulator available in this
+      environment -- verified by code reading and a desktop compile
+      check only.
+- [ ] Driver confirms in real use that missing values read the same
+      way ("n/a") across the full report export and in-app reports.

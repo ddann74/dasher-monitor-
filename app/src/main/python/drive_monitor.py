@@ -5440,9 +5440,9 @@ class DriveMonitorEngine:
             # docs/deadhead_stacked_order_baseline/PRD.md ss7.4.2: an earlier
             # job in a stacked order gets a real row with actual_delivery_km/
             # actual_total_km left NULL (its own dropoff isn't linkable yet,
-            # ss7.6) -- format as "N/A" rather than crashing on None:.2f.
-            delivery_km = f"{r['actual_delivery_km']:.2f}" if r["actual_delivery_km"] is not None else "N/A"
-            total_km = f"{r['actual_total_km']:.2f}" if r["actual_total_km"] is not None else "N/A"
+            # ss7.6) -- format as "n/a" rather than crashing on None:.2f.
+            delivery_km = f"{r['actual_delivery_km']:.2f}" if r["actual_delivery_km"] is not None else "n/a"
+            total_km = f"{r['actual_total_km']:.2f}" if r["actual_total_km"] is not None else "n/a"
             rows.append([r["trip_id"], r["restaurant_name"], f"{r['claimed_distance_km']:.2f}",
                          f"{r['actual_deadhead_km']:.2f}", delivery_km, total_km, when])
         sections.append(self._format_table("DISTANCE ACCURACY",
