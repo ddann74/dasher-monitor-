@@ -58,3 +58,41 @@ specific finding, which was about the same field shown two ways.
       through the actual screens.
 - [ ] Driver confirms in real use that Trip List and Trip Detail now
       show the same distance figure for the same trip.
+
+## 2. Unrounded double in the Rejected Offers Report's per-factor comparison
+
+`TripHistoryActivity.java` (Rejected Offers Report, per-factor
+accepted/declined/timed-out comparison, ~line 673-677) printed
+`String.valueOf(c.optDouble("avg_accepted"))` -- Java's default double
+`toString()` -- right next to the `$%.2f`-formatted $/km lines a few
+lines above in the same dialog (~line 659-665). The underlying Python
+value (`get_rejected_offers_report`'s `avg()` helper,
+`drive_monitor.py:5205-5206`) is already `round(x, 1)`, so the raw
+number itself was fine, but `String.valueOf` on a double whose value
+happens to be a whole number prints a trailing `.0` (e.g. "82.0")
+while every other formatted figure in this app uses an explicit
+`String.format`, and the two styles sitting a few lines apart in the
+same dialog read as inconsistent/unpolished even though the actual
+numbers were already correctly rounded server-side.
+
+Wrapped all three (`avg_accepted`, `avg_declined`, `avg_timed_out`) in
+`String.format(Locale.US, "%.1f", ...)`, matching the 1-decimal
+precision Python already rounds these factor scores to, and matching
+this app's established convention of never relying on a raw
+`String.valueOf`/`toString()` for a driver-facing number.
+
+### 2.1 Success criteria
+
+- [x] All three per-factor comparison values use `String.format` with
+      explicit `%.1f`, not `String.valueOf`
+- [x] Precision (1 decimal) matches what Python's `avg()` helper
+      already rounds to -- not inventing a new precision, just making
+      the display explicit
+- [x] `n/a` missing-value branches (already present) left untouched --
+      that's item 6's scope, not this one
+- [x] Brace/paren balance check on the modified file -- clean
+- [ ] HONEST LIMIT: no Android device/emulator available in this
+      environment -- verified by code reading only.
+- [ ] Driver confirms in real use that this report's factor comparison
+      no longer shows trailing ".0"-style raw doubles next to the
+      formatted $/km lines above it.

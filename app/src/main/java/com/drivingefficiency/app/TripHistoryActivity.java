@@ -672,9 +672,9 @@ public class TripHistoryActivity extends AppCompatActivity {
                         if (c == null) continue;
                         body.append(String.format("%s -- accepted: %s, declined: %s, timed out: %s\n",
                                 friendlyFactorName(c.optString("factor", "")),
-                                c.isNull("avg_accepted") ? "n/a" : String.valueOf(c.optDouble("avg_accepted")),
-                                c.isNull("avg_declined") ? "n/a" : String.valueOf(c.optDouble("avg_declined")),
-                                c.isNull("avg_timed_out") ? "n/a" : String.valueOf(c.optDouble("avg_timed_out"))));
+                                c.isNull("avg_accepted") ? "n/a" : String.format(java.util.Locale.US, "%.1f", c.optDouble("avg_accepted")),
+                                c.isNull("avg_declined") ? "n/a" : String.format(java.util.Locale.US, "%.1f", c.optDouble("avg_declined")),
+                                c.isNull("avg_timed_out") ? "n/a" : String.format(java.util.Locale.US, "%.1f", c.optDouble("avg_timed_out"))));
                     }
                     body.append("\n");
                 }
