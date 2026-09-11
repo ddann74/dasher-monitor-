@@ -692,6 +692,14 @@ public class TripForegroundService extends Service {
     private Boolean lastLoggedNotificationAccess = null;
     private Boolean lastLoggedBatteryExempt = null;
     private Boolean lastLoggedAccessibility = null;
+    // docs/notification_listener_liveness/PRD.md -- deliberately separate
+    // from lastLoggedNotificationAccess above: that tracks the PERMISSION
+    // grant (Settings.Secure), this tracks whether Android's live binding
+    // is actually connected right now (AppNotificationListenerService's
+    // own onListenerConnected/onListenerDisconnected callbacks) -- the
+    // permission can stay granted even after the live binding silently
+    // fails to survive an OEM kill, which is exactly the gap this closes.
+    private Boolean lastLoggedNotificationListenerConnected = null;
     private android.os.PowerManager.WakeLock tripWakeLock = null;
 
     /**
@@ -724,11 +732,23 @@ public class TripForegroundService extends Service {
         boolean hasAccessibility = enabledServices != null
                 && enabledServices.contains(getPackageName() + "/" + getPackageName() + ".DasherAccessibilityService");
 
+        // docs/notification_listener_liveness/PRD.md -- the live binding,
+        // not the permission grant (hasNotificationAccess above already
+        // covers that). notificationListenerEverConnected guards against
+        // a false "disconnected" reading at cold start, before Android
+        // has had any chance to bind the listener at all yet -- that's
+        // not a real disconnect, just not-yet-connected, and must never
+        // be treated the same as a genuine connected->disconnected drop.
+        boolean notificationListenerEverConnected = AppNotificationListenerService.lastListenerConnectedMs > 0;
+        boolean hasNotificationListenerConnected = AppNotificationListenerService.isListenerConnected;
+
         boolean changed = !Boolean.valueOf(hasLocation).equals(lastLoggedLocation)
                 || !Boolean.valueOf(hasOverlay).equals(lastLoggedOverlay)
                 || !Boolean.valueOf(hasNotificationAccess).equals(lastLoggedNotificationAccess)
                 || !Boolean.valueOf(hasBatteryExemption).equals(lastLoggedBatteryExempt)
-                || !Boolean.valueOf(hasAccessibility).equals(lastLoggedAccessibility);
+                || !Boolean.valueOf(hasAccessibility).equals(lastLoggedAccessibility)
+                || (notificationListenerEverConnected
+                        && !Boolean.valueOf(hasNotificationListenerConnected).equals(lastLoggedNotificationListenerConnected));
 
         // Confirmed via a real diagnostic log: accessibility can genuinely
         // turn itself off mid-session (most likely Android's "Restricted
@@ -768,6 +788,20 @@ public class TripForegroundService extends Service {
                 raisePermissionRevokedAlert("Accessibility",
                         "Offer detection and Accept/Decline tracking won't work");
             }
+            // docs/notification_listener_liveness/PRD.md -- the exact
+            // gap this closes: previously NOTHING checked whether the
+            // live binding survived an OEM kill, only whether the
+            // permission stayed granted (which it does, even after the
+            // binding silently fails to reconnect). Gated on
+            // notificationListenerEverConnected so a cold-start "hasn't
+            // connected yet" is never mistaken for this.
+            if (notificationListenerEverConnected && lastLoggedNotificationListenerConnected != null
+                    && lastLoggedNotificationListenerConnected && !hasNotificationListenerConnected) {
+                raisePermissionRevokedAlert("Notification Listener",
+                        "The live connection dropped (separate from the Notification Access permission, "
+                        + "which is still granted) -- offer detection via notification and message reading "
+                        + "won't work until it reconnects; a rebind was automatically requested");
+            }
         }
 
         // Driver backlog #22 part a (docs/driver_backlog_2026_09_03/PRD.md):
@@ -806,6 +840,8 @@ public class TripForegroundService extends Service {
             logDiagnostic("PERMISSIONS", "location=" + hasLocation + " overlay=" + hasOverlay
                     + " notificationAccess=" + hasNotificationAccess + " batteryExempt=" + hasBatteryExemption
                     + " accessibility=" + hasAccessibility
+                    + " notificationListenerConnected=" + (notificationListenerEverConnected
+                            ? String.valueOf(hasNotificationListenerConnected) : "not yet connected")
                     + (changed && !forceLog ? " (CHANGED since last check)" : ""));
             // Immediate visual update the moment accessibility actually
             // changes (drops OR recovers) -- previously the blue-flashing
@@ -820,6 +856,7 @@ public class TripForegroundService extends Service {
             lastLoggedNotificationAccess = hasNotificationAccess;
             lastLoggedBatteryExempt = hasBatteryExemption;
             lastLoggedAccessibility = hasAccessibility;
+            lastLoggedNotificationListenerConnected = hasNotificationListenerConnected;
         }
         updatePermissionAlertVibration();
     }

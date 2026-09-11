@@ -5,6 +5,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Person;
 import android.app.PendingIntent;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
@@ -120,6 +121,56 @@ public class AppNotificationListenerService extends NotificationListenerService 
         super.onCreate();
         engine = PythonBridge.getEngine(this);
         VoiceAnnouncer.init(this);
+    }
+
+    /** docs/notification_listener_liveness/PRD.md -- driver-audit finding
+      * (2026-09-11): unlike the accessibility service (which got its own
+      * dedicated 15s heartbeat after a real reliability push) and GPS
+      * (a whole watchdog PRD), nothing ever checked whether Android
+      * actually kept this listener's live binding connected after an
+      * OEM background kill -- only whether the underlying PERMISSION was
+      * still granted (`TripForegroundService.checkAndLogPermissions`'s
+      * own `enabled_notification_listeners` check), which stays true
+      * even if the binding itself silently failed to come back. These
+      * two real, documented `NotificationListenerService` lifecycle
+      * callbacks are the actual live-connection signal; this app simply
+      * never implemented them before now. */
+    public static volatile boolean isListenerConnected = false;
+    public static volatile long lastListenerConnectedMs = 0;
+    public static volatile long lastListenerDisconnectedMs = 0;
+
+    @Override
+    public void onListenerConnected() {
+        super.onListenerConnected();
+        isListenerConnected = true;
+        lastListenerConnectedMs = System.currentTimeMillis();
+        logDiagnostic("NOTIFICATION_LISTENER", "Connected");
+    }
+
+    /**
+     * Real Android behavior, not this app's own assumption: the system
+     * calls this when the listener's live binding is lost for any
+     * reason (the exact "silently fails to rebind after an OEM kill"
+     * risk this whole fix exists for). requestRebind() is Android's own
+     * documented recovery API (added API 24, this app's minSdk is 26,
+     * so no version gate needed) -- explicitly asks the system to try
+     * reconnecting rather than passively waiting for it to happen (or
+     * not) on its own. Logged loudly: previously this exact event had
+     * NO log line, NO alert, nothing -- offer-via-notification detection
+     * and message reading would have stopped completely with no visible
+     * symptom until a driver noticed deliveries weren't being announced.
+     */
+    @Override
+    public void onListenerDisconnected() {
+        super.onListenerDisconnected();
+        isListenerConnected = false;
+        lastListenerDisconnectedMs = System.currentTimeMillis();
+        logDiagnostic("NOTIFICATION_LISTENER", "Disconnected -- requesting rebind");
+        try {
+            requestRebind(new ComponentName(this, AppNotificationListenerService.class));
+        } catch (RuntimeException e) {
+            logDiagnostic("ERROR", "requestRebind() exception: " + android.util.Log.getStackTraceString(e));
+        }
     }
 
     @Override
