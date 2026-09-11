@@ -215,24 +215,51 @@ public class DataManagementActivity extends AppCompatActivity {
             // uses), stored in app-external storage (survives longer than
             // the cache dir) so a valid-but-still-wrong backup (e.g. from
             // a different install) can still be recovered from manually.
+            //
+            // Driver-audit finding (2026-09-11): the old safety file(s)
+            // used to be deleted BEFORE this new one was created and
+            // confirmed. If backup_database_to threw (disk full, an IO
+            // error), the exception is caught below and the restore
+            // correctly never touches the live database -- but the
+            // driver's rollback net from an EARLIER restore was already
+            // gone by then, replaced with nothing, for zero benefit. Now
+            // the new copy is created and validated FIRST (the same
+            // validate_backup_file check already used on the driver's
+            // chosen restore candidate above, applied here too, not just
+            // trusting "didn't throw"); old files are only ever deleted
+            // once the new one is confirmed good.
             String timestamp = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
                     .format(new java.util.Date());
             java.io.File safetyDir = new java.io.File(getExternalFilesDir(null), "PreRestoreBackups");
             if (!safetyDir.exists()) {
                 safetyDir.mkdirs();
             }
+            java.io.File safetyFile = new java.io.File(safetyDir, "pre_restore_" + timestamp + ".db");
+            engine.callAttr("backup_database_to", safetyFile.getAbsolutePath());
+            JSONObject safetyValidation = new JSONObject(
+                    engine.callAttr("validate_backup_file", safetyFile.getAbsolutePath()).toString());
+            if (!safetyValidation.optBoolean("valid", false)) {
+                String reason = safetyValidation.optString("reason", "unknown reason");
+                safetyFile.delete(); // the failed attempt itself, not any old (still-intact) safety file
+                logDiagnostic("ERROR", "Restore aborted -- pre-restore safety copy failed validation: " + reason);
+                Toast.makeText(this, "Restore aborted: could not create a verified safety copy of your "
+                        + "current data first. Your existing data is untouched.", Toast.LENGTH_LONG).show();
+                return; // live database is never touched, and any earlier safety copy is left alone
+            }
             // Keep only the single most recent safety copy (PRD ss4) --
             // this is a rollback net for the restore that's about to
             // happen, not a backup archive (the driver's own Backup
-            // button already covers that).
+            // button already covers that). Safe to delete now: the new
+            // one just passed the same validation the driver's own
+            // chosen restore file already had to pass.
             java.io.File[] oldSafetyFiles = safetyDir.listFiles();
             if (oldSafetyFiles != null) {
                 for (java.io.File old : oldSafetyFiles) {
-                    old.delete();
+                    if (!old.equals(safetyFile)) {
+                        old.delete();
+                    }
                 }
             }
-            java.io.File safetyFile = new java.io.File(safetyDir, "pre_restore_" + timestamp + ".db");
-            engine.callAttr("backup_database_to", safetyFile.getAbsolutePath());
 
             String dbPath = engine.callAttr("get_database_file_path").toString();
             engine.callAttr("close_database_for_restore");

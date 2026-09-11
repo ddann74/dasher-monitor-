@@ -15,6 +15,12 @@ didn't realize backgrounding the app isn't the same as force-stopping
 it. Fixed: the connection is now hot-swapped back in place after the
 restore completes, on this same running engine -- no restart required
 at all, not just documented more clearly. See PROGRESS.md.
+§9 (added 2026-09-11, driver's own feature audit, not a specific
+driver-reported bug): the pre-restore safety copy this whole PRD
+exists to provide was itself being deleted -- the OLD one, before the
+NEW one was confirmed to exist. Fixed by reordering: create and
+validate the new safety copy first, only delete old ones once it's
+confirmed good. See §9/§10.
 
 ## 1. The real bug found
 
@@ -271,3 +277,74 @@ by code review only.
 - [ ] Driver confirms a restore now works without needing to force-stop
       the app afterward
 - [ ] Driver sign-off
+
+## 9. Follow-up (2026-09-11, driver's own feature audit): the safety copy itself could be silently destroyed
+
+A code-scouting pass -- not a specific driver-reported bug -- re-read
+`DataManagementActivity.restoreDatabaseFromUri()` end-to-end and found
+a real ordering bug in the exact mechanism this PRD's §1/§3 built to
+protect the driver's data.
+
+### 9.1 The bug
+
+`restoreDatabaseFromUri()` used to delete every file in
+`PreRestoreBackups/` FIRST, then call `backup_database_to(...)` to
+create this restore attempt's own safety copy. If that call threw
+(disk full, an IO error -- real, non-exotic failure modes for a write
+to external storage), the exception was caught by the method's outer
+`catch` and the restore correctly aborted before ever touching the
+live database. But by then, the driver's safety net from an EARLIER
+restore -- the actual rollback path this whole PRD exists to provide
+-- was already gone, replaced with nothing, for a restore attempt that
+didn't even happen.
+
+Not as severe as it could first sound: the LIVE database was never at
+risk in this specific failure (the destructive file-swap only happens
+after the safety copy step succeeds). The real cost is a silently
+destroyed rollback net from a previous restore, for zero benefit, on a
+restore attempt that itself correctly failed and aborted.
+
+### 9.2 Fix
+
+Reordered, and hardened past "reorder alone": the new safety copy is
+now created AND validated (reusing `validate_backup_file`, the exact
+same check §1/§3 already apply to the driver's own chosen restore
+file, not just trusting that `backup_database_to` didn't throw) before
+any old safety file is touched. Old files are deleted only once the
+new one is confirmed good. If validation fails, the restore aborts
+with a clear message and the driver's existing data (both live and any
+earlier safety copy) is left completely alone.
+
+### 9.3 Honest limits
+
+Same disclosed limitation as every Java-side change in this repo -- no
+Android SDK/emulator/device available in this environment. Whether
+`backup_database_to` can actually fail in a way that produces a file
+that PASSES `validate_backup_file` but is still subtly wrong is
+unconfirmed -- `validate_backup_file` checks the file opens as a real
+SQLite database, not that its full content is byte-correct. This
+closes the specific, real ordering bug found by reading the code, not
+a claim that pre-restore backups are now failure-proof.
+
+## 10. Success criteria for §9
+
+- [x] Old safety files no longer deleted before the new one exists and
+      is validated
+- [x] New safety copy validated via `validate_backup_file`, the same
+      check already used on the driver's own chosen restore file --
+      not just "the call didn't throw"
+- [x] A failed safety-copy validation aborts the restore cleanly, with
+      a clear message, leaving live data and any earlier safety copy
+      untouched
+- [x] `finally`'s `candidateFile.delete()` cleanup still runs on every
+      code path, including this new early return
+- [x] Brace/paren balance confirmed on the touched file
+- [ ] HONEST LIMIT: no Android device/emulator available in this
+      environment -- see §9.3. Neither the original bug nor this fix
+      has been observed running; both are reasoned from reading the
+      code's real control flow.
+- [ ] Driver confirms in real use that a restore still completes
+      normally, and (if ever reproducible) that a genuinely failed
+      safety-copy write now aborts cleanly instead of destroying an
+      earlier one.
+- [ ] Driver sign-off.
