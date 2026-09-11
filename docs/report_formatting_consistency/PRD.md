@@ -235,3 +235,57 @@ a documented, intentional decision, not fixed a real inconsistency.
       check only.
 - [ ] Driver confirms in real use that missing values read the same
       way ("n/a") across the full report export and in-app reports.
+
+## 7. Unify percentage precision for 0-100 ratios
+
+Trip Detail's four sub-score rows (Time efficiency, Safety score,
+Stops completed, Overall score, `TripDetailActivity.java:271-274`) and
+Trip List's composite-score badge (`TripListActivity.java:155`) all
+use `%.0f%%` (whole-number percent) for what are genuinely 0-100
+ratio/score values. `TripHistoryActivity.java:485`'s "Acceptance
+rate: %.1f%%" is the same kind of value -- a literal 0-100 percentage
+-- shown with an extra decimal for no apparent reason. Standardized it
+to `%.0f%%` to match.
+
+### 7.1 Corrected finding: not every `%.1f%%` site is the same value class
+
+The original scouting pass also named "Personal Calibration" and
+"Weather correlation" as needing the same fix. Reading both before
+touching them found neither is actually the same value class as a
+0-100 ratio:
+
+- `showPersonalCalibration()`'s factor `adjustment_pct`
+  (`TripHistoryActivity.java:539`) is a small-range calibration nudge
+  -- the code's own comment states it's capped at "at most ±15%".
+  Rounding a value whose entire real range is roughly -15 to +15 down
+  to a whole number would throw away most of its actual precision
+  (the difference between a +3% and +4% nudge is exactly the kind of
+  detail this dialog exists to show). Left at `%.1f%%`.
+- The "Pay Trend" dialog's recent-vs-earlier `$/km`/`$/hr` change
+  percentages (`TripHistoryActivity.java:773,777`) are week-over-week
+  deltas, not a 0-100 ratio either, and can be legitimately small
+  (a "+2.3%" trend, not "+2%"). No genuine "Weather correlation"
+  percentage display was found in the app to match the original
+  finding's description against -- the weather-vs-pay dialog
+  (`weatherBucketLines`) shows $/km, $/hr, and Smart Score, not a
+  percentage at all. Left Pay Trend's `%.1f%%` untouched, and treated
+  the "Weather correlation" half of the original finding as not
+  reproducible against real code, same honesty standard as the
+  history-table-rotation correction earlier in this audit.
+
+### 7.2 Success criteria
+
+- [x] Acceptance rate now uses `%.0f%%`, matching Trip Detail and Trip
+      List's 0-100 ratio convention
+- [x] Verified Personal Calibration's adjustment_pct and Pay Trend's
+      change_pct are a genuinely different, small-range value class
+      before leaving them untouched, not assumed from the original
+      finding's wording
+- [x] Confirmed no matching "Weather correlation percentage" display
+      exists in the app to fix -- the actual weather dialog shows
+      different fields entirely
+- [x] Brace/paren balance check on the modified file -- clean
+- [ ] HONEST LIMIT: no Android device/emulator available in this
+      environment -- verified by code reading only.
+- [ ] Driver confirms in real use that Acceptance rate now reads as a
+      whole percentage, consistent with Trip Detail/Trip List.

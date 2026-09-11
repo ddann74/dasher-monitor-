@@ -482,7 +482,7 @@ public class TripHistoryActivity extends AppCompatActivity {
                 body.append(String.format("Accepted: %d   Declined: %d   Timed out: %d\n",
                         stats.optInt("accepted_count", 0), stats.optInt("declined_count", 0),
                         stats.optInt("timed_out_count", 0)));
-                body.append(String.format("Acceptance rate: %.1f%%\n\n", stats.optDouble("acceptance_rate_pct", 0)));
+                body.append(String.format("Acceptance rate: %.0f%%\n\n", stats.optDouble("acceptance_rate_pct", 0)));
                 if (!stats.isNull("avg_score_accepted")) {
                     body.append(String.format("Avg Smart Score, accepted: %.1f/100\n", stats.optDouble("avg_score_accepted", 0)));
                 }
