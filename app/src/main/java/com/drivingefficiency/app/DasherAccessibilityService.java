@@ -209,11 +209,7 @@ public class DasherAccessibilityService extends AccessibilityService {
      * (no voice/toast), per the driver's own explicit choice.
      */
     private void stopStoreWaitTimer() {
-        if (storeWaitTimerStartRunnable != null) {
-            storeWaitTimerHandler.removeCallbacks(storeWaitTimerStartRunnable);
-            storeWaitTimerStartRunnable = null;
-        }
-        storeWaitTimerHandler.removeCallbacks(storeWaitTimerTickRunnable);
+        removeStoreWaitTimerCallbacks();
 
         if (arrivedAtStoreTapMs == null) {
             return; // Confirm Pickup with no matching Arrived tap this session -- nothing to record
@@ -241,6 +237,27 @@ public class DasherAccessibilityService extends AccessibilityService {
     }
 
     /**
+     * Just the Handler-callback-cancellation step, shared by
+     * stopStoreWaitTimer, cancelStoreWaitTimer (both had their own copy
+     * of this exact block before), and the real service-teardown fix in
+     * onUnbind/onDestroy below. Deliberately NOT cancelStoreWaitTimer's
+     * other side effects (clearing the visible overlay, clearing the
+     * persisted SharedPreferences arrival timestamp) -- onUnbind/onDestroy
+     * must NOT wipe that persisted state, since
+     * resumeStoreWaitTimerIfPending's whole reason to exist is resuming
+     * this exact in-progress wait across a process/service restart;
+     * clearing it here on a mere unbind (the driver may re-enable the
+     * accessibility service moments later) would silently defeat that.
+     */
+    private void removeStoreWaitTimerCallbacks() {
+        if (storeWaitTimerStartRunnable != null) {
+            storeWaitTimerHandler.removeCallbacks(storeWaitTimerStartRunnable);
+            storeWaitTimerStartRunnable = null;
+        }
+        storeWaitTimerHandler.removeCallbacks(storeWaitTimerTickRunnable);
+    }
+
+    /**
      * Cancels any in-progress store-wait timer (pending grace-period
      * start, running tick loop, and the visible overlay if any) without
      * persisting anything -- used when there's no real "Confirm Pickup"
@@ -248,11 +265,7 @@ public class DasherAccessibilityService extends AccessibilityService {
      * or defensively before starting a fresh grace period.
      */
     private void cancelStoreWaitTimer() {
-        if (storeWaitTimerStartRunnable != null) {
-            storeWaitTimerHandler.removeCallbacks(storeWaitTimerStartRunnable);
-            storeWaitTimerStartRunnable = null;
-        }
-        storeWaitTimerHandler.removeCallbacks(storeWaitTimerTickRunnable);
+        removeStoreWaitTimerCallbacks();
         if (storeWaitTimerVisible) {
             OverlayHelper.clearStoreWaitTimer(this);
         }
@@ -1826,16 +1839,30 @@ public class DasherAccessibilityService extends AccessibilityService {
      * onDestroy is overridden too as a second safety net for whichever
      * teardown path actually fires on a given OS/OEM -- removeCallbacks
      * on an already-empty queue is a harmless no-op either way.
+     *
+     * Fresh scouting-pass finding (2026-09-12, docs/
+     * accessibility_service_unbind_cleanup/PRD.md's own direct follow-up):
+     * storeWaitTimerTickRunnable (see startStoreWaitGracePeriod above) is
+     * the exact same shape of self-reposting Handler loop as
+     * foregroundCheckRunnable -- reposts itself every
+     * STORE_WAIT_TIMER_TICK_MS (1s) once a driver's store-wait timer
+     * becomes visible -- and had the identical gap: nothing cancelled it
+     * on real teardown. removeStoreWaitTimerCallbacks() (NOT the broader
+     * cancelStoreWaitTimer(), which also wipes the persisted arrival
+     * timestamp resumeStoreWaitTimerIfPending needs -- see that method's
+     * own doc) is called here too.
      */
     @Override
     public boolean onUnbind(Intent intent) {
         foregroundCheckHandler.removeCallbacks(foregroundCheckRunnable);
+        removeStoreWaitTimerCallbacks();
         return super.onUnbind(intent);
     }
 
     @Override
     public void onDestroy() {
         foregroundCheckHandler.removeCallbacks(foregroundCheckRunnable);
+        removeStoreWaitTimerCallbacks();
         super.onDestroy();
     }
 }

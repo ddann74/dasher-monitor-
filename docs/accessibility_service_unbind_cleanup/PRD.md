@@ -126,3 +126,93 @@ fire, just no longer the ONLY cleanup path.
       no longer produces a repeating "checkCurrentForegroundWindow
       exception" diagnostic-log entry every ~20 seconds afterward.
 - [ ] Driver sign-off.
+
+## 6. Direct follow-up (2026-09-12): the store-wait timer loop had the same gap
+
+This PRD's own original fix only audited `foregroundCheckRunnable` --
+it didn't check whether any OTHER self-reposting Handler loop in the
+same file had the identical missing-cleanup gap. A follow-up scouting
+pass, specifically looking for other instances of this exact bug
+class, found one: `storeWaitTimerTickRunnable` (declared near
+`startStoreWaitGracePeriod`) reposts itself every
+`STORE_WAIT_TIMER_TICK_MS` (1 second) once a driver's store-wait timer
+becomes visible, and before this fix, nothing cancelled it from real
+teardown -- only from the in-app "Confirm Pickup"/unassign click
+handlers (`stopStoreWaitTimer()`/`cancelStoreWaitTimer()`).
+
+**Concrete failure scenario:** identical shape to ss1 above, but for
+the store-wait timer specifically -- a driver taps "Arrived at Store",
+the grace period elapses (timer overlay now visible), and the
+accessibility service gets unbound while that wait is still in
+progress. The tick loop keeps re-posting on the main Looper forever,
+calling `OverlayHelper.showStoreWaitTimer(...)` every second on a
+torn-down service instance, and leaking the whole service instance the
+same way `foregroundCheckRunnable` did.
+
+### 6.1 Fix
+
+Extracted the Handler-callback-cancellation step -- previously
+duplicated identically inside both `stopStoreWaitTimer()` and
+`cancelStoreWaitTimer()` -- into a new shared
+`removeStoreWaitTimerCallbacks()`, called from `onUnbind`/`onDestroy`
+alongside the existing `foregroundCheckHandler` cleanup.
+
+Deliberately did NOT call the broader `cancelStoreWaitTimer()` from
+teardown -- that method ALSO clears the visible overlay and wipes the
+persisted `SharedPreferences` arrival timestamp
+(`KEY_ARRIVED_AT_STORE_MS`). That persisted value exists specifically
+so `resumeStoreWaitTimerIfPending()` (called from `onServiceConnected`)
+can resume an in-progress wait across a process/service restart --
+wiping it on a mere unbind (the driver may re-enable the service
+moments later, or the system may rebind it) would silently defeat the
+exact persistence mechanism `docs/store_wait_timer/PRD.md` ss8-9 built
+for this. `removeStoreWaitTimerCallbacks()` only cancels the Handler
+loop itself, leaving persisted state and any already-visible overlay
+untouched -- matching this PRD's own original, narrow scope exactly.
+
+This also incidentally removed a small pre-existing duplication:
+`stopStoreWaitTimer()` and `cancelStoreWaitTimer()` each had their own
+identical copy of the same `removeCallbacks` block before this fix.
+
+### 6.2 Verification
+
+- Confirmed via grep that `removeStoreWaitTimerCallbacks()` is now
+  called from all 4 real sites: `stopStoreWaitTimer()`,
+  `cancelStoreWaitTimer()`, `onUnbind()`, `onDestroy()`.
+- Confirmed `cancelStoreWaitTimer()`'s broader side effects (overlay
+  clearing, SharedPreferences wipe) were deliberately NOT pulled into
+  the new shared helper or called from teardown -- read the full body
+  of `cancelStoreWaitTimer()` and `resumeStoreWaitTimerIfPending()`
+  before deciding this, not assumed.
+- Brace/paren balance check on the modified file -- clean.
+
+### 6.3 Additional honest limit
+
+Does not re-clear the overlay on teardown -- a driver who disables the
+accessibility service mid-wait will see the timer overlay freeze at
+its last value rather than disappear, until/unless the service
+reconnects and the loop resumes naturally. Considered acceptable: an
+overlay is drawn via `WindowManager`/`SYSTEM_ALERT_WINDOW`, not
+accessibility-service-dependent, so a frozen-but-visible timer is a
+much smaller issue than the infinite-loop leak this fix closes, and
+actively clearing it would require reusing `cancelStoreWaitTimer()`'s
+broader, riskier side effects (see ss6.1).
+
+### 6.4 Success criteria
+
+- [x] `storeWaitTimerTickRunnable`/`storeWaitTimerStartRunnable`
+      cancelled on real `onUnbind`/`onDestroy`, matching the original
+      `foregroundCheckRunnable` fix above
+- [x] Did NOT wipe the persisted store-wait arrival timestamp from
+      teardown -- `resumeStoreWaitTimerIfPending` still works as
+      intended across a real restart
+- [x] Removed a genuine small pre-existing duplication
+      (`removeStoreWaitTimerCallbacks` shared by 4 sites instead of 2
+      near-identical inline copies) as a side effect of the fix
+- [x] Brace/paren balance check on the modified file -- clean
+- [ ] HONEST LIMIT: no Android device/emulator available -- see ss4/ss6.3.
+- [ ] Driver confirms in real use: disabling the accessibility service
+      mid-store-wait no longer leaves a runaway per-second loop running
+      afterward, and re-enabling the service still correctly resumes an
+      in-progress wait.
+- [ ] Driver sign-off.
