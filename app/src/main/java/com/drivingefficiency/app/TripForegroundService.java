@@ -124,6 +124,21 @@ public class TripForegroundService extends Service {
     public static volatile double lastKnownLat = 0.0;
     public static volatile double lastKnownLon = 0.0;
     public static volatile boolean hasValidLocation = false;
+
+    /**
+     * Real start time of the CURRENT monitoring session (Start Monitoring
+     * tap), exposed the same way as lastKnownLat/lastKnownLon above so
+     * MainActivity can read it directly without a bound-service
+     * connection. Driver-requested (2026-09-13): the shift-end decline/
+     * no-response review prompt needs to know "which offers happened
+     * during THIS shift" -- set at the top of startTracking(), left
+     * as-is (not reset) on stopTracking() so a read that happens
+     * fractionally after the stop-tracking intent is sent still gets
+     * the real session-start value, not 0. Overwritten on the next
+     * startTracking() call, same lifecycle as every other
+     * session-scoped static field in this file.
+     */
+    public static volatile long sessionStartMs = 0;
     // Real proof of recency, not just a category state (green/yellow/etc.
     // only ever shows WHAT mode you're in, never WHEN it last actually
     // updated) -- 0 means no real GPS tick has landed yet this session.
@@ -453,6 +468,7 @@ public class TripForegroundService extends Service {
             return; // already tracking
         }
         logDiagnostic("SERVICE", "startTracking() -- monitoring turned on");
+        sessionStartMs = System.currentTimeMillis();
         checkAndLogPermissions(true);
         monitoringActive = true;
         isRunning = true;

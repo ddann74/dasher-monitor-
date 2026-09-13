@@ -119,7 +119,10 @@ public class MainActivity extends AppCompatActivity {
                 // (see actuallyStartMonitoring), stopping is usually the first
                 // moment you're looking at this screen again after a shift --
                 // show the trip summary right away instead of an empty screen.
-                showLastTripSummaryThenPromptFeedback();
+                // Driver-requested (2026-09-13): review declined/no-response
+                // offers from THIS shift first, if there are any -- see
+                // maybeReviewDeclinedOffersThenShowTripSummary's own doc.
+                maybeReviewDeclinedOffersThenShowTripSummary();
             });
 
             // Genuine "fully off" -- no notification, no badge, nothing.
@@ -660,6 +663,173 @@ public class MainActivity extends AppCompatActivity {
                 Toast.makeText(this, "Could not copy address: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }
+
+    // Driver-requested (2026-09-13) quick-pick reasons for a declined or
+    // never-responded-to offer -- kept short and one-handed-tappable,
+    // matching this dialog's "reviewed right after a shift, not typed
+    // carefully at a desk" real use case. "Other" (see
+    // showDeclineReasonOtherInput) covers anything that doesn't fit.
+    private static final String[] DECLINE_REASON_QUICK_PICKS = {
+            "Too far", "Pay too low", "Bad area", "Bad restaurant", "Missed it / too slow"
+    };
+
+    /**
+     * Entry point for the shift-end decline/no-response review, driver-
+     * requested (2026-09-13): "let me give a reason for all declined or
+     * not responded offers, only after my shift has finished." Checks
+     * whether THIS shift (TripForegroundService.sessionStartMs, the real
+     * Start-Monitoring timestamp) actually had any declined/timed-out
+     * offers still missing a reason -- if not (the common case most
+     * shifts, especially a short GENERAL-mode one with no real offers at
+     * all), falls straight through to the existing trip-summary flow
+     * unchanged, no dialog interrupts anything. Any failure here (engine
+     * exception, malformed JSON) degrades the same way -- never blocks
+     * the existing, already-working trip-summary flow over this new,
+     * optional feature.
+     */
+    private void maybeReviewDeclinedOffersThenShowTripSummary() {
+        try {
+            long sessionStartMs = TripForegroundService.sessionStartMs;
+            if (sessionStartMs <= 0) {
+                // No real session-start recorded this app process (e.g. a
+                // stray Stop Monitoring tap with monitoring already off) --
+                // nothing to look back over.
+                showLastTripSummaryThenPromptFeedback();
+                return;
+            }
+            JSONArray offers = new JSONArray(
+                    engine.callAttr("get_offers_needing_reason", sessionStartMs / 1000.0).toString());
+            if (offers.length() == 0) {
+                showLastTripSummaryThenPromptFeedback();
+                return;
+            }
+            logDiagnostic("DECLINE_REASON", "Shift-end review: " + offers.length()
+                    + " declined/no-response offer(s) from this shift");
+            showDeclineReasonReview(offers, 0);
+        } catch (JSONException | RuntimeException e) { // covers PyException too
+            logDiagnostic("ERROR", "maybeReviewDeclinedOffersThenShowTripSummary exception: "
+                    + android.util.Log.getStackTraceString(e));
+            showLastTripSummaryThenPromptFeedback();
+        }
+    }
+
+    /**
+     * Shows one offer at a time from the shift-end review list, recursing
+     * to the next on every answer (a quick-pick tap), Skip, or a
+     * dismissal (back button/tap-outside -- treated the same as Skip,
+     * not re-shown). Falls through to the existing trip-summary flow
+     * once every offer in the list has been handled.
+     */
+    private void showDeclineReasonReview(JSONArray offers, int index) {
+        if (index >= offers.length()) {
+            showLastTripSummaryThenPromptFeedback();
+            return;
+        }
+        JSONObject offer = offers.optJSONObject(index);
+        if (offer == null) {
+            showDeclineReasonReview(offers, index + 1);
+            return;
+        }
+        int offerId = offer.optInt("id", -1);
+        String restaurantName = offer.optString("restaurant_name", "");
+        double payout = offer.optDouble("payout", -1);
+        boolean timedOut = "timed_out".equals(offer.optString("outcome", ""));
+
+        android.widget.LinearLayout layout = new android.widget.LinearLayout(this);
+        layout.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int pad = (int) (16 * getResources().getDisplayMetrics().density);
+        layout.setPadding(pad, pad, pad, pad);
+
+        TextView subtitle = new TextView(this);
+        subtitle.setText(String.format(java.util.Locale.US, "%s%s\n%s  •  offer %d of %d",
+                restaurantName.isEmpty() ? "This offer" : restaurantName,
+                payout >= 0 ? String.format(java.util.Locale.US, " ($%.2f)", payout) : "",
+                timedOut ? "No response (timed out)" : "Declined",
+                index + 1, offers.length()));
+        subtitle.setTextSize(13f);
+        layout.addView(subtitle);
+
+        int buttonTopMargin = (int) (8 * getResources().getDisplayMetrics().density);
+        for (String reason : DECLINE_REASON_QUICK_PICKS) {
+            Button reasonButton = new Button(this);
+            reasonButton.setText(reason);
+            android.widget.LinearLayout.LayoutParams params = new android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT);
+            params.topMargin = buttonTopMargin;
+            reasonButton.setLayoutParams(params);
+            layout.addView(reasonButton);
+        }
+        Button otherButton = new Button(this);
+        otherButton.setText("Other…");
+        android.widget.LinearLayout.LayoutParams otherParams = new android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT);
+        otherParams.topMargin = buttonTopMargin;
+        otherButton.setLayoutParams(otherParams);
+        layout.addView(otherButton);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Why didn't this work out?")
+                .setView(layout)
+                .setNegativeButton("Skip", (d, w) -> showDeclineReasonReview(offers, index + 1))
+                .setOnCancelListener(d -> showDeclineReasonReview(offers, index + 1))
+                .create();
+
+        // Buttons reference `dialog` itself (to dismiss before advancing),
+        // so their listeners are wired after creation rather than inline
+        // above -- the LayoutParams loop stays simple, this is the only
+        // part that actually needs the AlertDialog instance.
+        for (int i = 0; i < DECLINE_REASON_QUICK_PICKS.length; i++) {
+            String reason = DECLINE_REASON_QUICK_PICKS[i];
+            Button reasonButton = (Button) layout.getChildAt(i + 1); // +1 skips the subtitle TextView
+            reasonButton.setOnClickListener(v -> {
+                saveDeclineReason(offerId, reason);
+                dialog.dismiss();
+                showDeclineReasonReview(offers, index + 1);
+            });
+        }
+        otherButton.setOnClickListener(v -> {
+            dialog.dismiss();
+            showDeclineReasonOtherInput(offers, index, offerId, restaurantName);
+        });
+
+        dialog.show();
+    }
+
+    /** "Other" free-text sub-dialog -- Save stores "Other: <text>" (or just skips if left blank), Skip/cancel moves on without saving. */
+    private void showDeclineReasonOtherInput(JSONArray offers, int index, int offerId, String restaurantName) {
+        EditText input = new EditText(this);
+        input.setHint("What happened?");
+        int pad = (int) (16 * getResources().getDisplayMetrics().density);
+        input.setPadding(pad, pad, pad, pad);
+        new AlertDialog.Builder(this)
+                .setTitle(restaurantName.isEmpty() ? "Other reason" : "Other reason -- " + restaurantName)
+                .setView(input)
+                .setPositiveButton("Save", (d, w) -> {
+                    String text = input.getText().toString().trim();
+                    if (!text.isEmpty()) {
+                        saveDeclineReason(offerId, "Other: " + text);
+                    }
+                    showDeclineReasonReview(offers, index + 1);
+                })
+                .setNegativeButton("Skip", (d, w) -> showDeclineReasonReview(offers, index + 1))
+                .setOnCancelListener(d -> showDeclineReasonReview(offers, index + 1))
+                .show();
+    }
+
+    private void saveDeclineReason(int offerId, String reason) {
+        if (offerId < 0) {
+            return; // malformed entry from get_offers_needing_reason -- nothing real to save against
+        }
+        try {
+            boolean success = engine.callAttr("set_decline_reason", offerId, reason).toBoolean();
+            logDiagnostic("DECLINE_REASON", (success ? "Saved" : "Failed -- offer no longer exists")
+                    + " (#" + offerId + "): " + reason);
+        } catch (RuntimeException e) { // covers PyException too
+            logDiagnostic("ERROR", "set_decline_reason exception: " + android.util.Log.getStackTraceString(e));
+        }
+    }
 
     /**
          * Used specifically right after "Stop Monitoring" -- shows the last

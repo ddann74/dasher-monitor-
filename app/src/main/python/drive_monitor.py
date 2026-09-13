@@ -628,6 +628,21 @@ class Database:
             self.conn.execute("ALTER TABLE offer_outcomes ADD COLUMN weather_temp_c REAL")
             self.conn.commit()
 
+        # Driver-requested (2026-09-13): "let me give a reason for all
+        # declined or not responded offers, only after my shift has
+        # finished." Filled in after the fact (see
+        # get_offers_needing_reason/set_decline_reason below), from a
+        # quick-pick list or free text -- NULL for every offer until the
+        # driver actually answers, and for every offer recorded before
+        # this shipped. Deliberately a plain TEXT column, not an enum/
+        # foreign key -- the quick-pick options are a Java-side UI
+        # convenience, not a fixed vocabulary this column enforces, so
+        # "Other" free text and the quick-pick labels are stored exactly
+        # the same way.
+        if "decline_reason" not in existing_columns:
+            self.conn.execute("ALTER TABLE offer_outcomes ADD COLUMN decline_reason TEXT")
+            self.conn.commit()
+
         # Migration for databases that predate auto-labeled parking
         # samples (see PARKING_AUTO_LABEL_* above) -- every row that
         # already existed was, by definition, a driver's own manual
@@ -5251,6 +5266,56 @@ class DriveMonitorEngine:
         }
 
         return json.dumps({"entries": entries, "comparison": comparison, "rate_comparison": rate_comparison})
+
+    def get_offers_needing_reason(self, since_ts):
+        """
+        Driver-requested (2026-09-13): the just-finished-shift decline/
+        no-response review prompt's data source. Declined or timed-out
+        offers from THIS shift (timestamp >= since_ts, since_ts is the
+        real monitoring-session start the Java side already tracks --
+        see TripForegroundService.sessionStartMs) that don't already
+        have a reason recorded -- re-running this after a driver has
+        already answered some (e.g. if the dialog was dismissed midway
+        and somehow re-triggered) naturally excludes those, rather than
+        re-asking about the same offer twice.
+
+        Deliberately does NOT include 'unassigned_long_wait' -- the
+        driver's own request was specifically "declined or not
+        responded," not every negative outcome this app tracks.
+        """
+        rows = self.db.conn.execute("""
+            SELECT id, restaurant_name, payout, distance_km, outcome, timestamp
+            FROM offer_outcomes
+            WHERE outcome IN ('declined', 'timed_out') AND is_test_data = 0
+                  AND timestamp >= ? AND decline_reason IS NULL
+            ORDER BY timestamp
+        """, (since_ts,)).fetchall()
+        return json.dumps([{
+            "id": r["id"],
+            "restaurant_name": r["restaurant_name"],
+            "payout": r["payout"],
+            "distance_km": r["distance_km"],
+            "outcome": r["outcome"],
+            "timestamp": r["timestamp"],
+        } for r in rows])
+
+    def set_decline_reason(self, offer_id, reason):
+        """
+        Saves one answer from the shift-end review prompt -- either a
+        quick-pick label (e.g. "Too far") or free text from "Other",
+        stored identically (see the decline_reason column's own
+        migration comment). Returns whether a real row was actually
+        updated, so the Java side can tell "saved" from "that offer_id
+        didn't exist" (e.g. the underlying row was deleted by
+        reset_all_data between listing and answering) rather than
+        assuming success silently.
+        """
+        cursor = self.db.conn.execute(
+            "UPDATE offer_outcomes SET decline_reason = ? WHERE id = ?",
+            (reason, offer_id),
+        )
+        self.db.conn.commit()
+        return cursor.rowcount > 0
 
     def get_calibration_offers_list(self, limit=100):
         """
