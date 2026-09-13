@@ -149,3 +149,67 @@ failure.
 - [ ] Driver confirms: adding, removing, saving, and loading trusted
       contacts each show a real line in the diagnostic log
 - [ ] Driver sign-off.
+
+## 9. Direct follow-up (2026-09-13): dedup the "ignored" logging itself
+
+Real, confirmed evidence (2026-09-13 driver-uploaded diagnostic log):
+`PERSONAL_MSG: Ignored (not on trusted list: Chat heads active)` logged
+10 times in about 3 seconds. "Chat heads active" isn't a real contact
+-- it's Messenger's own system notification about its floating-bubble
+feature, correctly filtered as untrusted every single time (no wrong
+ACTION was ever taken), but Android reposted the identical notification
+10 times in a row, and nothing deduped the resulting log line, so 10
+near-identical lines crowded out genuinely useful diagnostics around
+them.
+
+This app already had the exact right precedent for this shape of
+problem, in the same file: `lastUnrecognizedNotificationKey`, added
+for the Dasher-side "NOT recognized as an offer" path when Dasher
+itself was found to repost a notification repeatedly. Applied the
+identical pattern to the personal-message "ignored" path instead of
+inventing a new one: new `lastPersonalMessageIgnoredKey` field, keyed
+by `packageName + "|" + <branch tag> + "|" + <distinguishing text>`
+(the sender name for the "not on trusted list" branch, since that's
+what varied in the real incident; just the message text for the "no
+usable sender name" branch, since senderName is empty there by
+definition) -- an identical consecutive repost is silently skipped,
+anything that actually differs (a different sender, different text, or
+a genuine new message arriving after some other notification broke the
+run) still logs normally.
+
+Deliberately did NOT touch the "Read aloud (trusted sender)" branch --
+a real trusted-contact message should always be read aloud and logged
+even if its text happens to repeat, since silently swallowing a
+legitimately-arriving message would be a real behavior regression, not
+a log-cleanliness improvement. Only the two "ignored" branches (which
+take no further action either way) were deduped.
+
+### 9.1 Verification
+
+- Traced the real incident's exact shape (10 identical reposts, 3
+  seconds, one sender name) against the fix: first repost logs and
+  sets the key, the following 9 have an identical key and are skipped,
+  matching `lastUnrecognizedNotificationKey`'s own already-proven
+  behavior for the same repost pattern on the Dasher-notification side.
+- Brace/paren balance confirmed on the modified file.
+- Same accepted tradeoff `lastUnrecognizedNotificationKey` already
+  has, not a new one introduced here: only an IMMEDIATELY consecutive
+  identical repost is suppressed (compared against the single last key,
+  not a broader history) -- a genuinely repeated message from a real
+  contact, with something else in between, still logs normally.
+
+### 9.2 Success criteria
+
+- [x] `lastPersonalMessageIgnoredKey` added, following the exact
+      existing `lastUnrecognizedNotificationKey` precedent in the same
+      file rather than a new pattern
+- [x] Both "ignored" branches deduped; the "read aloud" branch
+      deliberately left untouched
+- [x] Brace/paren balance confirmed
+- [ ] HONEST LIMIT: no Android device/emulator available in this
+      environment -- not observed firing on a real device.
+- [ ] Driver confirms in real use: a real repost storm (Messenger's
+      "Chat heads active" or similar) no longer floods the diagnostic
+      log with identical lines, while genuinely new personal messages
+      still log and read aloud normally.
+- [ ] Driver sign-off.

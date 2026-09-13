@@ -78,6 +78,16 @@ public class AppNotificationListenerService extends NotificationListenerService 
     // identical lines too - only a title+text pair that actually changed
     // gets logged again.
     private String lastUnrecognizedNotificationKey = null;
+    // Same defense-in-depth shape as lastUnrecognizedNotificationKey above,
+    // for the personal-message (SMS/Messenger) "ignored" path specifically -
+    // real, confirmed gap (2026-09-13 driver-uploaded diagnostic log): a
+    // Messenger system notification titled "Chat heads active" (not a real
+    // message from a contact) reposted 10 times in about 3 seconds, each
+    // logging its own identical "Ignored (not on trusted list: Chat heads
+    // active)" line - pure log-spam, no wrong ACTION was ever taken (every
+    // repost was already correctly ignored), just noise crowding out
+    // genuinely useful diagnostic lines around it.
+    private String lastPersonalMessageIgnoredKey = null;
 
     // Message triage (idea #5): urgent instructions (delivery notes,
     // address corrections) are read immediately as before. Lower-priority
@@ -336,10 +346,18 @@ public class AppNotificationListenerService extends NotificationListenerService 
                     // previously logged identically to a correctly-filtered
                     // stranger, making the two indistinguishable after the
                     // fact.
-                    logDiagnostic("PERSONAL_MSG", "Ignored -- no usable sender name could be extracted "
-                            + "(EXTRA_TITLE and EXTRA_MESSAGES both empty/unavailable)");
+                    String ignoredKey = packageName + "|no-sender|" + text;
+                    if (!ignoredKey.equals(lastPersonalMessageIgnoredKey)) {
+                        lastPersonalMessageIgnoredKey = ignoredKey;
+                        logDiagnostic("PERSONAL_MSG", "Ignored -- no usable sender name could be extracted "
+                                + "(EXTRA_TITLE and EXTRA_MESSAGES both empty/unavailable)");
+                    } // else: identical repost of the same un-attributable notification - already logged
                 } else {
-                    logDiagnostic("PERSONAL_MSG", "Ignored (not on trusted list: " + senderName + ")");
+                    String ignoredKey = packageName + "|untrusted|" + senderName + "|" + text;
+                    if (!ignoredKey.equals(lastPersonalMessageIgnoredKey)) {
+                        lastPersonalMessageIgnoredKey = ignoredKey;
+                        logDiagnostic("PERSONAL_MSG", "Ignored (not on trusted list: " + senderName + ")");
+                    } // else: identical repost of the same untrusted-sender notification - already logged
                 }
                 return; // SMS/Messenger notifications are always handled by
                         // the paths above (trusted or silently ignored) --
