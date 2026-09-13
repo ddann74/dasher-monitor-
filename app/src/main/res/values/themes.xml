@@ -10,7 +10,59 @@
         <item name="colorAccent">@color/brand_blue</item>
     </style>
 
-    <style name="Theme.DasherMonitor.TripHistory">
+    <!--
+         Real, device-confirmed crash (2026-09-13 diagnostic log, 8 separate
+         occurrences that same day): activity_trip_list.xml and
+         activity_trip_detail.xml both use a MaterialCardView styled
+         Widget.MaterialComponents.CardView (see each layout's own card),
+         which throws IllegalArgumentException at inflate time - "The
+         style on this component requires your app theme to be
+         Theme.MaterialComponents (or a descendant)" - unless the ACTIVITY
+         theme itself descends from Theme.MaterialComponents. Every theme
+         in this file, including this one (via the implicit dot-name
+         parent, Theme.DasherMonitor), only ever descended from
+         Theme.AppCompat.DayNight. TripListActivity/TripDetailActivity
+         crashed on EVERY open as a result - both core trip-history
+         screens were completely unusable.
+
+         Explicit parent= here intentionally REPLACES the usual implicit
+         dot-name inheritance from Theme.DasherMonitor (Android resolves
+         it that way: an explicit parent attribute overrides, rather than
+         combines with, the naming-convention-implied one) - safe here
+         specifically because Theme.DasherMonitor only ever defines
+         colorPrimary/colorPrimaryDark/colorAccent, and this style already
+         redeclares its own (teal) values for exactly those three items,
+         so nothing is actually lost by no longer implicitly inheriting
+         from it. Theme.MaterialComponents.DayNight is a documented,
+         Google-supported drop-in superset of Theme.AppCompat.DayNight
+         (every AppCompat attribute this app already relies on elsewhere
+         still resolves), plus what MaterialCardView's style actually
+         needs.
+
+         Scoped to ONLY this one theme, not the shared base
+         Theme.DasherMonitor - confirmed via grep that MaterialCardView (or
+         any other com.google.android.material widget) is used in exactly
+         these two layouts and nowhere else, so the other 5 themes
+         (Permissions, DataManagement, Diagnostics, DeveloperTesting,
+         TrustedContacts) were never at risk of this crash and didn't need
+         touching.
+
+         HONEST, DISCLOSED, UNVERIFIED RISK: this theme is also applied to
+         4 OTHER activities that were never crashing (TripHistoryActivity,
+         LocationProfitabilityMapActivity, ParkingZoneMapActivity,
+         CustomerZoneMapActivity - see AndroidManifest.xml) - none use a
+         Material Components layout widget themselves (confirmed via the
+         same grep), so none were at risk of THIS crash, but switching the
+         shared theme's parent can still change the DEFAULT look of plain
+         platform widgets (Button, EditText, etc.) those screens do use,
+         since Theme.MaterialComponents themes commonly apply their own
+         default styles for those. No Android device/emulator available in
+         this environment to confirm whether any of those 4 screens'
+         appearance actually shifts - flagged here rather than silently
+         assumed away, since the crash fix itself doesn't depend on
+         it either way.
+    -->
+    <style name="Theme.DasherMonitor.TripHistory" parent="Theme.MaterialComponents.DayNight">
         <item name="colorPrimary">@color/trip_history_teal</item>
         <item name="colorPrimaryDark">@color/trip_history_teal_dark</item>
         <item name="colorAccent">@color/trip_history_teal</item>
