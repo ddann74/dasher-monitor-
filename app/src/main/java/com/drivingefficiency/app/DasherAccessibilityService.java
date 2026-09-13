@@ -1136,7 +1136,12 @@ public class DasherAccessibilityService extends AccessibilityService {
                 engine.callAttr("add_stop_to_buffer", fullAddress, 0.0, 0.0, deliveryInstruction);
                 return;
             }
-            GoogleApiHelper.geocodeAddress(this, fullAddress, new GoogleApiHelper.GeocodeCallback() {
+            // Biased toward the driver's current GPS position when available --
+            // dropoff is a real structured street address (less ambiguous than
+            // a bare restaurant name) but this still helps disambiguate a
+            // street name that recurs across different suburbs/towns. See
+            // GoogleApiHelper's class doc for why this bias exists at all.
+            GoogleApiHelper.GeocodeCallback dropoffGeocodeCallback = new GoogleApiHelper.GeocodeCallback() {
                 @Override
                 public void onResult(double lat, double lon) {
                     // CRITICAL: same guard as the pickup-geocoding path --
@@ -1169,7 +1174,14 @@ public class DasherAccessibilityService extends AccessibilityService {
                     // without a network/API fix, not just "not yet."
                     NavigationHelper.recordGeocodeFailure(DasherAccessibilityService.this, fullAddress, message);
                 }
-            });
+            };
+            if (TripForegroundService.hasValidLocation) {
+                GoogleApiHelper.geocodeAddress(this, fullAddress,
+                        TripForegroundService.lastKnownLat, TripForegroundService.lastKnownLon,
+                        dropoffGeocodeCallback);
+            } else {
+                GoogleApiHelper.geocodeAddress(this, fullAddress, dropoffGeocodeCallback);
+            }
         } catch (JSONException | RuntimeException e) { // covers PyException too -- calls
             // GoogleApiHelper directly (real Java-side work), not just Python/JSON.
             logDiagnostic("ERROR", "handleDropoffScreen exception: " + android.util.Log.getStackTraceString(e));
@@ -1508,7 +1520,12 @@ public class DasherAccessibilityService extends AccessibilityService {
         if (!GoogleApiHelper.hasApiKey(this) || restaurantName.isEmpty()) {
             return;
         }
-        GoogleApiHelper.geocodeAddressWithFormatted(this, restaurantName, new GoogleApiHelper.GeocodeWithAddressCallback() {
+        // Biased toward the driver's current GPS position when available -- a
+        // bare restaurant name with no location bias can resolve to a
+        // same-named place anywhere on Earth (real, confirmed: see
+        // GoogleApiHelper's own class doc for the "Bangkok Balcony" ->
+        // Pittsburgh, PA incident this fixes).
+        GoogleApiHelper.GeocodeWithAddressCallback pickupGeocodeCallback = new GoogleApiHelper.GeocodeWithAddressCallback() {
             @Override
             public void onResult(double lat, double lon, String formattedAddress) {
                 // CRITICAL: this runs via Handler.post() on the main thread.
@@ -1599,7 +1616,14 @@ public class DasherAccessibilityService extends AccessibilityService {
                 // failed" apart from "still resolving."
                 NavigationHelper.recordGeocodeFailure(DasherAccessibilityService.this, restaurantName, message);
             }
-        });
+        };
+        if (TripForegroundService.hasValidLocation) {
+            GoogleApiHelper.geocodeAddressWithFormatted(this, restaurantName,
+                    TripForegroundService.lastKnownLat, TripForegroundService.lastKnownLon,
+                    pickupGeocodeCallback);
+        } else {
+            GoogleApiHelper.geocodeAddressWithFormatted(this, restaurantName, pickupGeocodeCallback);
+        }
     }
 
     /**

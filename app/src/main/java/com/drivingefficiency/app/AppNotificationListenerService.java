@@ -576,7 +576,12 @@ public class AppNotificationListenerService extends NotificationListenerService 
         if (!GoogleApiHelper.hasApiKey(this) || restaurantName.isEmpty()) {
             return;
         }
-        GoogleApiHelper.geocodeAddress(this, restaurantName, new GoogleApiHelper.GeocodeCallback() {
+        // Biased toward the driver's current GPS position when available -- a
+        // bare restaurant name with no location bias can resolve to a
+        // same-named place anywhere on Earth (real, confirmed: see
+        // GoogleApiHelper's own class doc for the "Bangkok Balcony" ->
+        // Pittsburgh, PA incident this fixes).
+        GoogleApiHelper.GeocodeCallback pickupGeocodeCallback = new GoogleApiHelper.GeocodeCallback() {
             @Override
             public void onResult(double lat, double lon) {
                 // CRITICAL: runs via Handler.post() on the main thread --
@@ -635,7 +640,14 @@ public class AppNotificationListenerService extends NotificationListenerService 
             public void onError(String message) {
                 logDiagnostic("GEOCODE", "Failed: " + message);
             }
-        });
+        };
+        if (TripForegroundService.hasValidLocation) {
+            GoogleApiHelper.geocodeAddress(this, restaurantName,
+                    TripForegroundService.lastKnownLat, TripForegroundService.lastKnownLon,
+                    pickupGeocodeCallback);
+        } else {
+            GoogleApiHelper.geocodeAddress(this, restaurantName, pickupGeocodeCallback);
+        }
     }
 
     private static final String AUTO_LAUNCH_CHANNEL_ID = "dasher_auto_launch_channel";

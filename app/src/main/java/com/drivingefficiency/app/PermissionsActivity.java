@@ -233,7 +233,12 @@ public class PermissionsActivity extends AppCompatActivity {
                 Toast.makeText(this, "Home address cleared.", Toast.LENGTH_SHORT).show();
                 return;
             }
-            GoogleApiHelper.geocodeAddress(this, address, new GoogleApiHelper.GeocodeCallback() {
+            // Biased toward the driver's current GPS position when available --
+            // a full typed address is less ambiguous than a bare restaurant
+            // name, but this still helps when the same street name recurs
+            // across different suburbs/towns. See GoogleApiHelper's class doc
+            // for why this bias exists at all.
+            GoogleApiHelper.GeocodeCallback homeAddressGeocodeCallback = new GoogleApiHelper.GeocodeCallback() {
                 @Override
                 public void onResult(double lat, double lon) {
                     ShiftRoutingPrefs.setHomeAddress(PermissionsActivity.this, address, lat, lon);
@@ -258,7 +263,14 @@ public class PermissionsActivity extends AppCompatActivity {
                     Toast.makeText(PermissionsActivity.this,
                             "Could not resolve that address: " + message, Toast.LENGTH_LONG).show();
                 }
-            });
+            };
+            if (TripForegroundService.hasValidLocation) {
+                GoogleApiHelper.geocodeAddress(this, address,
+                        TripForegroundService.lastKnownLat, TripForegroundService.lastKnownLon,
+                        homeAddressGeocodeCallback);
+            } else {
+                GoogleApiHelper.geocodeAddress(this, address, homeAddressGeocodeCallback);
+            }
         });
 
         saveRateThresholdButton.setOnClickListener(v -> {

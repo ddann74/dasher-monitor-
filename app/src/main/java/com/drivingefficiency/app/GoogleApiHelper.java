@@ -28,7 +28,32 @@ import java.nio.charset.StandardCharsets;
  * testing with realistic fake coordinates. Real geocoding is what makes
  * all of that (not just traffic) actually functional in the field.
  *
- * Requires a Google Maps Platform API key with the Geocoding API and
+ * Geocoding uses the Places API's "Find Place From Text" endpoint, NOT
+ * the plain Geocoding API this originally shipped with (2026-09-13
+ * driver-uploaded diagnostic log, real evidence): a bare restaurant
+ * name like "Bangkok Balcony" -- no street, no suburb -- is exactly the
+ * kind of query the Geocoding API isn't built for (it's designed for
+ * structured postal addresses), and it geocoded that exact name to
+ * Pittsburgh, Pennsylvania instead of the real Wollongong, NSW location,
+ * while bare chain names ("Red Rooster", "KFC", "Liquorland") returned
+ * ZERO_RESULTS outright. Find Place From Text is Google's own
+ * purpose-built endpoint for resolving a venue/business NAME (not just
+ * an address) to a place, and supports a `locationbias` param -- every
+ * real call site now passes the driver's current GPS position (already
+ * tracked via TripForegroundService.lastKnownLat/lastKnownLon, the same
+ * established cross-component pattern several other classes already
+ * use) as a bias, so an ambiguous name resolves to the nearby real
+ * location instead of an arbitrary same-named place anywhere on Earth.
+ *
+ * HONEST, OPERATIONAL LIMIT: this needs the "Places API" (not just
+ * "Geocoding API") enabled on the same Google Cloud project the API key
+ * belongs to -- an existing key that only had Geocoding API enabled
+ * will need Places API turned on too before this works. Cannot be
+ * verified from this environment (no live key/project to test against);
+ * a REQUEST_DENIED-style error surfaced via the existing error-message
+ * plumbing below is the expected symptom if that's not done yet.
+ *
+ * Requires a Google Maps Platform API key with the Places API and
  * Distance Matrix API enabled, with billing configured on the Google
  * Cloud project (both are paid beyond a monthly free credit).
  *
@@ -99,8 +124,32 @@ public final class GoogleApiHelper {
         return key != null && !key.isEmpty();
     }
 
+    /** Metro/driving-area scale, not a tight restriction - locationbias PREFERS
+      * candidates in this radius over an identically-named place elsewhere, it
+      * doesn't exclude anything outside it. 50km comfortably covers a driver's
+      * real operating area without so tight a radius that a real pickup just
+      * outside it loses to a worse but closer-to-bias match. UNCONFIRMED as the
+      * "right" number in any rigorous sense - a judgment call, not a derived
+      * constant, same honesty status as this app's other tuned thresholds. */
+    private static final int PLACES_LOCATION_BIAS_RADIUS_METERS = 50_000;
+
     public static void geocodeAddress(Context context, String address, GeocodeCallback callback) {
-        geocodeAddressInternal(context, address,
+        geocodeAddressInternal(context, address, false, 0, 0,
+                (lat, lon, formattedAddress) -> callback.onResult(lat, lon),
+                callback::onError);
+    }
+
+    /** Same request as the no-bias overload, but biased toward candidates near
+      * (biasLat, biasLon) - see PLACES_LOCATION_BIAS_RADIUS_METERS. Use this
+      * overload whenever a real current GPS position is available (almost
+      * always TripForegroundService.lastKnownLat/lastKnownLon, guarded by
+      * TripForegroundService.hasValidLocation) - it's what actually fixes the
+      * "bare restaurant name resolves to a same-named place on the other side
+      * of the world" failure mode a real diagnostic log confirmed (see this
+      * class's own doc comment). */
+    public static void geocodeAddress(Context context, String address, double biasLat, double biasLon,
+                                       GeocodeCallback callback) {
+        geocodeAddressInternal(context, address, true, biasLat, biasLon,
                 (lat, lon, formattedAddress) -> callback.onResult(lat, lon),
                 callback::onError);
     }
@@ -111,7 +160,14 @@ public final class GoogleApiHelper {
       * screen) previously only ever had a restaurant NAME, never an actual street
       * address, to show or store. */
     public static void geocodeAddressWithFormatted(Context context, String address, GeocodeWithAddressCallback callback) {
-        geocodeAddressInternal(context, address, callback::onResult, callback::onError);
+        geocodeAddressInternal(context, address, false, 0, 0, callback::onResult, callback::onError);
+    }
+
+    /** Location-biased counterpart to [geocodeAddressWithFormatted] - see the
+      * biased [geocodeAddress] overload's own doc for when to use this. */
+    public static void geocodeAddressWithFormatted(Context context, String address, double biasLat, double biasLon,
+                                                     GeocodeWithAddressCallback callback) {
+        geocodeAddressInternal(context, address, true, biasLat, biasLon, callback::onResult, callback::onError);
     }
 
     private interface RawGeocodeResultListener {
@@ -119,6 +175,7 @@ public final class GoogleApiHelper {
     }
 
     private static void geocodeAddressInternal(Context context, String address,
+                                                 boolean hasBias, double biasLat, double biasLon,
                                                  RawGeocodeResultListener onResult,
                                                  java.util.function.Consumer<String> onError) {
         if (!hasApiKey(context)) {
@@ -129,27 +186,42 @@ public final class GoogleApiHelper {
         new Thread(() -> {
             try {
                 String encoded = URLEncoder.encode(address, "UTF-8");
-                String urlString = "https://maps.googleapis.com/maps/api/geocode/json?address="
-                        + encoded + "&key=" + apiKey;
+                // Places API "Find Place From Text" - see this class's own doc
+                // comment for why this replaced the plain Geocoding API.
+                // fields=geometry,formatted_address requests only the "Basic
+                // Data" SKU tier (cheapest), matching exactly what this app
+                // actually reads from the response below.
+                String urlString = "https://maps.googleapis.com/maps/api/place/findplacefromtext/json"
+                        + "?input=" + encoded
+                        + "&inputtype=textquery"
+                        + "&fields=geometry,formatted_address"
+                        + (hasBias
+                                ? "&locationbias=circle:" + PLACES_LOCATION_BIAS_RADIUS_METERS + "@" + biasLat + "," + biasLon
+                                : "")
+                        + "&key=" + apiKey;
                 JSONObject json = new JSONObject(httpGet(urlString));
                 if (!"OK".equals(json.optString("status"))) {
                     // error_message carries Google's SPECIFIC reason (e.g.
                     // "This API project is not authorized to use this API"
                     // vs "The provided API key is invalid") -- the bare
                     // status code alone ("REQUEST_DENIED") doesn't say
-                    // which of several possible causes it actually is.
+                    // which of several possible causes it actually is. A
+                    // REQUEST_DENIED here specifically (as opposed to the
+                    // old Geocoding API call) most likely means the Google
+                    // Cloud project has "Places API" enabled -- Geocoding
+                    // API being enabled alone isn't enough for this endpoint.
                     String detail = json.optString("error_message", "");
                     String message = "Geocoding failed: " + json.optString("status")
                             + (detail.isEmpty() ? "" : " -- " + detail);
                     MAIN_HANDLER.post(() -> onError.accept(message));
                     return;
                 }
-                JSONArray results = json.getJSONArray("results");
-                JSONObject firstResult = results.getJSONObject(0);
-                JSONObject location = firstResult.getJSONObject("geometry").getJSONObject("location");
+                JSONArray candidates = json.getJSONArray("candidates");
+                JSONObject firstCandidate = candidates.getJSONObject(0);
+                JSONObject location = firstCandidate.getJSONObject("geometry").getJSONObject("location");
                 double lat = location.getDouble("lat");
                 double lon = location.getDouble("lng");
-                String formattedAddress = firstResult.optString("formatted_address", "");
+                String formattedAddress = firstCandidate.optString("formatted_address", "");
                 MAIN_HANDLER.post(() -> onResult.onResult(lat, lon, formattedAddress));
             } catch (Exception e) {
                 String message = "Geocoding error: " + e.getMessage();
