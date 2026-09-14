@@ -13,6 +13,9 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Real Google Maps Platform integration: geocoding (turns a restaurant
@@ -133,6 +136,79 @@ public final class GoogleApiHelper {
       * constant, same honesty status as this app's other tuned thresholds. */
     private static final int PLACES_LOCATION_BIAS_RADIUS_METERS = 50_000;
 
+    // docs/geocode_api_call_caching/PRD.md (round-6 scouting finding #3):
+    // every detected offer re-geocoded even for a restaurant seen many
+    // times already this shift, and the notification-triggered and
+    // screen-triggered detection paths (AppNotificationListenerService
+    // and DasherAccessibilityService) independently geocode the exact
+    // same physical offer with no de-dup between them -- both Places API
+    // and Distance Matrix API are paid beyond a monthly free credit (see
+    // this class's own doc comment above). A simple in-memory cache,
+    // keyed by the exact query text both paths already pass (the
+    // restaurant name), fixes both at once: a repeat restaurant name
+    // reuses the cached result instead of a fresh network call, and
+    // whichever detection path resolves an offer first "wins" -- the
+    // other path's call for the same restaurant name (seconds later, in
+    // practice) also just hits the cache.
+    //
+    // 24h TTL: a physical restaurant's location essentially never moves,
+    // so this is set long enough to cover an entire shift's worth of
+    // repeat offers, while still self-healing within a day if Google's
+    // own data for that place ever changes. HONEST LIMIT: a
+    // rare same-named restaurant chain location in a DIFFERENT part of a
+    // multi-metro driver's operating area would incorrectly reuse the
+    // first-resolved location for up to 24h -- see the PRD for why this
+    // was judged an acceptable, narrow tradeoff for the API-cost fix.
+    private static final long GEOCODE_CACHE_TTL_MS = 24L * 60 * 60 * 1000;
+    private static final Map<String, CachedGeocode> GEOCODE_CACHE = new ConcurrentHashMap<>();
+
+    private static final class CachedGeocode {
+        final double lat;
+        final double lon;
+        final String formattedAddress;
+        final long cachedAtMs;
+
+        CachedGeocode(double lat, double lon, String formattedAddress, long cachedAtMs) {
+            this.lat = lat;
+            this.lon = lon;
+            this.formattedAddress = formattedAddress;
+            this.cachedAtMs = cachedAtMs;
+        }
+    }
+
+    private static String geocodeCacheKey(String address) {
+        return address.trim().toLowerCase(Locale.US);
+    }
+
+    // Live traffic genuinely changes over time, so this TTL is much
+    // shorter than the geocode cache -- it only exists to collapse the
+    // case that actually costs money for no benefit: the
+    // notification-triggered and screen-triggered paths querying the
+    // SAME route within moments of each other for the SAME offer, not to
+    // treat traffic as static. Rounded to 5 decimal places (~1.1m) so
+    // two lastKnownLat/lastKnownLon reads a few seconds apart, for a
+    // driver who hasn't actually moved, still hit the cache.
+    private static final long TRAFFIC_CACHE_TTL_MS = 3 * 60 * 1000;
+    private static final Map<String, CachedTraffic> TRAFFIC_CACHE = new ConcurrentHashMap<>();
+
+    private static final class CachedTraffic {
+        final double ratio;
+        final int trafficSeconds;
+        final int typicalSeconds;
+        final long cachedAtMs;
+
+        CachedTraffic(double ratio, int trafficSeconds, int typicalSeconds, long cachedAtMs) {
+            this.ratio = ratio;
+            this.trafficSeconds = trafficSeconds;
+            this.typicalSeconds = typicalSeconds;
+            this.cachedAtMs = cachedAtMs;
+        }
+    }
+
+    private static String trafficCacheKey(double originLat, double originLon, double destLat, double destLon) {
+        return String.format(Locale.US, "%.5f,%.5f->%.5f,%.5f", originLat, originLon, destLat, destLon);
+    }
+
     public static void geocodeAddress(Context context, String address, GeocodeCallback callback) {
         geocodeAddressInternal(context, address, false, 0, 0,
                 (lat, lon, formattedAddress) -> callback.onResult(lat, lon),
@@ -182,6 +258,12 @@ public final class GoogleApiHelper {
             MAIN_HANDLER.post(() -> onError.accept("No Google Maps API key configured (see Permissions & Setup)."));
             return;
         }
+        String cacheKey = geocodeCacheKey(address);
+        CachedGeocode cached = GEOCODE_CACHE.get(cacheKey);
+        if (cached != null && System.currentTimeMillis() - cached.cachedAtMs < GEOCODE_CACHE_TTL_MS) {
+            MAIN_HANDLER.post(() -> onResult.onResult(cached.lat, cached.lon, cached.formattedAddress));
+            return;
+        }
         String apiKey = getApiKey(context);
         new Thread(() -> {
             try {
@@ -222,6 +304,7 @@ public final class GoogleApiHelper {
                 double lat = location.getDouble("lat");
                 double lon = location.getDouble("lng");
                 String formattedAddress = firstCandidate.optString("formatted_address", "");
+                GEOCODE_CACHE.put(cacheKey, new CachedGeocode(lat, lon, formattedAddress, System.currentTimeMillis()));
                 MAIN_HANDLER.post(() -> onResult.onResult(lat, lon, formattedAddress));
             } catch (Exception e) {
                 String message = "Geocoding error: " + e.getMessage();
@@ -240,6 +323,12 @@ public final class GoogleApiHelper {
                                               TrafficCallback callback) {
         if (!hasApiKey(context)) {
             postError(callback, "No Google Maps API key configured (see Permissions & Setup).");
+            return;
+        }
+        String cacheKey = trafficCacheKey(originLat, originLon, destLat, destLon);
+        CachedTraffic cached = TRAFFIC_CACHE.get(cacheKey);
+        if (cached != null && System.currentTimeMillis() - cached.cachedAtMs < TRAFFIC_CACHE_TTL_MS) {
+            MAIN_HANDLER.post(() -> callback.onResult(cached.ratio, cached.trafficSeconds, cached.typicalSeconds));
             return;
         }
         String apiKey = getApiKey(context);
@@ -270,6 +359,7 @@ public final class GoogleApiHelper {
                 double ratio = typicalSeconds > 0 ? (double) trafficSeconds / typicalSeconds : 1.0;
                 int finalTypical = typicalSeconds;
                 int finalTraffic = trafficSeconds;
+                TRAFFIC_CACHE.put(cacheKey, new CachedTraffic(ratio, finalTraffic, finalTypical, System.currentTimeMillis()));
                 MAIN_HANDLER.post(() -> callback.onResult(ratio, finalTraffic, finalTypical));
             } catch (Exception e) {
                 postError(callback, "Distance Matrix error: " + e.getMessage());
