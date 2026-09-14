@@ -4885,18 +4885,43 @@ class DriveMonitorEngine:
             for row in rows
         ])
 
-    def get_trip_history(self, limit=20):
+    def get_trip_history(self, limit=20, before_id=None):
         """
         Lists the most recent completed trips (newest first) for "View
         Trip History" -- previously only the single most recent trip was
         ever viewable; older trips were recorded but had no way to be
         browsed.
+
+        CONFIRMED REAL GAP, fixed here (2026-09-14, docs/
+        trip_history_pagination/PRD.md): the one real Java call site
+        (TripListActivity) previously called this with no arguments at
+        all, silently relying on the `limit=20` default -- any driver
+        with more than 20 total completed trips had every older one
+        permanently invisible on the Trip History screen, with no
+        indication more existed. `before_id`, when given, pages
+        backward from that trip id (cursor pagination -- correct even
+        if new trips complete between page loads, unlike an OFFSET,
+        which would skip or repeat rows under exactly that condition).
+
+        Fetches one extra row past `limit` to determine `has_more`
+        precisely without a separate COUNT(*) query, then trims back
+        down to `limit` before returning.
         """
-        rows = self.db.conn.execute(
-            "SELECT id, start_time, mode, distance_km, composite_score "
-            "FROM trips WHERE end_time IS NOT NULL ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        query_limit = limit + 1
+        if before_id is not None:
+            rows = self.db.conn.execute(
+                "SELECT id, start_time, mode, distance_km, composite_score "
+                "FROM trips WHERE end_time IS NOT NULL AND id < ? ORDER BY id DESC LIMIT ?",
+                (before_id, query_limit),
+            ).fetchall()
+        else:
+            rows = self.db.conn.execute(
+                "SELECT id, start_time, mode, distance_km, composite_score "
+                "FROM trips WHERE end_time IS NOT NULL ORDER BY id DESC LIMIT ?",
+                (query_limit,),
+            ).fetchall()
+        has_more = len(rows) > limit
+        rows = rows[:limit]
         return json.dumps({
             "trips": [
                 {
@@ -4907,7 +4932,8 @@ class DriveMonitorEngine:
                     "composite_score": r["composite_score"],
                 }
                 for r in rows
-            ]
+            ],
+            "has_more": has_more,
         })
 
     def save_trip_feedback(self, trip_id, rating, notes, parking_rating=None,

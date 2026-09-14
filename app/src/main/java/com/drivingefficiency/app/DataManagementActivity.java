@@ -62,6 +62,9 @@ public class DataManagementActivity extends AppCompatActivity {
         // Destructive -- confirm before replacing everything currently
         // recorded with whatever's in the chosen backup file.
         restoreDatabaseButton.setOnClickListener(v -> {
+            if (blockIfMonitoringActive("Restore Database")) {
+                return;
+            }
             new AlertDialog.Builder(this)
                     .setTitle("Restore Database")
                     .setMessage("This replaces ALL current data -- every trip, learned average, "
@@ -99,6 +102,9 @@ public class DataManagementActivity extends AppCompatActivity {
         // there was no way to start fresh short of manually clearing app
         // storage from Android's own Settings screen.
         resetAllDataButton.setOnClickListener(v -> {
+            if (blockIfMonitoringActive("Reset All Data")) {
+                return;
+            }
             new AlertDialog.Builder(this)
                     .setTitle("Reset All Data")
                     .setMessage("This permanently deletes every trip, stop, safety event, "
@@ -118,6 +124,51 @@ public class DataManagementActivity extends AppCompatActivity {
                     .setNegativeButton("Cancel", null)
                     .show();
         });
+    }
+
+    /**
+     * Real, confirmed gap (2026-09-14, docs/data_management_active_trip_
+     * guard/PRD.md): neither Restore nor Reset ever checked whether a
+     * delivery was actively being tracked -- TripManager is a completely
+     * separate, persistent in-memory object holding the live trip_id/
+     * gps_points/stops, and neither destructive operation touches or
+     * even knows about it. Restore mid-trip swaps the database file out
+     * from under the live trip_id (the id may not exist in the restored
+     * file at all, silently discarding every GPS update from then on --
+     * or it may exist and belong to a DIFFERENT historical trip, which
+     * the live trip's data then silently overwrites). Reset mid-trip
+     * deletes the live trip's own row outright, guaranteeing the same
+     * silent-no-op fate for every subsequent write, permanently, with no
+     * orphaned row left for _recover_interrupted_trips to even catch on
+     * next launch.
+     *
+     * Simplest safe fix: block both while monitoring is active, rather
+     * than trying to reconcile TripManager's state against a database
+     * that changed out from under it -- the driver can always Stop
+     * Monitoring first (which finalizes the trip normally) and come back.
+     *
+     * TripForegroundService.isRunning is only ever true between a real
+     * startTracking() and stopTracking()/onDestroy() (confirmed by
+     * reading every assignment site) -- unlike the idle-mode "service is
+     * alive to show the status dot" state, which never sets it, this
+     * accurately means "actively tracking a trip right now."
+     *
+     * @return true if blocked (caller should return without proceeding).
+     */
+    private boolean blockIfMonitoringActive(String actionName) {
+        if (!TripForegroundService.isRunning) {
+            return false;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(actionName + " unavailable while monitoring")
+                .setMessage("Monitoring is currently active, tracking a trip. " + actionName
+                        + " while a trip is in progress can silently lose or corrupt that "
+                        + "trip's data. Tap Stop Monitoring on the main screen first, then "
+                        + "come back here.")
+                .setPositiveButton("OK", null)
+                .show();
+        logDiagnostic("BUTTON", actionName + " blocked -- monitoring was active");
+        return true;
     }
 
     @Override

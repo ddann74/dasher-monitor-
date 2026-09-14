@@ -31,9 +31,25 @@ import java.util.List;
  */
 public class TripListActivity extends AppCompatActivity {
 
+    // Real, confirmed gap fix (2026-09-14, docs/trip_history_pagination/
+    // PRD.md): this screen previously called get_trip_history() with no
+    // arguments at all, silently relying on its limit=20 default --
+    // every trip older than the 20 most recent was permanently invisible
+    // here, with no indication more existed. Now pages backward via
+    // get_trip_history's new before_id cursor.
+    private static final int TRIP_HISTORY_PAGE_SIZE = 20;
+
     private PyObject engine;
     private JSONArray allTrips = new JSONArray();
     private String activeFilter = null; // null = All, "DASHER", or "GENERAL"
+    // null = no page loaded yet / at the very start; set to the last
+    // loaded trip's id after each successful page so the next load
+    // continues right after it (cursor pagination -- correct even if a
+    // new trip completes between page loads, unlike an OFFSET, which
+    // would skip or repeat rows under exactly that condition).
+    private Integer nextBeforeId = null;
+    private boolean hasMoreTrips = false;
+    private boolean loadingMore = false;
 
     private ToggleButton filterAllButton;
     private ToggleButton filterDasherButton;
@@ -70,17 +86,48 @@ public class TripListActivity extends AppCompatActivity {
         return true;
     }
 
+    /** Resets to the very first (most recent) page -- called once at onCreate. */
     private void loadTrips() {
+        allTrips = new JSONArray();
+        nextBeforeId = null;
+        hasMoreTrips = false;
+        loadMoreTrips();
+    }
+
+    /**
+     * Fetches and appends the next page of trips, oldest-so-far first,
+     * to allTrips. Safe to call repeatedly (e.g. from a rapidly-tapped
+     * "Load More" button) -- loadingMore guards against a re-entrant
+     * second fetch stacking duplicate trips into allTrips while the
+     * first one is still in flight.
+     */
+    private void loadMoreTrips() {
+        if (loadingMore) {
+            return;
+        }
+        loadingMore = true;
         try {
-            JSONObject history = new JSONObject(engine.callAttr("get_trip_history").toString());
-            allTrips = history.optJSONArray("trips");
-            if (allTrips == null) {
-                allTrips = new JSONArray();
+            PyObject result = nextBeforeId == null
+                    ? engine.callAttr("get_trip_history", TRIP_HISTORY_PAGE_SIZE)
+                    : engine.callAttr("get_trip_history", TRIP_HISTORY_PAGE_SIZE, nextBeforeId);
+            JSONObject history = new JSONObject(result.toString());
+            JSONArray page = history.optJSONArray("trips");
+            if (page == null) {
+                page = new JSONArray();
             }
-        } catch (JSONException | PyException e) {
+            for (int i = 0; i < page.length(); i++) {
+                allTrips.put(page.get(i));
+            }
+            hasMoreTrips = history.optBoolean("has_more", false);
+            if (page.length() > 0) {
+                JSONObject lastOnPage = page.optJSONObject(page.length() - 1);
+                nextBeforeId = lastOnPage != null ? lastOnPage.optInt("trip_id", -1) : null;
+            }
+        } catch (JSONException | RuntimeException e) { // covers PyException too
             logDiagnostic("Could not load trip history -- " + e.getMessage());
             Toast.makeText(this, "Could not load trip history: " + e.getMessage(), Toast.LENGTH_LONG).show();
-            allTrips = new JSONArray();
+        } finally {
+            loadingMore = false;
         }
         renderRows();
     }
@@ -108,7 +155,19 @@ public class TripListActivity extends AppCompatActivity {
         }
 
         if (filtered.isEmpty()) {
+            // Real gap fix (2026-09-14): previously this always meant
+            // "no trips, period." Now it can also mean "none of the
+            // trips LOADED SO FAR match this filter, but more exist
+            // further back" -- shown distinctly, with a way to keep
+            // looking, instead of a flat dead end.
+            if (hasMoreTrips) {
+                noTripsText.setText("None of the trips loaded so far match this filter -- "
+                        + "load more to keep looking.");
+            } else {
+                noTripsText.setText("No trips yet.");
+            }
             noTripsText.setVisibility(android.view.View.VISIBLE);
+            addLoadMoreRowIfNeeded();
             return;
         }
         noTripsText.setVisibility(android.view.View.GONE);
@@ -168,6 +227,36 @@ public class TripListActivity extends AppCompatActivity {
 
             tripRowsContainer.addView(row);
         }
+
+        addLoadMoreRowIfNeeded();
+    }
+
+    /**
+     * Appends a tappable "Load More Trips" footer row when more exist
+     * past what's currently loaded -- the actual fix for the silent
+     * 20-trip cap: previously there was no way to reach anything older
+     * from this screen, and no indication older trips even existed.
+     */
+    private void addLoadMoreRowIfNeeded() {
+        if (!hasMoreTrips) {
+            return;
+        }
+        TextView loadMoreRow = new TextView(this);
+        loadMoreRow.setText(loadingMore ? "Loading..." : "Load More Trips");
+        loadMoreRow.setTextSize(13.5f);
+        loadMoreRow.setTextColor(0xFF00897B);
+        loadMoreRow.setGravity(Gravity.CENTER);
+        int vPad = (int) (14 * getResources().getDisplayMetrics().density);
+        loadMoreRow.setPadding(0, vPad, 0, vPad);
+        loadMoreRow.setClickable(!loadingMore);
+        loadMoreRow.setFocusable(!loadingMore);
+        if (!loadingMore) {
+            android.util.TypedValue outValue = new android.util.TypedValue();
+            getTheme().resolveAttribute(android.R.attr.selectableItemBackground, outValue, true);
+            loadMoreRow.setBackgroundResource(outValue.resourceId);
+            loadMoreRow.setOnClickListener(v -> loadMoreTrips());
+        }
+        tripRowsContainer.addView(loadMoreRow);
     }
 
     /** Same "a logging call can never crash the app" wrapper pattern used
