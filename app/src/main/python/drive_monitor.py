@@ -105,6 +105,18 @@ WALKING_PATTERN_CONSECUTIVE_READINGS = 2
 WALKING_RECENTLY_PARKED_WINDOW_SECONDS = 5 * 60
 PARK_TO_WALK_GAP_MIN_SAMPLES_TO_LEARN = 10
 
+# docs/history_table_rotation/PRD.md ss6 -- follow-up scouting-pass
+# finding: parking_difficulty_feedback is a real, growing-forever table
+# (one row per park event), the same shape as pickup_location_history/
+# dropoff_location_history/offer_distance_accuracy, just not yet capped
+# when those were. Module-level (not a class constant) because its two
+# real INSERT sites are split across TripManager
+# (_record_park_to_walk_gap_sample) and DriveMonitorEngine
+# (record_parking_difficulty_feedback) -- two different classes, so a
+# single shared constant needs to live outside both. Same generous
+# 50,000-row ceiling convention as every other rotated table.
+PARKING_DIFFICULTY_FEEDBACK_MAX_ROWS = 50_000
+
 # Auto-labeled parking-difficulty samples, written the instant a
 # park-to-walk gap is measured (see _record_park_to_walk_gap_sample),
 # instead of only ever existing when the driver manually answers the
@@ -727,6 +739,28 @@ class Database:
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_events_trip_id ON events(trip_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_delays_trip_id ON delays(trip_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_trip_id ON messages(trip_id)")
+        self.conn.commit()
+
+        # docs/history_table_rotation/PRD.md ss6 -- follow-up scouting-pass
+        # finding: offer_outcomes and parking_difficulty_feedback are the
+        # SAME shape of genuinely-unbounded, one-row-per-event table this
+        # PRD's ss0 already flagged as candidates but hadn't yet capped
+        # (unlike pickup_location_history/dropoff_location_history/
+        # offer_distance_accuracy, already rotated). offer_outcomes gets a
+        # timestamp index (_learned_label_thresholds/recalculate_personal_
+        # calibration/get_acceptance_stats/get_rejected_offers_report all
+        # scan or filter by it, confirmed via a real EXPLAIN QUERY PLAN
+        # test showing a ~240x speedup) and a restaurant_name index (the
+        # Address Book / per-restaurant lookups filter on it too).
+        # parking_difficulty_feedback gets a restaurant_name index
+        # (get_parking_difficulty_rating's own WHERE clause).
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_offer_outcomes_timestamp ON offer_outcomes(timestamp)")
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_offer_outcomes_restaurant_name ON offer_outcomes(restaurant_name)")
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_parking_difficulty_feedback_restaurant_name "
+            "ON parking_difficulty_feedback(restaurant_name)")
         self.conn.commit()
 
         self.vacuum_status = self._ensure_incremental_auto_vacuum()
@@ -3489,6 +3523,8 @@ class TripManager:
                 INSERT INTO parking_difficulty_feedback (restaurant_name, gap_seconds, difficulty, timestamp, source, stop_type)
                 VALUES (?, ?, ?, ?, 'auto', ?)
             """, (restaurant_name, gap_seconds, auto_difficulty, time.time(), stop_type))
+            _rotate_table_keep_recent(self.db.conn, "parking_difficulty_feedback",
+                                       PARKING_DIFFICULTY_FEEDBACK_MAX_ROWS)
             self.db.conn.commit()
             self._last_gap_feedback_row_id = cursor.lastrowid
         # Consumed by DriveMonitorEngine.on_gps_update to log this --
@@ -4142,6 +4178,15 @@ class DriveMonitorEngine:
         self.db.conn.execute("DELETE FROM pending_offer_recovery WHERE id = 1")
         self.db.conn.commit()
 
+    # docs/history_table_rotation/PRD.md ss6 -- offer_outcomes is a real,
+    # growing-forever table (one row per accept/decline/timeout/unassign/
+    # crash-recovery event), the same shape as pickup_location_history/
+    # dropoff_location_history/offer_distance_accuracy, just not yet
+    # capped when those were. Same generous 50,000-row ceiling convention
+    # -- see _rotate_table_keep_recent's own docstring for why this is a
+    # ceiling against pathological growth, not an active pruning policy.
+    OFFER_OUTCOMES_MAX_ROWS = 50_000
+
     def _recover_abandoned_offers(self):
         """
         Run once at engine startup, mirroring _recover_interrupted_trips.
@@ -4169,6 +4214,7 @@ class DriveMonitorEngine:
                 VALUES (?, ?, ?, ?, 0, 'outcome_unknown', ?, ?, 0)
             """, (row["restaurant_name"], row["payout"], row["distance_km"], row["smart_score"],
                   time.time(), row["components_json"]))
+            _rotate_table_keep_recent(self.db.conn, "offer_outcomes", self.OFFER_OUTCOMES_MAX_ROWS)
             self.db.conn.commit()
             self.log_diagnostic("OUTCOME", "Recovered an offer abandoned by a crash/restart -- outcome UNKNOWN "
                 f"(the process was dead the whole time; this may have been a real completed delivery, not a "
@@ -4206,6 +4252,8 @@ class DriveMonitorEngine:
             INSERT INTO parking_difficulty_feedback (restaurant_name, gap_seconds, difficulty, timestamp, source)
             VALUES (?, ?, ?, ?, 'manual')
         """, (restaurant_name, gap_seconds, difficulty, time.time()))
+        _rotate_table_keep_recent(self.db.conn, "parking_difficulty_feedback",
+                                   PARKING_DIFFICULTY_FEEDBACK_MAX_ROWS)
         self.db.conn.commit()
 
     def _canonicalize_restaurant_name(self, name, lat, lon):
@@ -5057,6 +5105,7 @@ class DriveMonitorEngine:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (restaurant_name, payout, distance_km, smart_score, int(accepted), outcome, time.time(),
               components_json, int(is_test_data), hourly_rate, precip_mm, wind_kmh, temp_c))
+        _rotate_table_keep_recent(self.db.conn, "offer_outcomes", self.OFFER_OUTCOMES_MAX_ROWS)
         self.db.conn.commit()
 
     def record_offer_timeout(self, restaurant_name, payout, distance_km, smart_score,
@@ -5091,6 +5140,7 @@ class DriveMonitorEngine:
             VALUES (?, ?, ?, ?, 0, 'timed_out', ?, ?, ?, ?, ?, ?, ?)
         """, (restaurant_name, payout, distance_km, smart_score, time.time(), components_json, int(is_test_data),
               hourly_rate, precip_mm, wind_kmh, temp_c))
+        _rotate_table_keep_recent(self.db.conn, "offer_outcomes", self.OFFER_OUTCOMES_MAX_ROWS)
         self.db.conn.commit()
 
     def record_pickup_unassigned_for_long_wait(self):
@@ -5151,6 +5201,7 @@ class DriveMonitorEngine:
             result["restaurant_name"], result["claimed_distance_km"], smart_score_value,
             time.time(), components_json,
         ))
+        _rotate_table_keep_recent(self.db.conn, "offer_outcomes", self.OFFER_OUTCOMES_MAX_ROWS)
         self.db.conn.commit()
 
         return json.dumps({

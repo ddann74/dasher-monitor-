@@ -123,3 +123,75 @@ derived constant.
       cap during ordinary use, and that zone maps/profitability
       features are unaffected.
 - [ ] Driver sign-off.
+
+## 5. Follow-up: `offer_outcomes` and `parking_difficulty_feedback` (2026-09-14)
+
+A later scouting pass found two more tables of the exact same real,
+genuinely-unbounded shape §0 above describes -- one plain `INSERT` per
+real event, forever, no cap -- that this PRD's own §0 audit had not yet
+reached:
+
+- `offer_outcomes`: one row per accept/decline/timeout/unassign/crash-
+  recovery event, at 4 real call sites (`record_offer_outcome`,
+  `record_offer_timeout`, `_recover_abandoned_offers`,
+  `record_pickup_unassigned_for_long_wait`).
+- `parking_difficulty_feedback`: one row per park event (auto-labeled,
+  see `docs/zero_interaction_delivery_completion/PRD.md`), at 2 real
+  call sites (`_record_park_to_walk_gap_sample`,
+  `record_parking_difficulty_feedback`).
+
+Fixed the same way as §1: `_rotate_table_keep_recent`, same 50,000-row
+ceiling. `OFFER_OUTCOMES_MAX_ROWS` is a `DriveMonitorEngine` class
+constant (all 4 call sites are on that class).
+`PARKING_DIFFICULTY_FEEDBACK_MAX_ROWS` is deliberately a MODULE-level
+constant, not a class one -- its two call sites are split across
+`TripManager` and `DriveMonitorEngine`, two different classes, so a
+class constant on either one would raise `AttributeError` from the
+other (a real bug caught by this fix's own end-to-end test below before
+it shipped, not by inspection).
+
+Also added, in the same `_create_schema()` block as this PRD's own
+`idx_stops_trip_id`/etc.: `idx_offer_outcomes_timestamp` (a real
+`EXPLAIN QUERY PLAN` test showed a ~240x speedup for the timestamp-
+filtered queries `_learned_label_thresholds`/
+`recalculate_personal_calibration`/`get_acceptance_stats`/
+`get_rejected_offers_report` all run), `idx_offer_outcomes_restaurant_name`
+and `idx_parking_difficulty_feedback_restaurant_name` (the Address Book
+per-restaurant lookups and `get_parking_difficulty_rating`'s own `WHERE
+restaurant_name = ?` filter).
+
+### 5.1 Verification
+
+- Real, executable Python test (real sqlite3 file, not `:memory:`; and,
+  unlike §2's ad-hoc in-memory rotation check, this one imports the
+  ACTUAL `drive_monitor` module and instantiates a REAL
+  `DriveMonitorEngine`, exercising the real call sites end-to-end, not
+  just the shared rotation helper in isolation): confirmed the 3 new
+  indexes actually get created by a real `_create_schema()` run;
+  confirmed `_rotate_table_keep_recent` caps both tables to the most
+  recent N rows when run directly; and confirmed
+  `record_offer_outcome`/`record_parking_difficulty_feedback` -- the
+  real class methods, not reimplemented SQL -- run without the
+  `AttributeError` the module/class constant split above exists to
+  avoid. 10 checks, all passed.
+- `python3 -m py_compile drive_monitor.py` -- clean.
+
+### 5.2 Success criteria
+
+- [x] `offer_outcomes` and `parking_difficulty_feedback` rotated at
+      every real INSERT site, same helper and same 50,000-row ceiling
+      as §1
+- [x] `PARKING_DIFFICULTY_FEEDBACK_MAX_ROWS` correctly scoped
+      module-level, not a class constant, after the two-class split was
+      found -- and a real end-to-end test (not just inspection) added
+      specifically to catch a regression of that exact mistake
+- [x] `idx_offer_outcomes_timestamp`/`idx_offer_outcomes_restaurant_name`/
+      `idx_parking_difficulty_feedback_restaurant_name` added, same
+      `CREATE INDEX IF NOT EXISTS` migration pattern as `idx_stops_trip_id`
+- [x] Real executable test (10 checks, importing and exercising the
+      actual module/class, not reimplemented SQL) fully passed
+- [x] `python3 -m py_compile` clean
+- [ ] HONEST LIMIT: no Android device/emulator available in this
+      environment -- real row-count growth over actual driver use is
+      still unobserved, same limit as §3.
+- [ ] Driver sign-off.
