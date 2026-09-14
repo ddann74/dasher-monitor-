@@ -4387,27 +4387,48 @@ class DriveMonitorEngine:
         if no close-enough match exists (the ordinary case: a genuinely
         new or already-consistently-named restaurant).
 
-        Compares against each OTHER known name's AVERAGE recorded
-        location (same stability reasoning as get_tutorial_environment's
-        own AVG(lat)/AVG(lon) grouping) rather than any single past
-        reading, which could be a one-off GPS outlier. If more than one
-        existing name is within range (a real but rare case -- e.g. two
-        of this restaurant's own aliases both already exist), picks
-        whichever has the most samples, on the theory that the
-        best-established identity is the more trustworthy one to
-        consolidate into.
+        CONFIRMED REAL BUG, fixed here (2026-09-14, docs/
+        restaurant_identity_merge_anchor/PRD.md): this used to compare
+        against each other name's RUNNING AVERAGE recorded location.
+        Every merge pulls a new (different-restaurant) sample into that
+        average, so the average itself drifts with each merge -- verified
+        against the real engine that 5 genuinely distinct restaurant
+        names spaced 20m apart (realistic strip-mall/food-court spacing,
+        well within the 25m radius) chain-merged into one identity,
+        directly contradicting this PRD's own claim that the radius
+        keeps a food court's separate restaurants apart. Once merged,
+        the swallowed restaurant's real wait-time/parking-difficulty/
+        profitability samples permanently roll into the wrong identity
+        going forward.
+
+        Fixed by comparing against each other name's ANCHOR location --
+        its FIRST ever recorded pickup, not a running average -- so a
+        later merge from a genuinely different, nearby restaurant can
+        never move where future comparisons are measured from. This
+        trades away catching a legitimate name-variant merge in the
+        rare case where that first-ever sample happened to be a noisy
+        GPS outlier (a false NEGATIVE: two aliases of the same place
+        stay separate) for eliminating the far worse failure mode this
+        bug caused (a false POSITIVE: two different real restaurants
+        silently sharing one identity, corrupting both). A missed merge
+        is recoverable by the driver noticing and no worse than before
+        this feature existed; cross-restaurant data corruption is not.
         """
         if name is None:
             return name
         rows = self.db.conn.execute("""
-            SELECT restaurant_name, AVG(lat) AS avg_lat, AVG(lon) AS avg_lon, COUNT(*) AS cnt
-            FROM pickup_location_history
-            WHERE restaurant_name != ?
-            GROUP BY restaurant_name
+            SELECT p.restaurant_name, p.lat AS anchor_lat, p.lon AS anchor_lon, counts.cnt
+            FROM pickup_location_history p
+            JOIN (
+                SELECT restaurant_name, MIN(id) AS first_id, COUNT(*) AS cnt
+                FROM pickup_location_history
+                WHERE restaurant_name != ?
+                GROUP BY restaurant_name
+            ) counts ON counts.restaurant_name = p.restaurant_name AND counts.first_id = p.id
         """, (name,)).fetchall()
         best_match, best_count = None, -1
         for row in rows:
-            distance = haversine_meters(lat, lon, row["avg_lat"], row["avg_lon"])
+            distance = haversine_meters(lat, lon, row["anchor_lat"], row["anchor_lon"])
             if distance <= RESTAURANT_IDENTITY_MERGE_RADIUS_METERS and row["cnt"] > best_count:
                 best_match, best_count = row["restaurant_name"], row["cnt"]
         return best_match if best_match is not None else name
