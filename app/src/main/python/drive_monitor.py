@@ -5833,7 +5833,17 @@ class DriveMonitorEngine:
         for r in message_rows:
             when = datetime.fromtimestamp(r["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
             body_clean = (r["body"] or "").replace("\n", " ")
-            instruction_clean = (r["extracted_instruction"] or "")
+            # CONFIRMED REAL BUG, fixed here (2026-09-14, docs/
+            # report_instruction_newline_strip/PRD.md): extracted_instruction
+            # is derived from this same body text (see extract_instruction's
+            # f"...: {body.strip()}") and can carry the same embedded
+            # newlines -- only strips leading/trailing whitespace, not
+            # internal ones, unlike body_clean just above. Since
+            # _format_table joins each row into one fixed-width line, an
+            # embedded newline split that row across multiple physical
+            # lines in the plain-text/PDF report, misaligning that row's
+            # own columns.
+            instruction_clean = (r["extracted_instruction"] or "").replace("\n", " ")
             rows.append([r["trip_id"], r["sender"], body_clean, when, instruction_clean])
         sections.append(self._format_table("MESSAGES", ["TripID", "Sender", "Body", "Timestamp", "Instruction"], rows))
 
