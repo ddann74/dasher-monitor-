@@ -102,6 +102,24 @@ WALKING_SPEED_MIN_SAMPLES_TO_LEARN = 10
 # highway driving, only a fix that's physically impossible to be real.
 GPS_JUMP_MAX_PLAUSIBLE_SPEED_KMH = 250.0
 
+# docs/restaurant_wait_upper_bound/PRD.md -- CONFIRMED REAL BUG, fixed
+# here: record_restaurant_wait's running average had no upper bound at
+# all, unlike its sibling record_delivery_speed just above (which
+# already rejects an implausible speed as "a sanity guard against bad
+# GPS data"). A driver taking a break while still inside the arrival
+# geofence, or a phone going idle for hours near a restaurant before
+# GPS resumes and departure is finally detected, produces one
+# multi-hour wait_minutes sample folded into a plain running mean with
+# no cap -- verified: one 6-hour sample pulled a real 5-sample average
+# from 8 minutes to 66.7 minutes, corrupting every future Smart Score
+# wait-time estimate and Address Book display for that restaurant.
+# 120 minutes is a generous, judgment-call ceiling -- same honesty
+# status as GPS_JUMP_MAX_PLAUSIBLE_SPEED_KMH above, not derived from
+# real wait-time data -- chosen specifically to never reject a
+# genuinely long but real wait (a big, complex, or backed-up order),
+# only a multi-hour anomaly that's implausible as an actual wait.
+MAX_PLAUSIBLE_RESTAURANT_WAIT_MINUTES = 120.0
+
 # Retrospective classification (see TripManager.is_walking_pace): a
 # single slow GPS reading can't tell "parked, now walking" apart from
 # "car briefly slowed in traffic" -- both look identical in isolation.
@@ -1099,8 +1117,16 @@ class SmartScoreEngine:
         trace anywhere, which is exactly the kind of thing that could make
         the Address Book quietly never populate with no way to tell why.
         Returns True if a row was written, False if the guard dropped it.
+
+        wait_minutes is also rejected above MAX_PLAUSIBLE_RESTAURANT_
+        WAIT_MINUTES (docs/restaurant_wait_upper_bound/PRD.md) -- a real,
+        confirmed gap: this had no upper bound at all before, so one
+        multi-hour anomaly (a break taken inside the arrival geofence, a
+        phone idle for hours before departure was detected) permanently
+        skewed the learned average with no way to exclude it later.
         """
-        if not restaurant_name or wait_minutes is None or wait_minutes < 0:
+        if (not restaurant_name or wait_minutes is None or wait_minutes < 0
+                or wait_minutes > MAX_PLAUSIBLE_RESTAURANT_WAIT_MINUTES):
             return False
         avg, count, learned = self._restaurant_wait_info(restaurant_name)
         if learned:
