@@ -403,6 +403,19 @@ class Database:
             sort_order INTEGER
         );
 
+        -- docs/canned_replies_reseed_prevention/PRD.md -- durable marker,
+        -- separate from canned_replies itself, recording whether the
+        -- starter set has EVER been seeded for this database file. A
+        -- single row is inserted the first time seeding runs (see
+        -- _create_schema below) and never touched again -- distinct from
+        -- "is canned_replies currently empty," which is also true after a
+        -- driver deliberately deletes every reply, a real action this
+        -- table exists to tell apart from a genuinely fresh database.
+        CREATE TABLE IF NOT EXISTS canned_replies_seed_state (
+            id INTEGER PRIMARY KEY,
+            seeded_at REAL
+        );
+
         CREATE TABLE IF NOT EXISTS parking_difficulty_feedback (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             restaurant_name TEXT,
@@ -576,25 +589,51 @@ class Database:
         """)
         self.conn.commit()
 
-        # Seeded once, only if genuinely empty -- never re-seeds after
-        # the user has added/edited/deleted their own replies, so this
-        # only ever runs on a truly fresh database.
-        existing = self.conn.execute("SELECT COUNT(*) AS cnt FROM canned_replies").fetchone()
-        if existing["cnt"] == 0:
-            starter_replies = [
-                "On my way now!",
-                "About 5 minutes away",
-                "Got it, thank you!",
-                "I'm outside",
-                "Sorry, running a bit late",
-                "Leaving it at the door as requested",
-                "Can't find the entrance, can you help?",
-                "Thanks, have a great day!",
-            ]
-            for i, text in enumerate(starter_replies):
-                self.conn.execute(
-                    "INSERT INTO canned_replies (text, sort_order) VALUES (?, ?)", (text, i)
-                )
+        # docs/canned_replies_reseed_prevention/PRD.md -- CONFIRMED REAL
+        # BUG, fixed here: this previously checked "is canned_replies
+        # currently empty," which is ALSO true the moment a driver
+        # deliberately deletes every reply -- a real action, not just a
+        # fresh-install state. _create_schema runs on EVERY engine/
+        # process start (crash recovery, an OEM-kill + watchdog restart,
+        # a driver-triggered database restore), not once ever, so a
+        # deliberately emptied list got silently refilled with the
+        # starter set on the very next restart. Verified directly: seed
+        # -> delete all -> reopen the same file (what any restart does)
+        # -> all defaults silently reappeared.
+        #
+        # Now gated on canned_replies_seed_state instead -- a durable
+        # marker recording whether seeding has EVER run for this
+        # database file, checked once and never re-consulted after.
+        seed_state = self.conn.execute(
+            "SELECT id FROM canned_replies_seed_state WHERE id = 1"
+        ).fetchone()
+        if seed_state is None:
+            existing = self.conn.execute("SELECT COUNT(*) AS cnt FROM canned_replies").fetchone()
+            if existing["cnt"] == 0:
+                starter_replies = [
+                    "On my way now!",
+                    "About 5 minutes away",
+                    "Got it, thank you!",
+                    "I'm outside",
+                    "Sorry, running a bit late",
+                    "Leaving it at the door as requested",
+                    "Can't find the entrance, can you help?",
+                    "Thanks, have a great day!",
+                ]
+                for i, text in enumerate(starter_replies):
+                    self.conn.execute(
+                        "INSERT INTO canned_replies (text, sort_order) VALUES (?, ?)", (text, i)
+                    )
+            # Marker inserted either way -- whether this run just seeded a
+            # genuinely fresh database, or found an existing one already
+            # carrying data from before this fix shipped (the OLD buggy
+            # logic could only ever have left canned_replies non-empty by
+            # this point, since it re-seeded on every single restart).
+            # From here on, canned_replies is the driver's own to manage,
+            # and its row count is never consulted again to decide this.
+            self.conn.execute(
+                "INSERT INTO canned_replies_seed_state (id, seeded_at) VALUES (1, ?)", (time.time(),)
+            )
             self.conn.commit()
 
         # Migration for databases that already existed before is_test_data
