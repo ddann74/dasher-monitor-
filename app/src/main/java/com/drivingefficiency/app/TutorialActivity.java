@@ -48,6 +48,16 @@ public class TutorialActivity extends AppCompatActivity {
     private int currentStep = 0;
     private static final int TOTAL_STEPS = 11;
     private boolean pickupRegistered = false;
+    // docs/tutorial_stops_buffer_cleanup/PRD.md -- CONFIRMED REAL BUG,
+    // fixed here: the fake address added via add_stop_to_buffer in
+    // showStepDriving() lives in a SEPARATE, longer-lived buffer
+    // (StopsBuffer, 24h TTL, powers the Road Warrior clipboard-copy
+    // feature) that discard_pending_pickup_and_stops never touches --
+    // only TripManager's own pickup/stops. Tracked here so cleanup can
+    // remove exactly this one entry, not a blanket clear that would
+    // also wipe real addresses from real prior deliveries already in
+    // that buffer.
+    private String simulatedStopBufferAddress = null;
 
     private TextView stepCounter;
     private TextView stepBody;
@@ -281,9 +291,9 @@ public class TutorialActivity extends AppCompatActivity {
                 double destLon = environment.optDouble("dest_lon", 0);
                 long clock = System.currentTimeMillis();
 
-                engine.callAttr("add_stop_to_buffer",
-                        environment.optString("restaurant_name", "Example Restaurant") + " (simulated stop)",
-                        destLat, destLon);
+                simulatedStopBufferAddress =
+                        environment.optString("restaurant_name", "Example Restaurant") + " (simulated stop)";
+                engine.callAttr("add_stop_to_buffer", simulatedStopBufferAddress, destLat, destLon);
 
                 int driveTicks = 10;
                 for (int i = 1; i <= driveTicks; i++) {
@@ -352,6 +362,7 @@ public class TutorialActivity extends AppCompatActivity {
         } catch (PyException ignored) {
             // Not fatal -- onDestroy's own cleanup covers this too.
         }
+        clearSimulatedStopBufferEntry();
         pickupRegistered = false;
         OverlayHelper.clearStatusDot(this);
         stepBody.setText("You arrive and walk up to the door -- the status dot switches to its "
@@ -382,10 +393,32 @@ public class TutorialActivity extends AppCompatActivity {
             }
             pickupRegistered = false;
         }
+        clearSimulatedStopBufferEntry();
         OverlayHelper.clear(this);
         OverlayHelper.clearStatusDot(this);
         OverlayHelper.clearNavigationIcon(this);
         OverlayHelper.clearPersistentMessage(this);
+    }
+
+    /**
+     * docs/tutorial_stops_buffer_cleanup/PRD.md -- removes exactly the
+     * one fake address this tutorial run added to the Road Warrior
+     * buffer (see simulatedStopBufferAddress's own field doc), not a
+     * blanket clear. Idempotent (null after the first successful call,
+     * or if showStepDriving was never reached this run) and safe to
+     * call from both an interrupted exit and a normal completion.
+     */
+    private void clearSimulatedStopBufferEntry() {
+        if (simulatedStopBufferAddress == null) {
+            return;
+        }
+        try {
+            engine.callAttr("remove_stop_from_buffer", simulatedStopBufferAddress);
+        } catch (PyException ignored) {
+            // Best-effort -- a 24h TTL still bounds worst-case staleness
+            // even if this particular removal attempt fails.
+        }
+        simulatedStopBufferAddress = null;
     }
 
     @Override

@@ -2447,6 +2447,23 @@ class StopsBuffer:
                 return s
         return None
 
+    def remove(self, address):
+        """
+        docs/tutorial_stops_buffer_cleanup/PRD.md -- CONFIRMED REAL BUG,
+        fixed here: TutorialActivity's simulated driving step adds a
+        fake address here (via add_stop_to_buffer), but the tutorial's
+        own cleanup (discard_pending_pickup_and_stops) only ever cleared
+        TripManager's pickup/stops -- this separate, longer-lived buffer
+        (STOPS_BUFFER_TTL_SECONDS = 24h) was never touched, so the fake
+        tutorial address survived as the "most recent" entry for up to
+        a day, reachable via the Road Warrior clipboard-copy feature.
+        Removes by exact address match, same filter idiom add() already
+        uses -- deliberately NOT a full clear(), since this buffer also
+        legitimately holds real addresses from real prior deliveries
+        that must not be wiped just because a tutorial ran.
+        """
+        self._buffer = [s for s in self._buffer if s["address"] != address]
+
     def _clear_expired(self, now):
         self._buffer = [s for s in self._buffer if now - s["timestamp"] < STOPS_BUFFER_TTL_SECONDS]
 
@@ -7027,6 +7044,17 @@ class DriveMonitorEngine:
 
     def get_stops_buffer_json(self):
         return self.stops_buffer.as_json()
+
+    def remove_stop_from_buffer(self, address):
+        """
+        docs/tutorial_stops_buffer_cleanup/PRD.md -- see StopsBuffer.remove's
+        own docstring for the bug this closes. Called by TutorialActivity's
+        cleanup alongside discard_pending_pickup_and_stops, with the exact
+        address it added via add_stop_to_buffer earlier -- NOT a full
+        clear, so real addresses from real prior deliveries already in
+        this buffer are left untouched.
+        """
+        self.stops_buffer.remove(address)
 
     # Message intelligence (work: Dasher app / customer SMS instructions) ----
     def on_notification(self, package_name, title, text, timestamp_ms, is_messaging_style, lat=None, lon=None):
