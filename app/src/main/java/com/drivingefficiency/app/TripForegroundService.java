@@ -2108,6 +2108,15 @@ public class TripForegroundService extends Service {
                 logDiagnostic("PHASE_TIMING", obj.optString("phase_capture_log", ""));
             }
 
+            // docs/gps_jump_plausibility_check/PRD.md -- previously a bad
+            // GPS fix silently corrupted the trip's real distance with no
+            // trace anywhere. Logged, not alerted -- this is the fix
+            // self-correcting exactly as designed, not a driver-actionable
+            // problem.
+            if (!obj.isNull("gps_jump_rejected_log")) {
+                logDiagnostic("GPS_JUMP", obj.optString("gps_jump_rejected_log", ""));
+            }
+
             JSONObject arrival = obj.optJSONObject("arrival");
             if (arrival == null) {
                 return;

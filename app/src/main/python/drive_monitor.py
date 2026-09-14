@@ -87,6 +87,21 @@ DEFAULT_WALKING_SPEED_THRESHOLD_KMH = 8.0
 WALKING_SPEED_MIN_KMH = 0.5
 WALKING_SPEED_MIN_SAMPLES_TO_LEARN = 10
 
+# docs/gps_jump_plausibility_check/PRD.md -- CONFIRMED REAL BUG, fixed
+# here: _process_point_during_trip had zero plausibility check on a new
+# GPS fix before adding its distance to the trip's real, permanent
+# distance_km -- a single bad fix (multipath, cold-start GPS error, a
+# momentary wild jump) got added as if it were real movement, and the
+# NEXT real fix returning to the true location added the same distance
+# again. Verified end-to-end: one bad fix inflated a real trip's
+# distance_km from 0 to ~16,000km, then ~32,000km after the next real
+# fix. 250 km/h is a generous, physically-grounded ceiling (well above
+# any real highway speed, with margin) -- a judgment call, not a
+# derived constant, same honesty status as this file's other tuned
+# thresholds. Chosen high specifically to never reject genuine fast
+# highway driving, only a fix that's physically impossible to be real.
+GPS_JUMP_MAX_PLAUSIBLE_SPEED_KMH = 250.0
+
 # Retrospective classification (see TripManager.is_walking_pace): a
 # single slow GPS reading can't tell "parked, now walking" apart from
 # "car briefly slowed in traffic" -- both look identical in isolation.
@@ -2461,6 +2476,7 @@ class TripManager:
         self._last_gap_sample_log = None
         self._last_phase_capture_log = None
         self._last_notification_skip_log = None
+        self._last_gps_jump_rejected_log = None
         self._last_gap_restaurant_name = None
         self._last_gap_seconds = None
         self._last_gap_feedback_row_id = None
@@ -2986,8 +3002,31 @@ class TripManager:
     def _process_point_during_trip(self, lat, lon, speed_kmh, ts):
         classification = self._classify_speed(speed_kmh)
         if self.gps_points:
-            prev_lat, prev_lon = self.gps_points[-1][0], self.gps_points[-1][1]
-            self._cumulative_distance_km += haversine_meters(prev_lat, prev_lon, lat, lon) / 1000.0
+            prev_lat, prev_lon, _, prev_ts, _ = self.gps_points[-1]
+            distance_km = haversine_meters(prev_lat, prev_lon, lat, lon) / 1000.0
+            dt_seconds = ts - prev_ts
+            # docs/gps_jump_plausibility_check/PRD.md -- reject a fix whose
+            # implied speed since the LAST GOOD fix is physically
+            # impossible, rather than trusting it as real movement. Only
+            # checked when dt_seconds > 0 (a non-positive/duplicate
+            # timestamp can't produce a meaningful speed either way, and
+            # was never guarded before this fix -- not the scenario this
+            # targets). Returns immediately WITHOUT appending this point
+            # or running harsh-event/delay detection on it -- a point bad
+            # enough to reject for distance is bad enough to reject
+            # entirely, and the comparison for the NEXT tick correctly
+            # stays anchored to the last known-good point instead of this
+            # rejected one.
+            if dt_seconds > 0:
+                implied_speed_kmh = distance_km / (dt_seconds / 3600.0)
+                if implied_speed_kmh > GPS_JUMP_MAX_PLAUSIBLE_SPEED_KMH:
+                    self._last_gps_jump_rejected_log = (
+                        f"Rejected a GPS fix: implied speed {implied_speed_kmh:.0f} km/h over "
+                        f"{dt_seconds:.1f}s ({distance_km:.2f}km) -- physically implausible, not "
+                        f"counted as real movement. Still comparing against the last valid fix."
+                    )
+                    return
+            self._cumulative_distance_km += distance_km
         self.gps_points.append((lat, lon, speed_kmh, ts, classification))
         self._detect_harsh_events(speed_kmh, ts, lat, lon)
         self._detect_major_delay(speed_kmh, ts, lat, lon)
@@ -4105,6 +4144,11 @@ class DriveMonitorEngine:
         phase_capture_log = self.trip_manager._last_phase_capture_log
         self.trip_manager._last_phase_capture_log = None
 
+        # docs/gps_jump_plausibility_check/PRD.md -- same consumption
+        # pattern, for a rejected physically-implausible GPS fix.
+        gps_jump_rejected_log = self.trip_manager._last_gps_jump_rejected_log
+        self.trip_manager._last_gps_jump_rejected_log = None
+
         return json.dumps({
             "state": self.trip_manager.state,
             "mode": self.trip_manager.get_mode(),
@@ -4115,6 +4159,7 @@ class DriveMonitorEngine:
             "is_walking": is_walking,
             "gap_sample_log": gap_sample_log,
             "phase_capture_log": phase_capture_log,
+            "gps_jump_rejected_log": gps_jump_rejected_log,
         })
 
     def is_walking_pace(self, lat, lon, speed_kmh, ts=None):
