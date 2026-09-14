@@ -3176,25 +3176,35 @@ class TripManager:
             dt_seconds = ts - prev_ts
             # docs/gps_jump_plausibility_check/PRD.md -- reject a fix whose
             # implied speed since the LAST GOOD fix is physically
-            # impossible, rather than trusting it as real movement. Only
-            # checked when dt_seconds > 0 (a non-positive/duplicate
-            # timestamp can't produce a meaningful speed either way, and
-            # was never guarded before this fix -- not the scenario this
-            # targets). Returns immediately WITHOUT appending this point
-            # or running harsh-event/delay detection on it -- a point bad
-            # enough to reject for distance is bad enough to reject
-            # entirely, and the comparison for the NEXT tick correctly
-            # stays anchored to the last known-good point instead of this
-            # rejected one.
-            if dt_seconds > 0:
-                implied_speed_kmh = distance_km / (dt_seconds / 3600.0)
-                if implied_speed_kmh > GPS_JUMP_MAX_PLAUSIBLE_SPEED_KMH:
-                    self._last_gps_jump_rejected_log = (
-                        f"Rejected a GPS fix: implied speed {implied_speed_kmh:.0f} km/h over "
-                        f"{dt_seconds:.1f}s ({distance_km:.2f}km) -- physically implausible, not "
-                        f"counted as real movement. Still comparing against the last valid fix."
-                    )
-                    return
+            # impossible, rather than trusting it as real movement.
+            # docs/geocode_pickup_race_condition/PRD.md's round-6 follow-up
+            # (docs/gps_jump_nonpositive_dt/PRD.md): a dt_seconds <= 0 fix
+            # (duplicate or out-of-order timestamp -- e.g. a batched
+            # LocationResult delivering several queued fixes stamped with
+            # the same processing-time value after a Doze wakeup) used to
+            # skip the plausible-speed check entirely and still add its
+            # full distance unconditionally. That's exactly the case that
+            # most needs rejecting, not an exemption from it. Both branches
+            # return immediately WITHOUT appending this point or running
+            # harsh-event/delay detection on it -- a point bad enough to
+            # reject for distance is bad enough to reject entirely, and the
+            # comparison for the NEXT tick correctly stays anchored to the
+            # last known-good point instead of this rejected one.
+            if dt_seconds <= 0:
+                self._last_gps_jump_rejected_log = (
+                    f"Rejected a GPS fix: timestamp not after the last accepted fix "
+                    f"(dt={dt_seconds:.3f}s) -- duplicate or out-of-order fix, not "
+                    f"counted as real movement. Still comparing against the last valid fix."
+                )
+                return
+            implied_speed_kmh = distance_km / (dt_seconds / 3600.0)
+            if implied_speed_kmh > GPS_JUMP_MAX_PLAUSIBLE_SPEED_KMH:
+                self._last_gps_jump_rejected_log = (
+                    f"Rejected a GPS fix: implied speed {implied_speed_kmh:.0f} km/h over "
+                    f"{dt_seconds:.1f}s ({distance_km:.2f}km) -- physically implausible, not "
+                    f"counted as real movement. Still comparing against the last valid fix."
+                )
+                return
             self._cumulative_distance_km += distance_km
         self.gps_points.append((lat, lon, speed_kmh, ts, classification))
         self._detect_harsh_events(speed_kmh, ts, lat, lon)
