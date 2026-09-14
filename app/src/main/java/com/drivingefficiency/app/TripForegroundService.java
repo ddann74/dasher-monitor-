@@ -1337,28 +1337,26 @@ public class TripForegroundService extends Service {
         tripWakeLock = null;
     }
 
-    private static final long FEEDBACK_OVERLAY_AUTO_DISMISS_MS = 20 * 1000;
-
     /**
-     * Requirement change (2026-08-30, docs/feedback_page_direct/PRD.md):
-     * per explicit request, shows the feedback page directly instead of
-     * only ever posting a notification the driver has to tap. Mirrors
-     * AppNotificationListenerService.launchDasherApp()'s proven
-     * Background Activity Launch (BAL) workaround -- a background Service
-     * genuinely can't show the feedback AlertDialog itself, but it CAN
-     * reliably bring an Activity to the foreground, the same way
-     * launchDasherApp already does for a new offer. Reasonable to
-     * auto-launch here, unlike an offer arriving mid-drive: this only
-     * fires once a delivery is actually marked complete, which requires
-     * the driver to already be interacting with their phone.
-     *
-     * Retargeted (docs/trip_history_redesign/PRD.md ss3.4, driver's own
-     * correction): previously brought MainActivity straight to the
-     * feedback dialog via auto_show_feedback_trip_id, with no trip
-     * summary ever shown. Now brings TripDetailActivity to the
-     * foreground instead -- the driver's actual "what just happened"
-     * moment -- whose "Rate This Delivery" button relaunches
-     * MainActivity with that same extra afterward.
+     * Reversed by explicit driver request (2026-09-14, docs/
+     * zero_interaction_delivery_completion/PRD.md): this used to force
+     * TripDetailActivity to the foreground after every single completed
+     * delivery -- a BAL direct-launch attempt plus a full-screen-intent
+     * HIGH-importance notification, matching a PRIOR driver request
+     * (2026-08-30, docs/feedback_page_direct/PRD.md) that explicitly
+     * wanted exactly that. The driver has since asked for the opposite:
+     * zero forced interaction mid-shift. This now only ever posts an
+     * ordinary, tap-to-open notification -- no BAL launch, no full-screen
+     * intent, no overlay. The parking-difficulty question (previously
+     * part of this same forced dialog) is already auto-recorded with no
+     * interaction at all (see _auto_parking_difficulty_label); the
+     * remaining categories (navigation/merchant wait/customer/overall/
+     * notes/star rating) are now batched into the end-of-shift review
+     * (MainActivity.showDeliveryRatingReview) instead of asked here.
+     * Tapping this notification still opens the exact same
+     * TripDetailActivity -> "Rate This Delivery" flow immediately, for a
+     * driver who wants to rate a specific delivery right away rather
+     * than waiting for the end-of-shift batch.
      */
     private void notifyRateThisDelivery() {
         try {
@@ -1385,81 +1383,44 @@ public class TripForegroundService extends Service {
                 return;
             }
 
-            // docs/trip_history_redesign/PRD.md ss3.4 -- previously
-            // targeted MainActivity directly with auto_show_feedback_
-            // trip_id, which jumped straight to the star-rating dialog
-            // with no trip summary ever shown. Now opens TripDetailActivity
-            // first (the actual full detail screen), whose "Rate This
-            // Delivery" button relaunches MainActivity with that same
-            // extra afterward -- everything below this (the BAL-exemption
-            // overlay/direct-launch/full-screen-intent fallback chain) is
-            // otherwise UNCHANGED, only the target class differs.
             Intent intent = new Intent(this, TripDetailActivity.class);
             intent.putExtra(TripDetailActivity.EXTRA_TRIP_ID, tripId);
             intent.putExtra(TripDetailActivity.EXTRA_PROMPT_FEEDBACK_ON_CLOSE, true);
             intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
 
-            // Same BAL exemption launchDasherApp relies on: an app
-            // currently showing a visible overlay window is one of
-            // Android's real Background Activity Launch exemptions, unlike
-            // the plain background-service context startActivity() would
-            // otherwise run from. Shown FIRST so the overlay window is
-            // genuinely on screen by the time startActivity() runs below.
-            OverlayHelper.showMessage(this, "Delivery complete -- tap to rate it.",
-                    FEEDBACK_OVERLAY_AUTO_DISMISS_MS, android.graphics.Color.parseColor("#CC2E7D32"),
-                    () -> {
-                        try {
-                            startActivity(intent);
-                        } catch (RuntimeException e) {
-                            logDiagnostic("ERROR", "Rate-delivery overlay tap-to-launch exception: "
-                                    + android.util.Log.getStackTraceString(e));
-                        }
-                    });
-            try {
-                startActivity(intent);
-                // HONESTY NOTE, same as launchDasherApp: a blocked BAL
-                // launch fails SILENTLY -- no exception -- so this can't
-                // actually confirm the direct switch worked, only that it
-                // was attempted under a condition where it plausibly can.
-                logDiagnostic("BUTTON", "Attempted direct feedback-page launch for trip " + tripId
-                        + " while an overlay window was active -- not confirmable whether it actually "
-                        + "switched apps, see AppNotificationListenerService.launchDasherApp's class docs");
-            } catch (RuntimeException e) {
-                logDiagnostic("BUTTON", "Direct feedback-page launch attempt failed/blocked for trip "
-                        + tripId + ": " + e.getClass().getSimpleName()
-                        + " -- falling back to full-screen-intent notification + overlay tap");
-            }
-
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager == null) {
                 return;
             }
-            String channelId = "rate_delivery_prompt";
+            // A NEW channel id, not the old "rate_delivery_prompt" one --
+            // Android deliberately makes createNotificationChannel() a
+            // no-op for an ALREADY-EXISTING channel id's importance, even
+            // when the code asks for a different one (a documented
+            // platform restriction, so apps can't silently re-escalate a
+            // channel a user already downgraded). Reusing the old id here
+            // would leave every existing install stuck on the old
+            // IMPORTANCE_HIGH channel forever, even after this fix ships.
+            String channelId = "rate_delivery_prompt_passive";
             NotificationChannelHelper.ensureChannel(manager, channelId, "Rate This Delivery",
-                    NotificationManager.IMPORTANCE_HIGH,
-                    "Shows the feedback page right after a delivery completes", false);
-            // Posted unconditionally, not only if the direct attempt above
-            // threw -- a blocked BAL launch fails silently (no exception),
-            // so there's no reliable way to know whether it's needed. Same
-            // full-screen-intent mechanism as launchDasherApp, same
-            // already-granted USE_FULL_SCREEN_INTENT permission -- reliable
-            // even from the lock screen, with ordinary tap-to-open as the
-            // fallback if that permission is ever revoked (Android 14+).
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                    "Lets you open the feedback page for a completed delivery, "
+                            + "without interrupting you -- ratings are also batched "
+                            + "into the end-of-shift review", false);
             PendingIntent pendingIntent = PendingIntent.getActivity(this, tripId, intent,
                     PendingIntent.FLAG_UPDATE_CURRENT
                             | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0));
             Notification notification = new Notification.Builder(this, channelId)
-                    .setContentTitle("Rate this delivery")
-                    .setContentText("Opening the feedback page...")
+                    .setContentTitle("Delivery complete")
+                    .setContentText("Parking was auto-recorded. Tap to rate the rest now, "
+                            + "or answer it in the end-of-shift review.")
                     .setSmallIcon(android.R.drawable.ic_menu_edit)
-                    .setPriority(Notification.PRIORITY_HIGH)
+                    .setPriority(Notification.PRIORITY_DEFAULT)
                     .setCategory(Notification.CATEGORY_REMINDER)
-                    .setFullScreenIntent(pendingIntent, true)
                     .setContentIntent(pendingIntent)
                     .setAutoCancel(true)
                     .build();
             manager.notify(9200 + tripId, notification);
-            logDiagnostic("BUTTON", "Requested feedback-page foreground via full-screen-intent notification for trip " + tripId);
+            logDiagnostic("BUTTON", "Posted ordinary (non-intrusive) rate-delivery notification for trip " + tripId);
         } catch (JSONException | RuntimeException e) {
             logDiagnostic("ERROR", "notifyRateThisDelivery exception: " + android.util.Log.getStackTraceString(e));
         }
@@ -1643,6 +1604,13 @@ public class TripForegroundService extends Service {
             // one would have. Skipped here so only one prompt ever fires per
             // trip instead of two.
             if (wasTripActive && !isAutoPauseStop) {
+                // Driver-requested (2026-09-14): auto-clear the persistent
+                // delivery-instruction overlay the moment a delivery
+                // genuinely completes, instead of requiring a manual tap
+                // -- same "delivery actually complete" signal this whole
+                // block already trusts for notifyRateThisDelivery(). A
+                // no-op if no instruction overlay is currently showing.
+                OverlayHelper.clearPersistentMessage(this);
                 notifyRateThisDelivery();
                 verifyScreenRecordingAfterDelivery();
             }
@@ -1859,6 +1827,8 @@ public class TripForegroundService extends Service {
                 // (already-working) feedback dialog if its "Rate This
                 // Delivery" button is tapped.
                 if ("TRIP_ACTIVE".equals(lastKnownTripState) && "IDLE".equals(tripState)) {
+                    // Same auto-clear as the manual-stop path above.
+                    OverlayHelper.clearPersistentMessage(this);
                     notifyRateThisDelivery();
                     verifyScreenRecordingAfterDelivery();
                 }

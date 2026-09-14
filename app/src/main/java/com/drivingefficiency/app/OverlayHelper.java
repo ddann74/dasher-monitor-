@@ -157,14 +157,23 @@ public final class OverlayHelper {
     /**
      * A fully SEPARATE, independent overlay from showMessage()/clear()
      * above -- deliberately does not share state with the Smart Score
-     * badge or arrival-announcement overlay. Per explicit request: shown
-     * while APPROACHING a stop with a pending delivery instruction, and
-     * must NOT auto-clear for any reason (not a timer, not arrival, not
-     * another overlay event elsewhere in the app) -- the only thing that
-     * ever dismisses it is the user tapping it, since the delivery may
-     * not actually be complete yet even after arriving. Touchable
-     * (unlike every other overlay in this app, which are deliberately
-     * non-interactive) specifically so a tap can dismiss it.
+     * badge or arrival-announcement overlay. Per the original explicit
+     * request: shown while APPROACHING a stop with a pending delivery
+     * instruction, and previously did NOT auto-clear for any reason (not
+     * a timer, not arrival) -- only a tap dismissed it, since arrival
+     * alone doesn't mean the delivery is actually done.
+     *
+     * REVERSED IN PART (2026-09-14, docs/
+     * zero_interaction_delivery_completion/PRD.md): the driver has since
+     * asked for zero forced interaction while driving, including not
+     * having to tap this away. TripForegroundService now calls
+     * clearPersistentMessage() itself once a delivery genuinely
+     * completes (the same TRIP_ACTIVE-to-IDLE signal notifyRateThisDelivery
+     * already trusts), so a tap is no longer the ONLY way this clears --
+     * it's just the immediate, manual way, still supported for a driver
+     * who wants it gone sooner. Touchable (unlike every other overlay in
+     * this app, which are deliberately non-interactive) specifically so
+     * that manual tap can still dismiss it.
      */
     public static boolean showPersistentTappableMessage(Context context, String message, java.util.List<String> cannedReplies) {
         return showPersistentTappableMessage(context, message, cannedReplies, null);

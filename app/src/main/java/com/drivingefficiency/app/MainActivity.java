@@ -119,10 +119,12 @@ public class MainActivity extends AppCompatActivity {
                 // (see actuallyStartMonitoring), stopping is usually the first
                 // moment you're looking at this screen again after a shift --
                 // show the trip summary right away instead of an empty screen.
-                // Driver-requested (2026-09-13): review declined/no-response
-                // offers from THIS shift first, if there are any -- see
-                // maybeReviewDeclinedOffersThenShowTripSummary's own doc.
-                maybeReviewDeclinedOffersThenShowTripSummary();
+                // Driver-requested (2026-09-14): review this shift's own
+                // deliveries needing a rating FIRST -- see
+                // maybeReviewDeliveryRatingsThenReviewDeclinedOffers's own
+                // doc -- then declined/no-response offers (2026-09-13), then
+                // finally the trip summary.
+                maybeReviewDeliveryRatingsThenReviewDeclinedOffers();
             });
 
             // Genuine "fully off" -- no notification, no badge, nothing.
@@ -687,6 +689,132 @@ public class MainActivity extends AppCompatActivity {
      * the existing, already-working trip-summary flow over this new,
      * optional feature.
      */
+    /**
+     * Driver-requested (2026-09-14, docs/zero_interaction_delivery_
+     * completion/PRD.md): "Rate This Delivery" no longer force-opens
+     * after every individual delivery mid-shift (see
+     * TripForegroundService.notifyRateThisDelivery's updated comment) --
+     * this is the shift-end counterpart, checking whether THIS shift
+     * (same TripForegroundService.sessionStartMs real Start-Monitoring
+     * timestamp maybeReviewDeclinedOffersThenShowTripSummary already
+     * uses) has any completed deliveries still missing a rating. If not
+     * (the common case for a short shift, or one where every delivery was
+     * already rated via the still-available passive notification), falls
+     * straight through to the decline-reason review unchanged -- no
+     * dialog interrupts anything new. Any failure here degrades the same
+     * way, never blocking the existing flow.
+     */
+    private void maybeReviewDeliveryRatingsThenReviewDeclinedOffers() {
+        try {
+            long sessionStartMs = TripForegroundService.sessionStartMs;
+            if (sessionStartMs <= 0) {
+                maybeReviewDeclinedOffersThenShowTripSummary();
+                return;
+            }
+            JSONArray deliveries = new JSONArray(
+                    engine.callAttr("get_deliveries_needing_rating", sessionStartMs / 1000.0).toString());
+            if (deliveries.length() == 0) {
+                maybeReviewDeclinedOffersThenShowTripSummary();
+                return;
+            }
+            logDiagnostic("TRIP_FEEDBACK", "Shift-end review: " + deliveries.length()
+                    + " deliverie(s) from this shift still need a rating");
+            showDeliveryRatingReview(deliveries, 0);
+        } catch (JSONException | RuntimeException e) { // covers PyException too
+            logDiagnostic("ERROR", "maybeReviewDeliveryRatingsThenReviewDeclinedOffers exception: "
+                    + android.util.Log.getStackTraceString(e));
+            maybeReviewDeclinedOffersThenShowTripSummary();
+        }
+    }
+
+    /**
+     * Shows one delivery at a time from the shift-end rating-review list,
+     * recursing to the next on Save, Skip, or a dismissal (back button/
+     * tap-outside -- treated the same as Skip). Falls through to the
+     * decline-reason review once every delivery in the list has been
+     * handled, mirroring showDeclineReasonReview's own recursive shape.
+     *
+     * Deliberately does NOT include a parking category -- parking
+     * difficulty is already auto-recorded with zero interaction for every
+     * stop (see drive_monitor.py's _auto_parking_difficulty_label), and a
+     * driver who wants to correct it right after a specific delivery
+     * already can, via that delivery's own passive notification, which
+     * still opens the full original dialog (parking category included).
+     */
+    private void showDeliveryRatingReview(JSONArray deliveries, int index) {
+        if (index >= deliveries.length()) {
+            maybeReviewDeclinedOffersThenShowTripSummary();
+            return;
+        }
+        JSONObject delivery = deliveries.optJSONObject(index);
+        if (delivery == null) {
+            showDeliveryRatingReview(deliveries, index + 1);
+            return;
+        }
+        int tripId = delivery.optInt("trip_id", -1);
+        String pickupAddress = delivery.optString("pickup_address", "");
+
+        android.widget.LinearLayout layout = new android.widget.LinearLayout(this);
+        layout.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int pad = (int) (16 * getResources().getDisplayMetrics().density);
+        layout.setPadding(pad, pad, pad, pad);
+
+        TextView subtitle = new TextView(this);
+        subtitle.setText(String.format(java.util.Locale.US, "%s\ndelivery %d of %d -- all optional",
+                pickupAddress.isEmpty() ? "This delivery" : pickupAddress,
+                index + 1, deliveries.length()));
+        subtitle.setTextSize(13f);
+        layout.addView(subtitle);
+
+        android.widget.RatingBar ratingBar = new android.widget.RatingBar(this);
+        ratingBar.setNumStars(5);
+        ratingBar.setStepSize(1f);
+        layout.addView(ratingBar);
+
+        String[] navigationSelected = {null};
+        String[] merchantWaitSelected = {null};
+        String[] customerSelected = {null};
+        String[] overallSelected = {null};
+        layout.addView(buildFeedbackCategoryRow("Navigation",
+                new String[]{"Simple", "Confusing", "Lost"}, navigationSelected));
+        layout.addView(buildFeedbackCategoryRow("Merchant Wait",
+                new String[]{"Fast", "Okay", "Slow"}, merchantWaitSelected));
+        layout.addView(buildFeedbackCategoryRow("Customer",
+                new String[]{"Nice", "Neutral", "Rude"}, customerSelected));
+        layout.addView(buildFeedbackCategoryRow("Overall",
+                new String[]{"Good", "Okay", "Bad"}, overallSelected));
+
+        EditText notesInput = new EditText(this);
+        notesInput.setHint("Notes (optional)");
+        layout.addView(notesInput);
+
+        android.widget.ScrollView scrollView = new android.widget.ScrollView(this);
+        scrollView.addView(layout);
+
+        new AlertDialog.Builder(this)
+                .setTitle("Rate this delivery")
+                .setMessage("Parking was already auto-recorded from how long it took you to get moving.")
+                .setView(scrollView)
+                .setPositiveButton("Save", (d, w) -> {
+                    int rating = Math.round(ratingBar.getRating());
+                    String notes = notesInput.getText().toString().trim();
+                    try {
+                        engine.callAttr("save_trip_feedback", tripId, rating, notes,
+                                null, navigationSelected[0], merchantWaitSelected[0],
+                                customerSelected[0], overallSelected[0]);
+                        engine.callAttr("recalculate_personal_calibration");
+                        logDiagnostic("TRIP_FEEDBACK", "Batched shift-end rating saved for trip " + tripId);
+                    } catch (RuntimeException e) { // covers PyException too
+                        logDiagnostic("ERROR", "save_trip_feedback (shift-end batch) exception: "
+                                + android.util.Log.getStackTraceString(e));
+                    }
+                    showDeliveryRatingReview(deliveries, index + 1);
+                })
+                .setNegativeButton("Skip", (d, w) -> showDeliveryRatingReview(deliveries, index + 1))
+                .setOnCancelListener(d -> showDeliveryRatingReview(deliveries, index + 1))
+                .show();
+    }
+
     private void maybeReviewDeclinedOffersThenShowTripSummary() {
         try {
             long sessionStartMs = TripForegroundService.sessionStartMs;

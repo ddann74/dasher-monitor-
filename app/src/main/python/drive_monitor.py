@@ -4790,6 +4790,53 @@ class DriveMonitorEngine:
             return json.dumps({"found": False})
         return json.dumps(self._build_trip_summary_dict(row))
 
+    def get_deliveries_needing_rating(self, since_ts):
+        """
+        Driver-requested (2026-09-14, docs/zero_interaction_delivery_
+        completion/PRD.md): "Rate This Delivery" no longer force-opens
+        after every individual delivery mid-shift (see
+        TripForegroundService.notifyRateThisDelivery's updated comment)
+        -- this is the shift-end batch counterpart, mirroring
+        get_offers_needing_reason's own shape. Returns real Dasher trips
+        completed since since_ts (the real Start Monitoring timestamp,
+        matching get_offers_needing_reason's since_ts convention) that
+        don't have a trip_feedback row yet -- a trip rated immediately via
+        the passive per-delivery notification (still available, just no
+        longer forced) is correctly excluded here, since that already
+        wrote a trip_feedback row.
+
+        Deliberately does NOT include parking in the returned data --
+        parking difficulty is already auto-recorded with zero interaction
+        for every stop (see _auto_parking_difficulty_label), so this batch
+        only needs to ask about the categories that genuinely have no
+        automatic signal (navigation/merchant wait/customer/overall/
+        notes/star rating).
+
+        HONESTY NOTE: a trip's restaurant NAME is never actually persisted
+        onto the `trips` row anywhere in this schema (only the geocoded
+        pickup_address is, via update_pickup_address) -- get_trip_history
+        (the existing Trip List screen) identifies trips by start_time for
+        the same reason, not by restaurant. This returns pickup_address
+        and start_time for the same identifying purpose, rather than
+        inventing a restaurant_name this data doesn't actually have.
+        """
+        rows = self.db.conn.execute("""
+            SELECT t.id, t.start_time, t.end_time, t.pickup_address
+            FROM trips t
+            LEFT JOIN trip_feedback f ON f.trip_id = t.id
+            WHERE t.mode = 'DASHER' AND t.end_time IS NOT NULL
+                  AND t.end_time >= ? AND f.trip_id IS NULL
+            ORDER BY t.end_time ASC
+        """, (since_ts,)).fetchall()
+        return json.dumps([
+            {
+                "trip_id": row["id"],
+                "start_time": row["start_time"],
+                "pickup_address": row["pickup_address"],
+            }
+            for row in rows
+        ])
+
     def get_trip_history(self, limit=20):
         """
         Lists the most recent completed trips (newest first) for "View
