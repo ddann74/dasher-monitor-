@@ -2279,7 +2279,7 @@ public class TripForegroundService extends Service {
 
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle(title)
-                .setContentText(appendOverlayReminder(text))
+                .setContentText(appendDetectionWarning(appendOverlayReminder(text)))
                 .setSmallIcon(icon)
                 .setOngoing(true)
                 .addAction(android.R.drawable.ic_menu_close_clear_cancel,
@@ -2346,6 +2346,45 @@ public class TripForegroundService extends Service {
             return text;
         }
         return text + " (enable overlay permission to see on-screen status)";
+    }
+
+    /**
+     * docs/dasher_detection_status/PRD.md -- same consolidation as
+     * MainActivity.buildDasherDetectionStatusLine, applied to the
+     * persistent notification specifically, so a driver who's minimized
+     * the app (the normal state while actually driving) still sees this
+     * without having to reopen it. Deliberately only appends text when
+     * there's something worth noting (a real problem, or the Dash Paused
+     * state) -- unlike the in-app status line, a persistent notification
+     * that always says "everything's fine" every time it's rebuilt is
+     * just noise the driver learns to tune out.
+     */
+    private String appendDetectionWarning(String text) {
+        if (DasherAccessibilityService.pausedByAutoDetection) {
+            return text + " -- Dash Paused (auto-detected), tracking paused";
+        }
+        java.util.List<String> problems = new java.util.ArrayList<>();
+        if (!DasherAppInfo.isInstalled(this)) {
+            problems.add("Dasher app not found");
+        }
+        String enabledServices = android.provider.Settings.Secure.getString(getContentResolver(),
+                android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        boolean hasAccessibility = enabledServices != null
+                && enabledServices.contains(getPackageName() + "/" + getPackageName() + ".DasherAccessibilityService");
+        if (!hasAccessibility) {
+            problems.add("accessibility off");
+        }
+        // Same cold-start guard as checkAndLogPermissions's own
+        // notificationListenerEverConnected -- "hasn't connected yet" is
+        // normal for the first few seconds after any launch, not a real drop.
+        if (AppNotificationListenerService.lastListenerConnectedMs > 0
+                && !AppNotificationListenerService.isListenerConnected) {
+            problems.add("notification listener disconnected");
+        }
+        if (problems.isEmpty()) {
+            return text;
+        }
+        return text + " ⚠ " + String.join(", ", problems);
     }
 
     private void createNotificationChannel() {

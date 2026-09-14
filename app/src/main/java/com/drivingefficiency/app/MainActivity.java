@@ -504,8 +504,51 @@ public class MainActivity extends AppCompatActivity {
             String mode = engine.callAttr("get_mode").toString();
             String stateLabel = "TRIP_ACTIVE".equals(state) ? "Driving" : "Idle";
             String modeLabel = "DASHER".equals(mode) ? "Dasher Mode" : "General Driving Mode";
-            statusText.setText("Status: " + stateLabel + " -- " + modeLabel + warning + "\n" + buildLastUpdateLine());
+            statusText.setText("Status: " + stateLabel + " -- " + modeLabel + warning
+                    + buildDasherDetectionStatusLine() + "\n" + buildLastUpdateLine());
             updatePickupNoteButton();
+        }
+
+        /**
+         * Driver-requested (2026-09-14, docs/dasher_detection_status/PRD.md):
+         * "ensure the monitoring app is actively monitoring a dasher
+         * session" -- several real signals already existed in the code
+         * (Dasher app installed, accessibility enabled, the notification
+         * listener's LIVE connection, an auto-detected Dash Paused state)
+         * but were scattered across one-time push alerts and a voice
+         * announcement, never all visible together on this screen. No new
+         * detection mechanism -- this only consolidates what's already
+         * tracked into one line the driver can check at a glance, instead
+         * of having to notice and remember several separate alerts.
+         *
+         * Only called from the branch below where monitoring is confirmed
+         * running -- the two early-return branches above (fully off / not
+         * monitoring) never call this, since Dasher-specific detection
+         * status has nothing meaningful to report when nothing's running.
+         */
+        private String buildDasherDetectionStatusLine() {
+            java.util.List<String> problems = new java.util.ArrayList<>();
+            if (!DasherAppInfo.isInstalled(this)) {
+                problems.add("Dasher app not found installed");
+            }
+            if (!isAccessibilityServiceGranted()) {
+                problems.add("Accessibility not enabled");
+            }
+            // Cold-start guard, same as TripForegroundService's own
+            // notificationListenerEverConnected -- "hasn't connected yet"
+            // (normal for the first few seconds after any launch) must
+            // never be shown the same as a genuine drop.
+            if (AppNotificationListenerService.lastListenerConnectedMs > 0
+                    && !AppNotificationListenerService.isListenerConnected) {
+                problems.add("Notification listener disconnected");
+            }
+            if (!problems.isEmpty()) {
+                return "\n⚠ Detection: " + String.join(", ", problems);
+            }
+            if (DasherAccessibilityService.pausedByAutoDetection) {
+                return "\n⏸ Dash Paused (auto-detected) -- tracking is paused";
+            }
+            return "\n✓ Actively watching for Dasher activity";
         }
 
         /**

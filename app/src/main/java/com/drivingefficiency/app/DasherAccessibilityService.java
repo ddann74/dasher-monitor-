@@ -1198,8 +1198,16 @@ public class DasherAccessibilityService extends AccessibilityService {
      * deliberate manual "Stop Monitoring" tap, so a later "Resume Dash"
      * screen never auto-resumes tracking the user genuinely intended to
      * keep off.
+     *
+     * Widened to public static volatile (2026-09-14, docs/
+     * dasher_detection_status/PRD.md) -- while true, tracking is
+     * genuinely stopped because a Dash Paused screen was detected and
+     * hasn't cleared yet, which is exactly the signal MainActivity/
+     * TripForegroundService need to show this state persistently
+     * instead of only as the one-time voice announcement it previously
+     * only ever produced.
      */
-    private boolean pausedByAutoDetection = false;
+    public static volatile boolean pausedByAutoDetection = false;
 
     // Debounce for mode/foreground detection -- see the fix in
     // onAccessibilityEvent's mode-detection block for the full reasoning.
