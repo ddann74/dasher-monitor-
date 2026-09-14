@@ -1548,7 +1548,16 @@ public class DasherAccessibilityService extends AccessibilityService {
                 // offer arrived" because offer-handling is exactly when this
                 // callback fires.
                 try {
-                    engine.callAttr("update_pickup_coordinates", lat, lon);
+                    // CONFIRMED REAL BUG, fixed here (2026-09-14, docs/
+                    // geocode_pickup_race_condition/PRD.md): geocoding
+                    // kicks off for EVERY offer shown, not just accepted
+                    // ones -- if a later, different offer has already
+                    // replaced the registered pickup by the time THIS
+                    // (now-stale) result lands, restaurantName (captured
+                    // when this request was originally kicked off) no
+                    // longer matches it, and the Python side now discards
+                    // the stale result instead of silently applying it.
+                    engine.callAttr("update_pickup_coordinates", lat, lon, restaurantName);
                     logDiagnostic("GEOCODE", "Resolved " + restaurantName + " -> " + lat + "," + lon);
                     // Real street address for the pickup (not just the
                     // restaurant name) -- previously never captured at all.
@@ -1558,7 +1567,7 @@ public class DasherAccessibilityService extends AccessibilityService {
                     // on far more than the address text does.
                     if (formattedAddress != null && !formattedAddress.isEmpty()) {
                         try {
-                            engine.callAttr("update_pickup_address", formattedAddress);
+                            engine.callAttr("update_pickup_address", formattedAddress, restaurantName);
                         } catch (RuntimeException e) { // covers PyException too
                             logDiagnostic("ERROR", "update_pickup_address exception: "
                                     + android.util.Log.getStackTraceString(e));

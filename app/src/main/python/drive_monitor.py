@@ -2783,7 +2783,7 @@ class TripManager:
         self.pickup = None
         self.stops = []
 
-    def update_pickup_coordinates(self, lat, lon):
+    def update_pickup_coordinates(self, lat, lon, restaurant_name=None):
         """
         Called once real geocoding resolves (asynchronously, from
         GoogleApiHelper), replacing the (0.0, 0.0) placeholder with real
@@ -2792,12 +2792,32 @@ class TripManager:
         This is what actually makes arrival detection (and everything
         built on top of it: deadhead, wait time, delivery speed learning)
         work on a real delivery instead of only in simulated testing.
-        """
-        if self.pickup and self.pickup["arrived_at"] is None:
-            self.pickup["lat"] = lat
-            self.pickup["lon"] = lon
 
-    def update_pickup_address(self, address):
+        CONFIRMED REAL BUG, fixed here (2026-09-14, docs/
+        geocode_pickup_race_condition/PRD.md): geocoding kicks off for
+        EVERY offer shown on screen, not just accepted ones (see
+        DasherAccessibilityService.handleOfferResult) -- an entirely
+        normal workflow (viewing/declining several offers in quick
+        succession) can have an EARLIER offer's async geocode result
+        land AFTER a later, different offer has already overwritten
+        self.pickup via add_pickup. This previously had no way to tell
+        a stale result apart from a current one, and would silently
+        stamp the wrong restaurant's real coordinates onto whatever
+        pickup happened to be registered at that moment. restaurant_name,
+        when given, is the name the geocode request was ORIGINALLY kicked
+        off for -- if it no longer matches the CURRENTLY registered
+        pickup's own name, this result is stale and discarded. None (the
+        default) skips the check, for any caller that doesn't have the
+        name at hand.
+        """
+        if not self.pickup or self.pickup["arrived_at"] is not None:
+            return
+        if restaurant_name is not None and self.pickup["restaurant_name"] != restaurant_name:
+            return  # stale result for a pickup already superseded by a different offer
+        self.pickup["lat"] = lat
+        self.pickup["lon"] = lon
+
+    def update_pickup_address(self, address, restaurant_name=None):
         """
         Called once GoogleApiHelper's geocode-with-formatted-address
         resolves for the current pickup's restaurant name -- same "only
@@ -2809,10 +2829,30 @@ class TripManager:
         there's no separate "trip finished, backfill everything" pass the
         way there is for score_snapshot_json/deadline_text, which are
         only ever read once, at _start_trip.
+
+        restaurant_name: same stale-result guard as update_pickup_coordinates
+        (docs/geocode_pickup_race_condition/PRD.md) -- see its own
+        docstring. Also gates the persisted _update_current_trip_column
+        write below, an extension beyond the originally-reported
+        in-memory self.pickup corruption: that write lands in whatever
+        trip is CURRENTLY active by trip_id, with no pickup-identity
+        check of its own -- if a trip has already started for a LATER,
+        different pickup by the time an EARLIER pickup's stale geocode
+        result lands (plausible: geocoding is a real network call with a
+        10s timeout, easily outlasting a quick decline-then-accept-then-
+        start-driving sequence), the stale address would otherwise get
+        permanently written into that trip's own pickup_address column.
+        Skipped entirely (matching update_pickup_coordinates) rather than
+        writing a mismatched restaurant's address into the wrong trip.
         """
-        if self.pickup and self.pickup["arrived_at"] is None:
+        applies_to_current_pickup = (
+            self.pickup and self.pickup["arrived_at"] is None
+            and (restaurant_name is None or self.pickup["restaurant_name"] == restaurant_name)
+        )
+        if applies_to_current_pickup:
             self.pickup["address"] = address
-        self._update_current_trip_column("pickup_address", address)
+        if restaurant_name is None or applies_to_current_pickup:
+            self._update_current_trip_column("pickup_address", address)
 
     def record_store_wait_timer(self, over_grace_seconds):
         """
@@ -4529,11 +4569,24 @@ class DriveMonitorEngine:
         parsed off the offer screen directly) or any already-existing
         row under the old name -- going forward only, per explicit
         request.
+
+        CONFIRMED REAL BUG, fixed here (2026-09-14, docs/
+        geocode_pickup_race_condition/PRD.md): the CURRENT-trip-pickup
+        rename above used to fire whenever self.trip_manager.pickup
+        existed at all, with no check that it was actually the SAME
+        pickup this restaurant_name/lat/lon result is even about --
+        geocoding is async and kicks off for every offer shown, not
+        just accepted ones, so a stale result for an EARLIER,
+        already-superseded offer could rename a CURRENT, unrelated
+        pickup to whatever canonical identity the stale offer resolved
+        to. Now only renames when the currently registered pickup's own
+        restaurant_name still matches the name THIS result is about.
         """
         if lat == 0.0 and lon == 0.0:
             return  # placeholder coordinates (no API key configured) -- not real data worth keeping
         canonical_name = self._canonicalize_restaurant_name(restaurant_name, lat, lon)
-        if canonical_name != restaurant_name and self.trip_manager.pickup is not None:
+        if (canonical_name != restaurant_name and self.trip_manager.pickup is not None
+                and self.trip_manager.pickup["restaurant_name"] == restaurant_name):
             self.trip_manager.pickup["restaurant_name"] = canonical_name
         self.db.conn.execute("""
             INSERT INTO pickup_location_history (restaurant_name, lat, lon, timestamp)
@@ -6663,20 +6716,24 @@ class DriveMonitorEngine:
         """Wrapper -- see TripManager.discard_pending_pickup_and_stops for the real logic (docs/tutorial_mode/PRD.md ss5 P3)."""
         self.trip_manager.discard_pending_pickup_and_stops()
 
-    def update_pickup_coordinates(self, lat, lon):
+    def update_pickup_coordinates(self, lat, lon, restaurant_name=None):
         """
         Called once GoogleApiHelper's async geocoding resolves, replacing
         the placeholder coordinates with real ones for the current pickup.
+        restaurant_name: see TripManager.update_pickup_coordinates's own
+        doc (docs/geocode_pickup_race_condition/PRD.md) -- the stale-
+        result guard.
         """
-        self.trip_manager.update_pickup_coordinates(lat, lon)
+        self.trip_manager.update_pickup_coordinates(lat, lon, restaurant_name)
 
-    def update_pickup_address(self, address):
+    def update_pickup_address(self, address, restaurant_name=None):
         """
         Called once GoogleApiHelper's async geocodeAddressWithFormatted
         resolves for the current pickup's restaurant name -- see
-        TripManager.update_pickup_address's doc.
+        TripManager.update_pickup_address's doc. restaurant_name: same
+        stale-result guard as update_pickup_coordinates.
         """
-        self.trip_manager.update_pickup_address(address)
+        self.trip_manager.update_pickup_address(address, restaurant_name)
 
     def record_store_wait_timer(self, over_grace_seconds):
         """
