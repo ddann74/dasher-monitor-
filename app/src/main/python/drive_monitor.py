@@ -1933,15 +1933,36 @@ class MessageIntelligence:
     def extract_instruction(cls, body: str):
         lower = body.lower()
         for kw in cls.INSTRUCTION_KEYWORDS:
-            if kw in lower:
+            if cls._keyword_matches(kw, lower):
                 return f"delivery_note: {body.strip()}"
         for kw in cls.ADDRESS_CORRECTION_KEYWORDS:
-            if kw in lower:
+            if cls._keyword_matches(kw, lower):
                 return f"address_correction: {body.strip()}"
         for kw in cls.LATE_KEYWORDS:
-            if kw in lower:
+            if cls._keyword_matches(kw, lower):
                 return f"eta_adjustment: {body.strip()}"
         return None
+
+    @staticmethod
+    def _keyword_matches(keyword, lower_text):
+        """
+        Word-boundary match, not a plain substring check. CONFIRMED REAL
+        BUG, fixed here (2026-09-14, docs/message_keyword_word_boundary/
+        PRD.md): plain `kw in lower` matched "not " as a substring of
+        "cannot " (e.g. "Please do not knock" -> mislabeled
+        address_correction) and "unit" as a substring of "opportunity"
+        (-> mislabeled delivery_note) -- a real customer message
+        permanently mislabeled in the driver's own Trip History, even
+        though the trailing space some keywords already carried (e.g.
+        "not ") was itself an ad-hoc, incomplete attempt at exactly this
+        boundary problem (it still missed the LEADING boundary, and
+        failed to match at all when the keyword was the very last word
+        with no trailing space). \\b on both sides handles both
+        correctly and uniformly across every keyword list.
+        re.escape guards against a keyword ever containing a regex
+        special character (none currently do) safely by construction.
+        """
+        return re.search(r"\b" + re.escape(keyword.strip()) + r"\b", lower_text) is not None
 
     @classmethod
     def is_urgent(cls, instruction):
