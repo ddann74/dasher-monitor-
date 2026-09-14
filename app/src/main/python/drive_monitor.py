@@ -720,6 +720,19 @@ class Database:
                 self.conn.execute(f"ALTER TABLE trips ADD COLUMN {new_column} {col_type}")
         self.conn.commit()
 
+        # docs/developer_testing_calibration_contamination/PRD.md --
+        # CONFIRMED REAL BUG, fixed here: trips/trip_feedback had no
+        # is_test_data column at all (unlike offer_outcomes, which
+        # already filters is_test_data = 0 for calibration Source 2) --
+        # a trip whose data originated from Developer Testing's
+        # simulation (which shares the exact same live engine singleton
+        # as real monitoring) had no way, even in principle, to be
+        # excluded from what recalculate_personal_calibration's Source 1
+        # learns from.
+        if "is_test_data" not in trips_columns:
+            self.conn.execute("ALTER TABLE trips ADD COLUMN is_test_data INTEGER DEFAULT 0")
+            self.conn.commit()
+
         # Migration for databases that already existed before per-job
         # accept-time/payout/hourly-rate tracking was added -- see
         # docs/deadhead_stacked_order_baseline/PRD.md ss7.4 and
@@ -1573,11 +1586,16 @@ class SmartScoreEngine:
         }
         samples = {k: {"factor": [], "satisfaction": []} for k in factor_keys}
 
-        # Source 1: completed, rated trips.
+        # Source 1: completed, rated trips. is_test_data = 0 excludes
+        # trips whose data originated from Developer Testing's
+        # simulation (docs/developer_testing_calibration_contamination/
+        # PRD.md) -- the same protection Source 2 already has via
+        # offer_outcomes.is_test_data, previously entirely absent here
+        # since trips had no such column at all.
         trip_rows = self.db.conn.execute("""
             SELECT t.offer_score_snapshot_json, tf.overall_rating, tf.rating
             FROM trips t JOIN trip_feedback tf ON tf.trip_id = t.id
-            WHERE t.offer_score_snapshot_json IS NOT NULL
+            WHERE t.offer_score_snapshot_json IS NOT NULL AND t.is_test_data = 0
         """).fetchall()
         for row in trip_rows:
             try:
@@ -2490,6 +2508,12 @@ class TripManager:
         # partway through an already-started trip.
         self.dasher_app_foreground = False
         self._trip_mode = "GENERAL"
+        # docs/developer_testing_calibration_contamination/PRD.md --
+        # per-trip snapshot, set from on_gps_update's is_test_data
+        # argument at _start_trip time (default False for every real
+        # call site; only Developer Testing's simulation ever passes
+        # True).
+        self._trip_is_test_data = False
 
         # Pickup-location tracking: measures real time-at-pickup (parking +
         # waiting for the order, which GPS can't tell apart -- see
@@ -2518,13 +2542,13 @@ class TripManager:
         self._departure_timestamp = None        # real-clock time at departure
 
     # -- public API called from Java/Kotlin -----------------------------
-    def on_gps_update(self, lat, lon, speed_kmh, timestamp_ms):
+    def on_gps_update(self, lat, lon, speed_kmh, timestamp_ms, is_test_data=False):
         ts = timestamp_ms / 1000.0
         pickup_wait_event = None
         delivery_speed_event = None
 
         if self.state == self.STATE_IDLE:
-            self._evaluate_trip_start(speed_kmh, ts, lat, lon)
+            self._evaluate_trip_start(speed_kmh, ts, lat, lon, is_test_data)
         else:
             if self.get_mode() == "DASHER":
                 self._trip_mode = "DASHER"  # upgrade-only: sticky once true
@@ -2945,17 +2969,18 @@ class TripManager:
         return instruction
 
     # -- internal state machine -----------------------------------------
-    def _evaluate_trip_start(self, speed_kmh, ts, lat, lon):
+    def _evaluate_trip_start(self, speed_kmh, ts, lat, lon, is_test_data=False):
         if speed_kmh > TRIP_START_SPEED_KMH:
             if self._above_start_speed_since is None:
                 self._above_start_speed_since = ts
             elif ts - self._above_start_speed_since >= TRIP_START_HOLD_SECONDS:
-                self._start_trip(ts, lat, lon)
+                self._start_trip(ts, lat, lon, is_test_data)
         else:
             self._above_start_speed_since = None
 
-    def _start_trip(self, ts, lat, lon):
+    def _start_trip(self, ts, lat, lon, is_test_data=False):
         self.state = self.STATE_ACTIVE
+        self._trip_is_test_data = is_test_data
         self.gps_points = []
         self.stops = [s for s in self.stops if not s["matched"]]
         self.events = []
@@ -2993,8 +3018,9 @@ class TripManager:
         pickup_address = self.pickup.get("address") if self.pickup else None
         cur = self.db.conn.execute(
             "INSERT INTO trips (start_time, mode, start_lat, start_lon, offer_score_snapshot_json, "
-            "deadline_text, pickup_address) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (ts, self._trip_mode, lat, lon, score_snapshot, deadline_text, pickup_address)
+            "deadline_text, pickup_address, is_test_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts, self._trip_mode, lat, lon, score_snapshot, deadline_text, pickup_address,
+             int(self._trip_is_test_data))
         )
         self.db.conn.commit()
         self.trip_id = cur.lastrowid
@@ -4073,9 +4099,18 @@ class DriveMonitorEngine:
             self.db.conn.commit()
 
     # Trip lifecycle -------------------------------------------------
-    def on_gps_update(self, lat, lon, speed_kmh, timestamp_ms):
+    def on_gps_update(self, lat, lon, speed_kmh, timestamp_ms, is_test_data=False):
+        """
+        is_test_data: docs/developer_testing_calibration_contamination/
+        PRD.md -- default False for every real call site
+        (TripForegroundService). Only DeveloperTestingActivity's
+        simulation passes True, marking any trip it starts so
+        recalculate_personal_calibration's Source 1 can exclude it, the
+        same way offer_outcomes's is_test_data already excludes
+        simulated offers from Source 2.
+        """
         pickup_wait_event, delivery_speed_event = self.trip_manager.on_gps_update(
-            lat, lon, speed_kmh, timestamp_ms
+            lat, lon, speed_kmh, timestamp_ms, is_test_data
         )
         if pickup_wait_event:
             recorded = self.smart_score.record_restaurant_wait(

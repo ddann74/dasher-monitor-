@@ -174,8 +174,18 @@ public class DeveloperTestingActivity extends AppCompatActivity {
                     long clock = System.currentTimeMillis();
                     double lat = -33.905, lon = 151.205;
 
+                    // CONFIRMED REAL BUG, fixed here (2026-09-14, docs/
+                    // developer_testing_calibration_contamination/PRD.md):
+                    // this simulation shares the exact same live engine
+                    // singleton as real monitoring (PythonBridge.getEngine),
+                    // so every simulated trip it starts was, until now,
+                    // indistinguishable from a real one -- with no
+                    // is_test_data column on trips at all to ever exclude
+                    // it from recalculate_personal_calibration. The trailing
+                    // `true` marks every trip this simulation might start.
                     for (int i = 0; i < 12; i++) {
-                        engine.callAttr("on_gps_update", lat - 0.001, lon - 0.001, 30.0, clock + i * 1000L);
+                        engine.callAttr("on_gps_update", lat - 0.001, lon - 0.001, 30.0,
+                                clock + i * 1000L, true);
                     }
                     engine.callAttr("add_stop_to_buffer", "42 Example St, Fairy Meadow", lat, lon);
                     engine.callAttr("on_notification", "com.doordash.driverapp", "Customer",
@@ -187,7 +197,7 @@ public class DeveloperTestingActivity extends AppCompatActivity {
 
                     for (int i = 0; i < 65; i++) {
                         String resultJson = engine.callAttr("on_gps_update", lat, lon, 0.5,
-                                clock + (20 + i) * 1000L).toString();
+                                clock + (20 + i) * 1000L, true).toString();
                         JSONObject obj = new JSONObject(resultJson);
                         if (!obj.isNull("arrival")) {
                             arrived = true;
@@ -225,6 +235,32 @@ public class DeveloperTestingActivity extends AppCompatActivity {
                     String message = e.getMessage();
                     runOnUiThread(() -> Toast.makeText(this,
                             "Simulation error: " + message, Toast.LENGTH_LONG).show());
+                } finally {
+                    // CONFIRMED REAL BUG, fixed here: this simulation never
+                    // drove the trip to natural completion (TRIP_END_PARK_
+                    // SECONDS requires 300s of sustained near-zero speed;
+                    // the loop above only spans ~77s of simulated time) and
+                    // never reset engine state either -- the engine was
+                    // left sitting in TRIP_ACTIVE indefinitely, with the
+                    // NEXT real GPS tick, however much later and from
+                    // wherever the real driver actually was, silently
+                    // appended onto this same fake trip instead of starting
+                    // a fresh one. force_end_trip() no-ops safely if no
+                    // trip is actually active (e.g. this simulation never
+                    // reached real trip-start speed/duration), so it's
+                    // always safe to call unconditionally here -- in a
+                    // finally block specifically so an exception above
+                    // still can't leave the engine dangling mid-trip.
+                    try {
+                        engine.callAttr("force_end_trip");
+                    } catch (RuntimeException e) { // covers PyException too
+                        try {
+                            engine.callAttr("log_diagnostic", "ERROR",
+                                    "Developer Testing force_end_trip cleanup exception: "
+                                            + android.util.Log.getStackTraceString(e));
+                        } catch (RuntimeException ignored) { // covers PyException too
+                        }
+                    }
                 }
             }).start();
         }
