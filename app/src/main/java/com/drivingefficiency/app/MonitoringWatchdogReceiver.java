@@ -41,6 +41,7 @@ public class MonitoringWatchdogReceiver extends BroadcastReceiver {
     public static final String PREFS_NAME = "monitoring_watchdog_prefs";
     public static final String KEY_LAST_HEARTBEAT_MS = "last_heartbeat_ms";
     private static final String KEY_INTENDED_ACTIVE = "intended_active";
+    private static final String KEY_SESSION_START_MS = "session_start_ms";
 
     // Mode-aware, per explicit request: faster detection specifically
     // while in DASHER mode (where losing untracked time actually costs a
@@ -79,6 +80,37 @@ public class MonitoringWatchdogReceiver extends BroadcastReceiver {
     public static boolean wasIntendedActive(Context context) {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .getBoolean(KEY_INTENDED_ACTIVE, false);
+    }
+
+    /**
+     * OEM-restart silent-data-loss fix (2026-09-14, docs/
+     * session_start_ms_oem_restart/PRD.md): TripForegroundService.
+     * sessionStartMs (a `public static volatile long`, in-memory only)
+     * is what MainActivity's shift-end reviews (decline-reason,
+     * delivery-rating batch) use to scope "this shift" -- but an in-
+     * memory field doesn't survive a process death, so an OEM silently
+     * killing and MonitoringWatchdogReceiver/boot_resume_monitoring
+     * resurrecting the service mid-shift used to silently reset it to
+     * "now," quietly shrinking "this shift" to just the time since the
+     * resurrection -- any earlier offers/deliveries from the same real
+     * shift would vanish from those reviews with no indication anything
+     * was lost. Persisted here (same durable-across-process-death-and-
+     * reboot SharedPreferences file as KEY_INTENDED_ACTIVE) so
+     * startTracking() can tell a genuine new shift (wasIntendedActive()
+     * was false) from a silent resurrection mid-shift (it was still
+     * true) and resume the real value instead of resetting it.
+     */
+    public static void persistSessionStartMs(Context context, long sessionStartMs) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putLong(KEY_SESSION_START_MS, sessionStartMs)
+                .apply();
+    }
+
+    /** Returns 0 if never set (e.g. a fresh install, or before this fix shipped). */
+    public static long getPersistedSessionStartMs(Context context) {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getLong(KEY_SESSION_START_MS, 0);
     }
 
     /**

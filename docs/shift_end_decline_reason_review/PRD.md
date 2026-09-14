@@ -149,6 +149,11 @@ the flow that already worked before it existed.
   restarting in between, `sessionStartMs` correctly reflects the
   SECOND session's start (overwritten on each real `startTracking()`)
   -- verified by reading the code, not observed on a device.
+  UPDATE (2026-09-14): the WITH-a-process-restart case (an OEM
+  silently killing and resurrecting the process mid-shift) was a real,
+  separate bug -- `sessionStartMs` used to reset silently instead of
+  resuming, quietly shrinking "this shift." Fixed in `docs/
+  session_start_ms_oem_restart/PRD.md`.
 
 ## 6. Success criteria
 

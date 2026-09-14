@@ -5404,9 +5404,18 @@ class DriveMonitorEngine:
         stored identically (see the decline_reason column's own
         migration comment). Returns whether a real row was actually
         updated, so the Java side can tell "saved" from "that offer_id
-        didn't exist" (e.g. the underlying row was deleted by
-        reset_all_data between listing and answering) rather than
-        assuming success silently.
+        didn't exist" rather than assuming success silently.
+
+        CORRECTION (2026-09-14): this docstring previously cited
+        reset_all_data as a possible cause of a missing row here --
+        wrong, reset_all_data does not touch offer_outcomes at all (see
+        its own definition). The real (if practically rare) way this
+        offer_id could stop existing between listing and answering is
+        _rotate_table_keep_recent's OFFER_OUTCOMES_MAX_ROWS cap (see
+        docs/history_table_rotation/PRD.md ss5) deleting the oldest rows
+        once the table passes 50,000 -- far beyond what a single shift's
+        review list would ever span, but the honest mechanism, not a
+        guessed one.
         """
         cursor = self.db.conn.execute(
             "UPDATE offer_outcomes SET decline_reason = ? WHERE id = ?",

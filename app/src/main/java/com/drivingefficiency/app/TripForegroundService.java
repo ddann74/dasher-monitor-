@@ -468,7 +468,29 @@ public class TripForegroundService extends Service {
             return; // already tracking
         }
         logDiagnostic("SERVICE", "startTracking() -- monitoring turned on");
-        sessionStartMs = System.currentTimeMillis();
+        // OEM-restart silent-data-loss fix (2026-09-14, docs/
+        // session_start_ms_oem_restart/PRD.md): read BEFORE
+        // markIntendedActive(true) below overwrites it. If intended-active
+        // was still true from before this process started, this isn't a
+        // genuine new shift -- the previous "stop" was never a real Stop
+        // Monitoring tap, just this process dying (an OEM kill) and being
+        // resurrected (MonitoringWatchdogReceiver/boot_resume_monitoring).
+        // Resume the persisted value instead of silently resetting it, so
+        // a driver mid-shift doesn't lose earlier offers/deliveries from
+        // this same real shift out of the decline-reason/delivery-rating
+        // end-of-shift reviews.
+        boolean resumingSilentRestart = MonitoringWatchdogReceiver.wasIntendedActive(this);
+        if (resumingSilentRestart) {
+            long persisted = MonitoringWatchdogReceiver.getPersistedSessionStartMs(this);
+            sessionStartMs = persisted > 0 ? persisted : System.currentTimeMillis();
+            logDiagnostic("SERVICE", "startTracking() -- intended-active was already true "
+                    + "(a silent restart mid-shift, not a genuine new one): "
+                    + (persisted > 0 ? "resumed sessionStartMs from before the restart"
+                                     : "no persisted value available, falling back to now"));
+        } else {
+            sessionStartMs = System.currentTimeMillis();
+        }
+        MonitoringWatchdogReceiver.persistSessionStartMs(this, sessionStartMs);
         checkAndLogPermissions(true);
         monitoringActive = true;
         isRunning = true;
