@@ -151,9 +151,59 @@ public class AppNotificationListenerService extends NotificationListenerService 
     @Override
     public void onListenerConnected() {
         super.onListenerConnected();
+        // Checked BEFORE lastListenerConnectedMs is overwritten below --
+        // 0 means this is the first connect of this process instance
+        // (see reconcileActiveNotifications's own doc for why that
+        // matters, not just "was ever connected").
+        boolean isFirstConnectThisProcess = (lastListenerConnectedMs == 0);
         isListenerConnected = true;
         lastListenerConnectedMs = System.currentTimeMillis();
         logDiagnostic("NOTIFICATION_LISTENER", "Connected");
+        if (isFirstConnectThisProcess) {
+            reconcileActiveNotifications();
+        }
+    }
+
+    /**
+     * Real gap fix (2026-09-14, docs/crash_recovery_reconciliation/
+     * PRD.md): onNotificationPosted only ever fires for notifications
+     * posted AFTER this listener connects. Unlike
+     * DasherAccessibilityService's own getWindows() reconciliation at
+     * reconnect (checkCurrentForegroundWindow), nothing here previously
+     * checked what was ALREADY posted and still showing the moment this
+     * service (re)connects -- a process death (crash, OEM kill) between
+     * a notification posting and this service reconnecting meant that
+     * notification (an offer, an urgent customer message) was silently
+     * never seen. getActiveNotifications() is Android's own documented
+     * API for exactly this: the notifications currently in the shade,
+     * independent of whether THIS listener instance was alive when they
+     * posted.
+     *
+     * Gated to the FIRST connect of this process only -- a later
+     * requestRebind()-triggered reconnect within the same still-alive
+     * process would otherwise re-run every already-processed, still-
+     * active notification through onNotificationPosted again, risking
+     * duplicate voice announcements/offer-detection for content this
+     * exact process instance already handled once. A genuine process
+     * restart always gets a fresh isFirstConnectThisProcess = true, so
+     * the case this exists for is never skipped.
+     */
+    private void reconcileActiveNotifications() {
+        try {
+            StatusBarNotification[] active = getActiveNotifications();
+            if (active == null || active.length == 0) {
+                return;
+            }
+            logDiagnostic("NOTIFICATION_LISTENER", "Reconciling " + active.length
+                    + " already-posted notification(s) at first connect this process "
+                    + "-- covers anything posted while the process was dead");
+            for (StatusBarNotification sbn : active) {
+                onNotificationPosted(sbn);
+            }
+        } catch (RuntimeException e) {
+            logDiagnostic("ERROR", "reconcileActiveNotifications exception: "
+                    + android.util.Log.getStackTraceString(e));
+        }
     }
 
     /**

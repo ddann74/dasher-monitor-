@@ -492,6 +492,34 @@ public class TripForegroundService extends Service {
         }
         MonitoringWatchdogReceiver.persistSessionStartMs(this, sessionStartMs);
         checkAndLogPermissions(true);
+        // Real gap fix (2026-09-14, docs/crash_recovery_reconciliation/
+        // PRD.md): a fresh engine process always defaults to GENERAL mode
+        // (see TripManager.__init__/get_mode in drive_monitor.py),
+        // regardless of what was true the instant before a crash --
+        // there's no DB read to reconstruct it. DasherAccessibilityService.
+        // isDasherForeground is a separate static field that may already
+        // know the real answer, if it happened to reconnect before this
+        // runs (no guaranteed order between the two services binding).
+        // Seeding it here closes the window where a mid-delivery crash
+        // reports GENERAL mode -- and the watchdog picks its slower
+        // GENERAL check interval -- right when untracked time matters
+        // most, instead of relying solely on the accessibility service's
+        // own independent 20s reconcile loop to correct it later. Only
+        // seeds TRUE: the engine's own fresh-process default is already
+        // false, so there's nothing to correct in the other direction,
+        // and DasherAccessibilityService's own periodic check remains the
+        // one source of truth for correcting AWAY from Dasher.
+        if (DasherAccessibilityService.isDasherForeground) {
+            try {
+                engine.callAttr("set_dasher_foreground", true);
+                logDiagnostic("SERVICE", "startTracking() -- seeded mode from "
+                        + "DasherAccessibilityService's already-known foreground state "
+                        + "(Dasher was already open)");
+            } catch (RuntimeException e) { // covers PyException too
+                logDiagnostic("ERROR", "startTracking() set_dasher_foreground seed exception: "
+                        + android.util.Log.getStackTraceString(e));
+            }
+        }
         monitoringActive = true;
         isRunning = true;
         lastKnownMode = null; // force onModeChanged to fire on the next GPS fix
