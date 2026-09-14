@@ -31,8 +31,8 @@ import java.util.List;
  *    the *fact* that some other app came to the foreground, it NEVER reads
  *    that other app's on-screen content -- getRootInActiveWindow() and the
  *    node-tree text walk below only ever run when the event's package is
- *    DASHER_PACKAGE. For every other app, only the bare package name is
- *    checked, then discarded.
+ *    DasherAppInfo.PACKAGE_NAME. For every other app, only the bare
+ *    package name is checked, then discarded.
  *
  * 2. OFFER / ADDRESS READING -- (unchanged from before) reads on-screen
  *    text while the Dasher offer screen (or accepted-offer screen) is
@@ -52,7 +52,11 @@ import java.util.List;
  */
 public class DasherAccessibilityService extends AccessibilityService {
 
-    private static final String DASHER_PACKAGE = "com.doordash.driverapp";
+    // Package name moved to DasherAppInfo.PACKAGE_NAME (2026-09-14,
+    // docs/dasher_package_verification/PRD.md) -- was duplicated here
+    // and in AppNotificationListenerService as two independent
+    // hardcoded constants, a real drift risk if either were ever
+    // updated without the other.
     private PyObject engine;
     private String lastOfferKey = null;
 
@@ -384,7 +388,7 @@ public class DasherAccessibilityService extends AccessibilityService {
                 if (root == null || root.getPackageName() == null) {
                     continue;
                 }
-                boolean isDasher = root.getPackageName().toString().equals(DASHER_PACKAGE);
+                boolean isDasher = root.getPackageName().toString().equals(DasherAppInfo.PACKAGE_NAME);
                 if (isDasher) {
                     engine.callAttr("set_dasher_foreground", true);
                     isDasherForeground = true;
@@ -759,7 +763,7 @@ public class DasherAccessibilityService extends AccessibilityService {
         }
         String packageName = event.getPackageName() != null
                 ? event.getPackageName().toString() : "";
-        boolean isDasher = packageName.equals(DASHER_PACKAGE);
+        boolean isDasher = packageName.equals(DasherAppInfo.PACKAGE_NAME);
 
         try {
             // --- 0. Screen recording consent dialog auto-tap (docs/
@@ -1745,7 +1749,7 @@ public class DasherAccessibilityService extends AccessibilityService {
      * device here to confirm the real button text against.
      */
     private void tryAutoTapConsentDialog(String packageName) {
-        if (packageName.isEmpty() || packageName.equals(DASHER_PACKAGE) || packageName.equals(getPackageName())) {
+        if (packageName.isEmpty() || packageName.equals(DasherAppInfo.PACKAGE_NAME) || packageName.equals(getPackageName())) {
             return; // this app's own Setup screen, or Dasher -- never the system dialog
         }
         AccessibilityNodeInfo root = getRootInActiveWindow();

@@ -63,8 +63,11 @@ import java.util.List;
  */
 public class AppNotificationListenerService extends NotificationListenerService {
 
-    // Update with the real Dasher app package name.
-    private static final String DASHER_PACKAGE = "com.doordash.driverapp";
+    // Package name moved to DasherAppInfo.PACKAGE_NAME (2026-09-14,
+    // docs/dasher_package_verification/PRD.md) -- was duplicated here
+    // and in DasherAccessibilityService as two independent hardcoded
+    // constants, a real drift risk if either were ever updated without
+    // the other.
     private static final String SMS_PACKAGE = "com.google.android.apps.messaging";
     private static final String MESSENGER_PACKAGE = "com.facebook.orca";
 
@@ -239,7 +242,7 @@ public class AppNotificationListenerService extends NotificationListenerService 
             return; // never read our own notifications (status badge, etc.)
         }
 
-        boolean isDasher = packageName.equals(DASHER_PACKAGE);
+        boolean isDasher = packageName.equals(DasherAppInfo.PACKAGE_NAME);
         boolean isPersonalMessagingApp = packageName.equals(SMS_PACKAGE)
                 || packageName.equals(MESSENGER_PACKAGE);
 
@@ -277,7 +280,7 @@ public class AppNotificationListenerService extends NotificationListenerService 
                     || extras.containsKey(Notification.EXTRA_SELF_DISPLAY_NAME);
 
             // --- Work: Dasher offers / customer delivery instructions ---
-            // on_notification() only actually matches for DASHER_PACKAGE or
+            // on_notification() only actually matches for DasherAppInfo.PACKAGE_NAME or
             // SMS_PACKAGE internally, so this call is harmless (returns None)
             // for Messenger notifications.
             //
@@ -751,10 +754,10 @@ public class AppNotificationListenerService extends NotificationListenerService 
      */
     private void launchDasherApp(String restaurantName, double finalScore) {
         try {
-            Intent launchIntent = getPackageManager().getLaunchIntentForPackage(DASHER_PACKAGE);
+            Intent launchIntent = getPackageManager().getLaunchIntentForPackage(DasherAppInfo.PACKAGE_NAME);
             if (launchIntent == null) {
                 logDiagnostic("AUTO_LAUNCH", "Could not launch Dasher -- no launch intent found for "
-                        + DASHER_PACKAGE);
+                        + DasherAppInfo.PACKAGE_NAME);
                 return;
             }
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);

@@ -765,6 +765,9 @@ public class TripForegroundService extends Service {
     // permission can stay granted even after the live binding silently
     // fails to survive an OEM kill, which is exactly the gap this closes.
     private Boolean lastLoggedNotificationListenerConnected = null;
+    // docs/dasher_package_verification/PRD.md -- see checkAndLogPermissions
+    // and raiseDasherPackageNotFoundAlert.
+    private Boolean lastLoggedDasherInstalled = null;
     private android.os.PowerManager.WakeLock tripWakeLock = null;
 
     /**
@@ -807,11 +810,24 @@ public class TripForegroundService extends Service {
         boolean notificationListenerEverConnected = AppNotificationListenerService.lastListenerConnectedMs > 0;
         boolean hasNotificationListenerConnected = AppNotificationListenerService.isListenerConnected;
 
+        // docs/dasher_package_verification/PRD.md -- CONFIRMED REAL GAP,
+        // fixed here: every detection path in this app (offer parsing,
+        // screen recognition, mode switching, notification-based
+        // detection) depends entirely on DasherAppInfo.PACKAGE_NAME
+        // exactly matching a real installed app -- previously nothing
+        // ever checked whether that's actually true. A wrong or
+        // outdated package name (a rebrand, a regional variant, a typo
+        // that was never independently verified -- see DasherAppInfo's
+        // own class doc) would fail EVERYTHING silently, with no trace
+        // anywhere pointing at the real cause.
+        boolean dasherAppInstalled = DasherAppInfo.isInstalled(this);
+
         boolean changed = !Boolean.valueOf(hasLocation).equals(lastLoggedLocation)
                 || !Boolean.valueOf(hasOverlay).equals(lastLoggedOverlay)
                 || !Boolean.valueOf(hasNotificationAccess).equals(lastLoggedNotificationAccess)
                 || !Boolean.valueOf(hasBatteryExemption).equals(lastLoggedBatteryExempt)
                 || !Boolean.valueOf(hasAccessibility).equals(lastLoggedAccessibility)
+                || !Boolean.valueOf(dasherAppInstalled).equals(lastLoggedDasherInstalled)
                 || (notificationListenerEverConnected
                         && !Boolean.valueOf(hasNotificationListenerConnected).equals(lastLoggedNotificationListenerConnected));
 
@@ -867,6 +883,9 @@ public class TripForegroundService extends Service {
                         + "which is still granted) -- offer detection via notification and message reading "
                         + "won't work until it reconnects; a rebind was automatically requested");
             }
+            if (lastLoggedDasherInstalled != null && lastLoggedDasherInstalled && !dasherAppInstalled) {
+                raiseDasherPackageNotFoundAlert(false);
+            }
         }
 
         // Driver backlog #22 part a (docs/driver_backlog_2026_09_03/PRD.md):
@@ -899,12 +918,16 @@ public class TripForegroundService extends Service {
                 raisePermissionRevokedAlert("Accessibility",
                         "Offer detection and Accept/Decline tracking won't work", true);
             }
+            if (!dasherAppInstalled) {
+                raiseDasherPackageNotFoundAlert(true);
+            }
         }
 
         if (forceLog || changed) {
             logDiagnostic("PERMISSIONS", "location=" + hasLocation + " overlay=" + hasOverlay
                     + " notificationAccess=" + hasNotificationAccess + " batteryExempt=" + hasBatteryExemption
                     + " accessibility=" + hasAccessibility
+                    + " dasherAppInstalled=" + dasherAppInstalled
                     + " notificationListenerConnected=" + (notificationListenerEverConnected
                             ? String.valueOf(hasNotificationListenerConnected) : "not yet connected")
                     + (changed && !forceLog ? " (CHANGED since last check)" : ""));
@@ -922,6 +945,7 @@ public class TripForegroundService extends Service {
             lastLoggedBatteryExempt = hasBatteryExemption;
             lastLoggedAccessibility = hasAccessibility;
             lastLoggedNotificationListenerConnected = hasNotificationListenerConnected;
+            lastLoggedDasherInstalled = dasherAppInstalled;
         }
         updatePermissionAlertVibration();
     }
@@ -1022,6 +1046,50 @@ public class TripForegroundService extends Service {
                 ? " already off when monitoring started -- immediate notification raised. "
                 : " revoked while monitoring active -- immediate notification raised. ";
         logDiagnostic("ALERT", permissionName + eventDescription + buildInstallTimingNote());
+        startPermissionAlertVibration();
+    }
+
+    /**
+     * docs/dasher_package_verification/PRD.md -- a dedicated alert, not
+     * a reuse of raisePermissionRevokedAlert: this isn't a permission
+     * that gets "re-enabled," it's either DasherAppInfo.PACKAGE_NAME
+     * itself being wrong/outdated, or the driver genuinely not having
+     * DoorDash installed -- reusing the permission wording ("already
+     * off"/"turned off"/"until this is re-enabled") would be actively
+     * misleading here. Same high-priority notification mechanism
+     * (sound, vibration, its own channel) as the permission alerts,
+     * since the real-world consequence is just as severe: EVERY
+     * detection path in this app silently stops working.
+     */
+    private void raiseDasherPackageNotFoundAlert(boolean alreadyMissingAtStart) {
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager == null) {
+            return;
+        }
+        String channelId = "dasher_package_not_found_alert";
+        NotificationChannelHelper.ensureChannel(manager, channelId, "Dasher App Not Found Alerts",
+                NotificationManager.IMPORTANCE_HIGH,
+                "Alerts if the Dasher app package this monitor looks for isn't installed", true);
+        String titleState = alreadyMissingAtStart ? " not found" : " no longer found";
+        Notification notification = new Notification.Builder(this, channelId)
+                .setContentTitle("⚠ Dasher app" + titleState)
+                .setContentText("No app installed matches \"" + DasherAppInfo.PACKAGE_NAME + "\" -- offer "
+                        + "detection, screen reading, and mode switching all depend on this exact match "
+                        + "and won't work until it's corrected.")
+                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .setPriority(Notification.PRIORITY_HIGH)
+                .setDefaults(Notification.DEFAULT_SOUND | Notification.DEFAULT_VIBRATE)
+                .setAutoCancel(true)
+                .build();
+        manager.notify(9199, notification);
+        // Deliberately NOT buildInstallTimingNote() here -- that reports
+        // THIS app's (Monitor's) own install/update timing, useful
+        // elsewhere for "did reinstalling Monitor reset a permission,"
+        // but unrelated to a missing DASHER package, a different app
+        // entirely. Including it would be a confusing non-sequitur.
+        logDiagnostic("ALERT", "Dasher app package \"" + DasherAppInfo.PACKAGE_NAME + "\" not found installed"
+                + (alreadyMissingAtStart ? " (already missing when monitoring started)"
+                                         : " (was found earlier this session, no longer is)"));
         startPermissionAlertVibration();
     }
 
