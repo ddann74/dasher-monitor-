@@ -147,6 +147,46 @@ public class TrustedContactsActivity extends AppCompatActivity {
                 .apply();
     }
 
+    /**
+     * CONFIRMED REAL GAP, fixed here (2026-09-14, docs/
+     * trusted_contacts_auto_recovery_overtrigger/PRD.md): MainActivity.
+     * attemptTrustedContactsAutoRecovery only ever checks whether the
+     * trusted-contacts list is CURRENTLY empty -- indistinguishable from
+     * a driver who just deliberately removed their last contact. Since
+     * that check runs on every MainActivity.onCreate() (which re-fires
+     * on any fresh app process, including the routine OEM-kill restarts
+     * this app already deals with extensively elsewhere), a driver who
+     * intentionally emptied the list would get it silently repopulated
+     * from an old saved file the next time the app happened to restart
+     * -- quietly undoing a real, safety-relevant decision (this list
+     * gates whose messages get read aloud while driving) with only an
+     * easy-to-miss Toast as any indication it even happened.
+     *
+     * Called after every removal: if the list is now empty, this was
+     * exactly that scenario -- clears the remembered recovery file
+     * pointer so auto-recovery has nothing left to recover FROM,
+     * correctly leaving a deliberately-emptied list alone. Auto-recovery
+     * still works normally for its real intended case (a genuine
+     * reinstall/data-reset, where this pointer was never touched by a
+     * deliberate in-app removal in the first place).
+     */
+    private void clearRecoveryPointerIfListNowEmpty() {
+        try {
+            JSONArray remaining = new JSONArray(engine.callAttr("get_trusted_senders_json").toString());
+            if (remaining.length() == 0) {
+                getSharedPreferences("dasher_monitor_prefs", MODE_PRIVATE).edit()
+                        .remove("last_trusted_contacts_file_uri")
+                        .apply();
+                logDiagnostic("TRUSTED_CONTACTS", "List is now empty after a deliberate removal -- "
+                        + "cleared the auto-recovery file pointer so this won't be silently undone "
+                        + "on a later restart");
+            }
+        } catch (JSONException | RuntimeException e) { // covers PyException too
+            logDiagnostic("TRUSTED_CONTACTS", "Could not check whether the list is now empty -- "
+                    + e.getMessage());
+        }
+    }
+
     /** Reads the picked file, one name per line, adding each as a trusted contact -- exactly what re-entering by hand after a reinstall would have done, just from a file instead. */
     private void loadContactsFromUri(android.net.Uri uri) {
         try {
@@ -224,6 +264,7 @@ public class TrustedContactsActivity extends AppCompatActivity {
                             engine.callAttr("remove_trusted_sender", names[which]);
                             logDiagnostic("TRUSTED_CONTACTS", "Removed trusted contact: " + names[which]);
                             Toast.makeText(this, "Removed: " + names[which], Toast.LENGTH_SHORT).show();
+                            clearRecoveryPointerIfListNowEmpty();
                         })
                         .setNegativeButton("Close", null)
                         .show();
