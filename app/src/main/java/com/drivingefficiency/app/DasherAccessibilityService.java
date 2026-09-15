@@ -327,6 +327,7 @@ public class DasherAccessibilityService extends AccessibilityService {
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
+        lastHeartbeatMs = System.currentTimeMillis(); // see its own doc -- first liveness signal this process instance
         engine = PythonBridge.getEngine(this);
         checkCurrentForegroundWindow();
         resumeStoreWaitTimerIfPending();
@@ -347,6 +348,7 @@ public class DasherAccessibilityService extends AccessibilityService {
     private final Runnable foregroundCheckRunnable = new Runnable() {
         @Override
         public void run() {
+            lastHeartbeatMs = System.currentTimeMillis(); // see its own doc -- the floor liveness signal
             checkCurrentForegroundWindow();
             foregroundCheckHandler.postDelayed(this, FOREGROUND_CHECK_INTERVAL_MS);
         }
@@ -758,6 +760,11 @@ public class DasherAccessibilityService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
+        // See lastHeartbeatMs's own doc -- updated first, unconditionally,
+        // so even an event that bails out below (engine not ready yet)
+        // still counts as proof this service is genuinely alive and
+        // receiving real events from Android right now.
+        lastHeartbeatMs = System.currentTimeMillis();
         if (engine == null) {
             return;
         }
@@ -1255,6 +1262,58 @@ public class DasherAccessibilityService extends AccessibilityService {
       * parsers in this codebase, never previously given a general
       * detector). */
     public static volatile long lastOfferScreenConfirmedMs = 0;
+
+    /**
+     * docs/accessibility_liveness_heartbeat/PRD.md -- round-8 scouting
+     * finding: unlike AppNotificationListenerService (which has real
+     * OS-provided onListenerConnected/onListenerDisconnected liveness
+     * callbacks -- see its own docs/notification_listener_liveness/PRD.md),
+     * AccessibilityService has no equivalent Android guarantee that
+     * onUnbind/onDestroy fire when the OS or an aggressive OEM battery
+     * manager silently kills this service's live binding -- those only
+     * reliably cover the teardown paths this class already handles (see
+     * their own comments), not every real-world kill. Meanwhile
+     * ENABLED_ACCESSIBILITY_SERVICES in Settings can stay populated even
+     * after such a kill, so a check against Settings ALONE can report
+     * "accessibility is on" indefinitely while this service is actually
+     * dead and nothing is being detected.
+     *
+     * lastHeartbeatMs is the best available substitute: a timestamp this
+     * service writes to ITSELF, only while genuinely alive and running --
+     * onAccessibilityEvent (fires for real accessibility events from ANY
+     * foreground app, not just Dasher, so ordinary phone use keeps this
+     * fresh) and foregroundCheckRunnable's own 20s self-repost (a floor
+     * that keeps this fresh even during a stretch with zero real events,
+     * e.g. screen off) both update it. STALENESS (no update for a long
+     * time) is then the liveness signal -- the same indirect-detection
+     * pattern MonitoringWatchdogReceiver already uses for GPS staleness,
+     * applied here because Android provides no direct "still alive" API
+     * for AccessibilityService the way it does for NotificationListenerService.
+     */
+    public static volatile long lastHeartbeatMs = 0;
+
+    // 4.5x foregroundCheckRunnable's own 20s repost interval -- generous
+    // enough that normal jitter (a slow tick, a brief scheduling delay)
+    // never falsely reports staleness, per the same "don't train drivers
+    // to ignore alerts" caution this codebase already applies to the GPS
+    // watchdog's own threshold margin.
+    private static final long HEARTBEAT_STALE_THRESHOLD_MS = 90 * 1000;
+
+    /**
+     * True only once this service has reported in at least once (the
+     * "ever connected" cold-start guard also used for the notification
+     * listener elsewhere in this app -- never having heard from a
+     * just-launched service yet is NOT the same as a genuine drop) AND
+     * it's gone stale since. Read by MainActivity (status line + missing
+     * permissions), TripForegroundService (persistent notification +
+     * the alert that fires raisePermissionRevokedAlert), and the
+     * periodic heartbeat checks -- one source of truth for the threshold
+     * instead of four independent copies of the same arithmetic.
+     */
+    public static boolean isHeartbeatStale() {
+        return lastHeartbeatMs > 0
+                && System.currentTimeMillis() - lastHeartbeatMs > HEARTBEAT_STALE_THRESHOLD_MS;
+    }
 
     /**
      * Surfaces the Smart Score that drive_monitor.py already calculates on

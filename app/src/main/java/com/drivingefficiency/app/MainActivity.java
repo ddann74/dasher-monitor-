@@ -533,6 +533,18 @@ public class MainActivity extends AppCompatActivity {
             }
             if (!isAccessibilityServiceGranted()) {
                 problems.add("Accessibility not enabled");
+            } else if (DasherAccessibilityService.isHeartbeatStale()) {
+                // docs/accessibility_liveness_heartbeat/PRD.md -- CONFIRMED
+                // REAL GAP, fixed here: the Settings-permission check above
+                // can stay green even after the OS/an OEM battery manager
+                // silently kills the live accessibility binding (unlike
+                // AppNotificationListenerService, Android gives this
+                // service no onListenerDisconnected-style callback to catch
+                // that). isHeartbeatStale() is the actual liveness signal
+                // -- see its own doc. This is the exact false-positive
+                // "everything says it's fine but nothing's being detected"
+                // state the round-8 audit was built to catch.
+                problems.add("Accessibility not responding");
             }
             // Cold-start guard, same as TripForegroundService's own
             // notificationListenerEverConnected -- "hasn't connected yet"

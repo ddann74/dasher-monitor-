@@ -667,8 +667,14 @@ public class TripForegroundService extends Service {
         public void run() {
             String enabledServices = android.provider.Settings.Secure.getString(getContentResolver(),
                     android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
-            boolean hasAccessibility = enabledServices != null
+            boolean grantedInSettings = enabledServices != null
                     && enabledServices.contains(getPackageName() + "/" + getPackageName() + ".DasherAccessibilityService");
+            // docs/accessibility_liveness_heartbeat/PRD.md -- CONFIRMED REAL
+            // GAP, fixed here: previously this was just grantedInSettings,
+            // so a silently-killed live binding (Settings entry untouched)
+            // never tripped this check or the alert it feeds below. Folding
+            // in the real liveness heartbeat closes that -- see its own doc.
+            boolean hasAccessibility = grantedInSettings && !DasherAccessibilityService.isHeartbeatStale();
             boolean screenOn = false;
             android.os.PowerManager powerManager = (android.os.PowerManager) getSystemService(POWER_SERVICE);
             if (powerManager != null) {
@@ -797,8 +803,12 @@ public class TripForegroundService extends Service {
         // depend on.
         String enabledServices = android.provider.Settings.Secure.getString(getContentResolver(),
                 android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
-        boolean hasAccessibility = enabledServices != null
+        boolean grantedInSettings = enabledServices != null
                 && enabledServices.contains(getPackageName() + "/" + getPackageName() + ".DasherAccessibilityService");
+        // docs/accessibility_liveness_heartbeat/PRD.md -- same fix as
+        // accessibilityHeartbeatRunnable's own copy of this check just
+        // above in this file -- see its own comment there.
+        boolean hasAccessibility = grantedInSettings && !DasherAccessibilityService.isHeartbeatStale();
 
         // docs/notification_listener_liveness/PRD.md -- the live binding,
         // not the permission grant (hasNotificationAccess above already
@@ -2393,10 +2403,15 @@ public class TripForegroundService extends Service {
         }
         String enabledServices = android.provider.Settings.Secure.getString(getContentResolver(),
                 android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
-        boolean hasAccessibility = enabledServices != null
+        boolean grantedInSettings = enabledServices != null
                 && enabledServices.contains(getPackageName() + "/" + getPackageName() + ".DasherAccessibilityService");
-        if (!hasAccessibility) {
+        if (!grantedInSettings) {
             problems.add("accessibility off");
+        } else if (DasherAccessibilityService.isHeartbeatStale()) {
+            // docs/accessibility_liveness_heartbeat/PRD.md -- same
+            // consolidation as MainActivity.buildDasherDetectionStatusLine's
+            // own copy of this check.
+            problems.add("accessibility not responding");
         }
         // Same cold-start guard as checkAndLogPermissions's own
         // notificationListenerEverConnected -- "hasn't connected yet" is
