@@ -284,6 +284,19 @@ public class TutorialActivity extends AppCompatActivity {
         stepBody.setText("Driving toward the restaurant... (simulating)");
         nextButton.setEnabled(false);
         new Thread(() -> {
+            // docs/simulation_thread_live_monitoring_race/PRD.md --
+            // CONFIRMED REAL BUG, fixed here (monitoring-uptime-guarantee
+            // premortem R6): the TripForegroundService.isRunning check
+            // above only ran ONCE, before this thread was even spawned. If
+            // real monitoring started any time after that -- the driver
+            // backgrounds the tutorial mid-simulation and opens the real
+            // Dasher app -- this thread kept calling into the exact same
+            // live engine singleton (PythonBridge.getEngine) a real trip
+            // now also uses, silently interleaving fake GPS/pickup data
+            // into it. Re-checked on every loop iteration below, so the
+            // moment real monitoring starts, this thread stops making any
+            // further engine calls.
+            boolean interruptedByRealMonitoring = false;
             try {
                 double startLat = environment.optDouble("start_lat", 0);
                 double startLon = environment.optDouble("start_lon", 0);
@@ -293,17 +306,29 @@ public class TutorialActivity extends AppCompatActivity {
 
                 simulatedStopBufferAddress =
                         environment.optString("restaurant_name", "Example Restaurant") + " (simulated stop)";
-                engine.callAttr("add_stop_to_buffer", simulatedStopBufferAddress, destLat, destLon);
+                if (TripForegroundService.isRunning) {
+                    interruptedByRealMonitoring = true;
+                } else {
+                    engine.callAttr("add_stop_to_buffer", simulatedStopBufferAddress, destLat, destLon);
+                }
 
                 int driveTicks = 10;
-                for (int i = 1; i <= driveTicks; i++) {
+                for (int i = 1; i <= driveTicks && !interruptedByRealMonitoring; i++) {
+                    if (TripForegroundService.isRunning) {
+                        interruptedByRealMonitoring = true;
+                        break;
+                    }
                     double lat = startLat + (destLat - startLat) * i / (double) driveTicks;
                     double lon = startLon + (destLon - startLon) * i / (double) driveTicks;
                     engine.callAttr("on_gps_update", lat, lon, 30.0, clock + i * 1000L);
                 }
 
                 boolean arrived = false;
-                for (int i = 0; i < 80; i++) {
+                for (int i = 0; !interruptedByRealMonitoring && i < 80; i++) {
+                    if (TripForegroundService.isRunning) {
+                        interruptedByRealMonitoring = true;
+                        break;
+                    }
                     String resultJson = engine.callAttr("on_gps_update", destLat, destLon, 0.5,
                             clock + (driveTicks + i) * 1000L).toString();
                     JSONObject obj = new JSONObject(resultJson);
@@ -314,8 +339,14 @@ public class TutorialActivity extends AppCompatActivity {
                 }
 
                 boolean arrivedFinal = arrived;
+                boolean interruptedFinal = interruptedByRealMonitoring;
                 runOnUiThread(() -> {
-                    nextButton.setEnabled(true);
+                    nextButton.setEnabled(!interruptedFinal);
+                    if (interruptedFinal) {
+                        stepBody.setText("Real monitoring just started elsewhere on your phone -- stopping "
+                                + "the tutorial here so it doesn't interfere. Tap Skip Tutorial to exit.");
+                        return;
+                    }
                     stepBody.setText("You drive toward the restaurant -- this phase is silent, no "
                             + "announcements, just the status dot staying green."
                             + (arrivedFinal ? "" : "\n\n(No real arrival detected in this simulation -- "

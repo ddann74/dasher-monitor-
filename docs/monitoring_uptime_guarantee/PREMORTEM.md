@@ -1,7 +1,7 @@
 # Premortem: Monitoring Uptime Guarantee
 
 Status: LIVING RISK REGISTER (created 2026-09-15, last updated
-2026-09-15, Ralph-loop iteration 5: R1, R2, R3, R4, and R5 closed).
+2026-09-15, Ralph-loop iteration 6: R1, R2, R3, R4, R5, and R6 closed).
 Companion to `docs/monitoring_uptime_guarantee/PRD.md`.
 Updated by every Ralph-loop iteration that closes or narrows a risk --
 see that PRD's own acceptance criteria for when this register is
@@ -121,16 +121,23 @@ own re-grant button exactly). Deliberately scoped to the mid-session
 transition only, not an already-off-at-start alert -- see that PRD's
 Honest Limits.
 
-### R6 — [Open, LOW] Tutorial/Developer-Testing simulation threads race the shared engine singleton
+### R6 — [Mitigated] Tutorial/Developer-Testing simulation threads race the shared engine singleton
 
 `TutorialActivity.showStepDriving()` and
 `DeveloperTestingActivity.simulateDriveAndArrival()` spawn raw threads
 calling into the same process-wide `DriveMonitorEngine`/`TripManager`
-singleton with no lock, and nothing cancels them if the screen is
-backgrounded mid-simulation. A simulated `add_pickup` call can silently
-overwrite a real in-progress delivery's pickup data if the driver
-backgrounds the Tutorial/DevTesting screen mid-simulation and opens the
-real Dasher app. Found by round 8's scouting pass, not yet fixed.
+singleton, with their `TripForegroundService.isRunning` guard checked
+only once before the thread spawned -- nothing cancelled them if the
+screen was backgrounded mid-simulation and real monitoring started.
+Found by round 8's scouting pass.
+
+**Fixed:** `docs/simulation_thread_live_monitoring_race/PRD.md` -- both
+threads now re-check `isRunning` on every loop iteration and stop making
+any further engine calls the moment it flips true. Also fixed a worse
+bug this uncovered: `DeveloperTestingActivity`'s cleanup `finally` block
+unconditionally called `force_end_trip()`, which would have silently
+ended a genuinely real trip in exactly this scenario -- now gated on the
+same interruption flag.
 
 ### R7 — [Open, LOW] GPS-reacquire fires as a no-op guess when the real cause is an engine/DB failure
 

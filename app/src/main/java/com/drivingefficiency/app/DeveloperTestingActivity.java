@@ -170,6 +170,21 @@ public class DeveloperTestingActivity extends AppCompatActivity {
                 return;
             }
             new Thread(() -> {
+                // docs/simulation_thread_live_monitoring_race/PRD.md --
+                // CONFIRMED REAL BUG, fixed here (monitoring-uptime-
+                // guarantee premortem R6): blockedByLiveMonitoring() above
+                // only checked TripForegroundService.isRunning ONCE, before
+                // this thread was even spawned. If real monitoring started
+                // any time after that -- the driver backgrounds this screen
+                // mid-simulation and opens the real Dasher app -- this
+                // thread kept calling into the exact same live engine
+                // singleton (PythonBridge.getEngine) a real trip now also
+                // uses, silently interleaving fake GPS/pickup/notification
+                // data into it. Re-checked on every loop iteration below,
+                // so the moment real monitoring starts, this thread stops
+                // making any further engine calls -- closing the race to,
+                // at most, whatever single call was already in flight.
+                boolean interruptedByRealMonitoring = false;
                 try {
                     long clock = System.currentTimeMillis();
                     double lat = -33.905, lon = 151.205;
@@ -183,19 +198,29 @@ public class DeveloperTestingActivity extends AppCompatActivity {
                     // is_test_data column on trips at all to ever exclude
                     // it from recalculate_personal_calibration. The trailing
                     // `true` marks every trip this simulation might start.
-                    for (int i = 0; i < 12; i++) {
+                    for (int i = 0; i < 12 && !interruptedByRealMonitoring; i++) {
+                        if (TripForegroundService.isRunning) {
+                            interruptedByRealMonitoring = true;
+                            break;
+                        }
                         engine.callAttr("on_gps_update", lat - 0.001, lon - 0.001, 30.0,
                                 clock + i * 1000L, true);
                     }
-                    engine.callAttr("add_stop_to_buffer", "42 Example St, Fairy Meadow", lat, lon);
-                    engine.callAttr("on_notification", "com.doordash.driverapp", "Customer",
-                            "Please leave it at the back door, thank you!", clock + 15000L, true);
+                    if (!interruptedByRealMonitoring) {
+                        engine.callAttr("add_stop_to_buffer", "42 Example St, Fairy Meadow", lat, lon);
+                        engine.callAttr("on_notification", "com.doordash.driverapp", "Customer",
+                                "Please leave it at the back door, thank you!", clock + 15000L, true);
+                    }
 
                     boolean arrived = false;
                     String spokenText = null;
                     String overlayTextResult = null;
 
-                    for (int i = 0; i < 65; i++) {
+                    for (int i = 0; !interruptedByRealMonitoring && i < 65; i++) {
+                        if (TripForegroundService.isRunning) {
+                            interruptedByRealMonitoring = true;
+                            break;
+                        }
                         String resultJson = engine.callAttr("on_gps_update", lat, lon, 0.5,
                                 clock + (20 + i) * 1000L, true).toString();
                         JSONObject obj = new JSONObject(resultJson);
@@ -223,7 +248,13 @@ public class DeveloperTestingActivity extends AppCompatActivity {
                     boolean arrivedFinal = arrived;
                     String spokenFinal = spokenText;
                     String overlayFinal = overlayTextResult;
+                    boolean interruptedFinal = interruptedByRealMonitoring;
                     runOnUiThread(() -> {
+                        if (interruptedFinal) {
+                            Toast.makeText(this, "Real monitoring started elsewhere on your phone -- "
+                                    + "simulation stopped so it doesn't interfere.", Toast.LENGTH_LONG).show();
+                            return;
+                        }
                         if (arrivedFinal) {
                             VoiceAnnouncer.speak(spokenFinal);
                             OverlayHelper.showMessage(this, overlayFinal);
@@ -251,14 +282,26 @@ public class DeveloperTestingActivity extends AppCompatActivity {
                     // always safe to call unconditionally here -- in a
                     // finally block specifically so an exception above
                     // still can't leave the engine dangling mid-trip.
-                    try {
-                        engine.callAttr("force_end_trip");
-                    } catch (RuntimeException e) { // covers PyException too
+                    //
+                    // docs/simulation_thread_live_monitoring_race/PRD.md --
+                    // EXCEPT when interruptedByRealMonitoring: a genuinely
+                    // real trip may now be active (that's exactly what
+                    // interrupted this loop), and force_end_trip() would
+                    // silently end that REAL delivery -- calling it here in
+                    // that case would turn "stopped touching the real
+                    // trip's data" into "actively destroyed the real
+                    // trip's state," a strictly worse outcome than the race
+                    // this fix closes.
+                    if (!interruptedByRealMonitoring) {
                         try {
-                            engine.callAttr("log_diagnostic", "ERROR",
-                                    "Developer Testing force_end_trip cleanup exception: "
-                                            + android.util.Log.getStackTraceString(e));
-                        } catch (RuntimeException ignored) { // covers PyException too
+                            engine.callAttr("force_end_trip");
+                        } catch (RuntimeException e) { // covers PyException too
+                            try {
+                                engine.callAttr("log_diagnostic", "ERROR",
+                                        "Developer Testing force_end_trip cleanup exception: "
+                                                + android.util.Log.getStackTraceString(e));
+                            } catch (RuntimeException ignored) { // covers PyException too
+                            }
                         }
                     }
                 }
