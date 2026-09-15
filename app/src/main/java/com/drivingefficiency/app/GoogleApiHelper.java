@@ -176,8 +176,30 @@ public final class GoogleApiHelper {
         }
     }
 
-    private static String geocodeCacheKey(String address) {
-        return address.trim().toLowerCase(Locale.US);
+    // docs/geocode_cache_ignores_bias/PRD.md -- CONFIRMED REAL BUG, fixed
+    // here: this used to be just address.trim().toLowerCase(), completely
+    // ignoring hasBias/biasLat/biasLon. That silently reintroduced the
+    // exact wrong-city geocode failure mode this class's own doc comment
+    // describes (a bare name like "Bangkok Balcony" resolving to the wrong
+    // city without a real GPS bias) -- whichever call for a given
+    // restaurant name resolved and cached FIRST (biased or not, from
+    // whatever city) was served unconditionally to every later call for
+    // that same name, even one made with a different, correct bias, for
+    // up to GEOCODE_CACHE_TTL_MS. Folding the bias into the key fixes
+    // this: a no-bias lookup and a biased one, or two biased lookups from
+    // different regions, now cache and hit independently. Bias
+    // coordinates are rounded to 1 decimal degree (roughly 11km at the
+    // equator) -- comfortably finer than PLACES_LOCATION_BIAS_RADIUS_METERS
+    // (50km), so genuinely different operating areas essentially never
+    // collide, while GPS jitter/movement within the same metro area
+    // between offers still lands in the same bucket and benefits from the
+    // cache.
+    private static String geocodeCacheKey(String address, boolean hasBias, double biasLat, double biasLon) {
+        String normalized = address.trim().toLowerCase(Locale.US);
+        if (!hasBias) {
+            return normalized + "|nobias";
+        }
+        return normalized + "|" + String.format(Locale.US, "%.1f,%.1f", biasLat, biasLon);
     }
 
     // Live traffic genuinely changes over time, so this TTL is much
@@ -258,7 +280,7 @@ public final class GoogleApiHelper {
             MAIN_HANDLER.post(() -> onError.accept("No Google Maps API key configured (see Permissions & Setup)."));
             return;
         }
-        String cacheKey = geocodeCacheKey(address);
+        String cacheKey = geocodeCacheKey(address, hasBias, biasLat, biasLon);
         CachedGeocode cached = GEOCODE_CACHE.get(cacheKey);
         if (cached != null && System.currentTimeMillis() - cached.cachedAtMs < GEOCODE_CACHE_TTL_MS) {
             MAIN_HANDLER.post(() -> onResult.onResult(cached.lat, cached.lon, cached.formattedAddress));
