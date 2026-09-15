@@ -1,7 +1,8 @@
 # Premortem: Monitoring Uptime Guarantee
 
 Status: LIVING RISK REGISTER (created 2026-09-15, last updated
-2026-09-15). Companion to `docs/monitoring_uptime_guarantee/PRD.md`.
+2026-09-15, Ralph-loop iteration 1: R1 closed). Companion to
+`docs/monitoring_uptime_guarantee/PRD.md`.
 Updated by every Ralph-loop iteration that closes or narrows a risk --
 see that PRD's own acceptance criteria for when this register is
 considered "done."
@@ -23,15 +24,15 @@ is listed below, each marked:
 
 ## Risk register
 
-### R1 — [Open, HIGH] A trip-end DB hiccup after the trip is already saved duplicates its data on retry
+### R1 — [Mitigated] A trip-end DB hiccup after the trip is already saved duplicates its data on retry
 
 A transient DB failure in `_merge_accel_samples_into_history()`'s own,
 separate commit -- which runs AFTER `_persist_trip()` has already
-durably saved the trip -- leaves `TripManager.state` stuck at
-`TRIP_ACTIVE` (the exception escapes before `_end_trip`'s final
-`self.state = self.STATE_IDLE`). The next GPS tick naturally retries
+durably saved the trip -- left `TripManager.state` stuck at
+`TRIP_ACTIVE` (the exception escaped before `_end_trip`'s final
+`self.state = self.STATE_IDLE`). The next GPS tick naturally retried
 `_end_trip`, and since none of `_persist_trip`'s inserts (stops, events,
-delays, messages) have an idempotency guard, the retry duplicates every
+delays, messages) had an idempotency guard, the retry duplicated every
 child row for a trip that was already correctly saved -- doubled
 harsh-brake counts, doubled delay minutes, doubled customer messages,
 visible in Trip History, Trip Detail, and every export.
@@ -39,9 +40,9 @@ visible in Trip History, Trip Detail, and every export.
 Found by round 12's scouting pass, verified twice against the real
 engine (failing `_persist_trip`'s own commit, and separately failing
 only the unrelated accel-history commit after the trip was already
-fully saved -- both produce duplicated rows). Not yet fixed.
+fully saved -- both produced duplicated rows).
 
-This is the trip-END mirror of the trip-START bug round 11 already
+This was the trip-END mirror of the trip-START bug round 11 already
 fixed (`docs/start_trip_state_lie_on_failure/PRD.md`) -- same
 architectural root cause (a state flag not atomic with respect to the
 operation it describes), opposite end of the trip lifecycle, and a
@@ -49,11 +50,12 @@ different failure SHAPE (duplication instead of loss, because
 `_persist_trip`'s own writes are NOT purely re-run from scratch the way
 `_start_trip`'s were).
 
-**Fix direction:** make the retry path idempotent (e.g. check
-`trips.end_time IS NOT NULL` before re-running the child-row inserts,
-or move `_merge_accel_samples_into_history`'s commit inside the same
-transaction/failure boundary as `_persist_trip` so a failure there can't
-leave a "trip saved, but not marked done" limbo state at all).
+**Fixed:** `docs/trip_end_persistence_idempotency/PRD.md` -- `_persist_trip`
+now checks `trips.end_time IS NOT NULL` before any writes and skips the
+child-row inserts (and the `offer_distance_accuracy` insert) on a retry,
+while still always re-running the naturally-idempotent `trips` UPDATE and
+still always computing/returning `delivery_speed_event` (never received
+by the caller from the failed first attempt).
 
 ### R2 — [Open, LOW-MEDIUM] `dropoff_arrival_ts` can be silently and permanently lost on a single-stop trip
 

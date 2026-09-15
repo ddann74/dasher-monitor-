@@ -4102,6 +4102,41 @@ class TripManager:
         if self.trip_id is None:
             return None
         c = self.db.conn
+        # docs/trip_end_persistence_idempotency/PRD.md -- CONFIRMED REAL
+        # BUG, fixed here (round-12 scouting finding #1, monitoring-
+        # uptime-guarantee premortem R1): _end_trip calls this method,
+        # then separately calls _merge_accel_samples_into_history() --
+        # which runs its OWN, later commit() -- before finally resetting
+        # self.state to IDLE. If THAT later, unrelated commit fails (a
+        # transient DB lock/hiccup -- SQLite's busy_timeout is never
+        # configured anywhere in this file, and a live backup can hold a
+        # second connection open against the same DB file while
+        # monitoring keeps running), the exception escapes _end_trip
+        # BEFORE self.state resets -- even though THIS method's own
+        # transaction (the trips UPDATE, every stops/events/delays/
+        # messages INSERT, and the offer_distance_accuracy row below) had
+        # already committed successfully moments earlier. The engine then
+        # naturally retries the whole _end_trip -> _persist_trip sequence
+        # on the very next tick (state is still ACTIVE, parked-long-
+        # enough is still true) -- and since none of the INSERT loops
+        # below had any uniqueness guard, that retry re-inserted a full
+        # DUPLICATE copy of every child row for a trip that was already
+        # 100% correctly saved.
+        #
+        # Fix: check whether this trip was already marked ended (its
+        # end_time already set from a prior successful commit) BEFORE
+        # doing any writes. The UPDATE below is naturally idempotent
+        # (re-writing the same summary values is harmless either way),
+        # so it always runs -- but the INSERT loops, and
+        # _persist_distance_accuracy's own row insert, only run on a
+        # trip's FIRST successful persist. delivery_speed_event is still
+        # computed and returned on a retry (see _persist_distance_accuracy's
+        # own doc for why that's still correct and necessary).
+        already_persisted = c.execute(
+            "SELECT end_time FROM trips WHERE id = ?", (self.trip_id,)
+        ).fetchone()
+        already_persisted = already_persisted is not None and already_persisted[0] is not None
+
         c.execute("""
             UPDATE trips SET end_time=?, distance_km=?, moving_seconds=?,
                 slow_seconds=?, stopped_seconds=?, time_efficiency_score=?,
@@ -4118,33 +4153,34 @@ class TripManager:
             self._trip_mode,
             self.trip_id,
         ))
-        for stop in self.stops:
-            c.execute("""
-                INSERT INTO stops (trip_id, address, lat, lon, matched, arrival_time)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (self.trip_id, stop.get("address", ""), stop["lat"], stop["lon"],
-                  int(stop["matched"]), stop["arrival_time"]))
-        for e in self.events:
-            c.execute("""
-                INSERT INTO events (trip_id, event_type, lat, lon, timestamp, magnitude)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (self.trip_id, e["event_type"], e["lat"], e["lon"], e["timestamp"], e["magnitude"]))
-        for d in self.delays:
-            c.execute("""
-                INSERT INTO delays (trip_id, lat, lon, duration_seconds, timestamp)
-                VALUES (?, ?, ?, ?, ?)
-            """, (self.trip_id, d["lat"], d["lon"], d["duration_seconds"], d["timestamp"]))
-        for m in self.messages:
-            c.execute("""
-                INSERT INTO messages (trip_id, sender, body, timestamp, extracted_instruction)
-                VALUES (?, ?, ?, ?, ?)
-            """, (self.trip_id, m["sender"], m["body"], m["timestamp"], m["extracted_instruction"]))
+        if not already_persisted:
+            for stop in self.stops:
+                c.execute("""
+                    INSERT INTO stops (trip_id, address, lat, lon, matched, arrival_time)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (self.trip_id, stop.get("address", ""), stop["lat"], stop["lon"],
+                      int(stop["matched"]), stop["arrival_time"]))
+            for e in self.events:
+                c.execute("""
+                    INSERT INTO events (trip_id, event_type, lat, lon, timestamp, magnitude)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (self.trip_id, e["event_type"], e["lat"], e["lon"], e["timestamp"], e["magnitude"]))
+            for d in self.delays:
+                c.execute("""
+                    INSERT INTO delays (trip_id, lat, lon, duration_seconds, timestamp)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (self.trip_id, d["lat"], d["lon"], d["duration_seconds"], d["timestamp"]))
+            for m in self.messages:
+                c.execute("""
+                    INSERT INTO messages (trip_id, sender, body, timestamp, extracted_instruction)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (self.trip_id, m["sender"], m["body"], m["timestamp"], m["extracted_instruction"]))
 
-        delivery_speed_event = self._persist_distance_accuracy(summary)
+        delivery_speed_event = self._persist_distance_accuracy(summary, already_persisted)
         c.commit()
         return delivery_speed_event
 
-    def _persist_distance_accuracy(self, summary):
+    def _persist_distance_accuracy(self, summary, already_persisted=False):
         """
         Two independent things, both needing pickup arrival/departure data
         (not needing each other):
@@ -4152,13 +4188,17 @@ class TripManager:
         1. Delivery speed: distance/time of the pickup-departure -> trip-end
            leg, returned so the caller can feed SmartScoreEngine.
            record_delivery_speed() -- this only needs departure tracking,
-           not a claimed offer distance.
+           not a claimed offer distance. Always (re)computed, even on a
+           persistence retry (already_persisted=True): the caller never
+           received this value from the earlier failed attempt, since the
+           exception happened before _end_trip could return anything.
         2. Offer distance accuracy comparison: needs BOTH departure tracking
            AND a claimed offer distance to compare against. Empirically
            answers "does the offer's distance figure include the drive to
            the restaurant, or just the delivery leg?" from this driver's
            own real data, rather than guessing or relying on unofficial/
-           unconfirmed sources.
+           unconfirmed sources. Skipped on a retry (already_persisted=True)
+           so the row isn't inserted twice -- see docs/trip_end_persistence_idempotency/PRD.md.
         """
         if self._distance_at_departure_km is None or self._departure_timestamp is None:
             return None  # pickup was registered but departure never completed this trip
@@ -4174,7 +4214,7 @@ class TripManager:
                 "time_hours": delivery_time_hours,
             }
 
-        if self.pickup and self.pickup.get("claimed_distance_km") is not None                 and self._deadhead_distance_km is not None:
+        if not already_persisted and self.pickup and self.pickup.get("claimed_distance_km") is not None                 and self._deadhead_distance_km is not None:
             self._persist_pickup_job_row(
                 self.pickup, self._deadhead_distance_km, summary["end_time"],
                 distance_at_departure_km=self._distance_at_departure_km,

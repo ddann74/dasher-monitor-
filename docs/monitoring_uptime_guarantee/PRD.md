@@ -92,10 +92,10 @@ re-described here.
   becomes `TRIP_ACTIVE` only after `trip_id` is genuinely committed, so
   a mid-setup DB failure can't leave the engine lying about an
   in-progress trip that doesn't exist -- `docs/start_trip_state_lie_on_failure/PRD.md`.
-- **Open**: the mirror-image bug at trip END (a DB hiccup in an
-  unrelated commit AFTER the trip is already saved causes the natural
-  retry to duplicate every child row) -- see Premortem, risk R1. Not yet
-  fixed as of this PRD's creation.
+- The mirror-image bug at trip END (a DB hiccup in an unrelated commit
+  AFTER the trip is already saved causing the natural retry to duplicate
+  every child row) is now closed too -- `docs/trip_end_persistence_idempotency/PRD.md`,
+  Premortem risk R1.
 
 ### Screen recording
 - Playability verification extended to catch a uniformly blank
