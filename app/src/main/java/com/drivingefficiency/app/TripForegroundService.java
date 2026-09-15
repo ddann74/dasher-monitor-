@@ -2075,11 +2075,27 @@ public class TripForegroundService extends Service {
      */
     private void writeWatchdogHeartbeatIfEngineHealthy(long nowMs) {
         if (consecutiveEngineFailures >= ENGINE_FAILURE_ALERT_THRESHOLD) {
+            // docs/watchdog_engine_failure_aware_reacquire/PRD.md --
+            // monitoring-uptime-guarantee premortem R7. Previously this
+            // branch only withheld the heartbeat write, giving
+            // MonitoringWatchdogReceiver no way to tell THIS specific
+            // cause (engine/DB failing) apart from a genuine GPS/pipeline
+            // stall -- it would see the same "stale heartbeat, isRunning
+            // still true" shape either way and always guess "GPS problem,"
+            // sending a pointless location reacquire. Recorded here, in
+            // the same prefs file/lifecycle as KEY_LAST_HEARTBEAT_MS
+            // itself, so the receiver (a separate component that must
+            // work without this process alive) can read the real cause.
+            getSharedPreferences(MonitoringWatchdogReceiver.PREFS_NAME, MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(MonitoringWatchdogReceiver.KEY_ENGINE_FAILURE_ACTIVE, true)
+                    .apply();
             return;
         }
         getSharedPreferences(MonitoringWatchdogReceiver.PREFS_NAME, MODE_PRIVATE)
                 .edit()
                 .putLong(MonitoringWatchdogReceiver.KEY_LAST_HEARTBEAT_MS, nowMs)
+                .putBoolean(MonitoringWatchdogReceiver.KEY_ENGINE_FAILURE_ACTIVE, false)
                 .apply();
     }
 

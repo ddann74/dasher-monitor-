@@ -42,6 +42,17 @@ public class MonitoringWatchdogReceiver extends BroadcastReceiver {
     public static final String KEY_LAST_HEARTBEAT_MS = "last_heartbeat_ms";
     private static final String KEY_INTENDED_ACTIVE = "intended_active";
     private static final String KEY_SESSION_START_MS = "session_start_ms";
+    // docs/watchdog_engine_failure_aware_reacquire/PRD.md -- monitoring-
+    // uptime-guarantee premortem R7. Written by TripForegroundService's
+    // writeWatchdogHeartbeatIfEngineHealthy (same prefs file/lifecycle as
+    // KEY_LAST_HEARTBEAT_MS, so this watchdog -- a separate component that
+    // must work without the live process, same reasoning as the heartbeat
+    // key itself) can tell WHY the heartbeat went stale: a genuine GPS/
+    // pipeline stall (this flag false/absent) vs. the heartbeat write being
+    // deliberately withheld because the engine/DB is the one that's
+    // failing (this flag true) -- two different root causes this receiver
+    // previously couldn't distinguish at all.
+    public static final String KEY_ENGINE_FAILURE_ACTIVE = "engine_failure_active";
 
     // Mode-aware, per explicit request: faster detection specifically
     // while in DASHER mode (where losing untracked time actually costs a
@@ -371,11 +382,34 @@ public class MonitoringWatchdogReceiver extends BroadcastReceiver {
             // (the service is already in the foreground state, not being
             // newly promoted into it), so this doesn't need its own
             // circuit breaker the way that one does.
-            Intent reacquireIntent = new Intent(context, TripForegroundService.class);
-            reacquireIntent.setAction(TripForegroundService.ACTION_REACQUIRE_LOCATION);
-            context.startForegroundService(reacquireIntent);
-            logToEngine(context, "WATCHDOG", "Service reports running but heartbeat is stale -- "
-                    + "asked it to re-register location updates");
+            // docs/watchdog_engine_failure_aware_reacquire/PRD.md --
+            // CONFIRMED REAL GAP, fixed here (monitoring-uptime-guarantee
+            // premortem R7, round-11 scouting finding #4): the reacquire
+            // below used to fire unconditionally on ANY stale heartbeat
+            // with isRunning still true -- even when the real cause is
+            // TripForegroundService.writeWatchdogHeartbeatIfEngineHealthy
+            // deliberately WITHHOLDING the heartbeat write because the
+            // engine/DB pipeline itself is failing (consecutiveEngineFailures
+            // >= its threshold), not because GPS stopped. Re-registering
+            // location updates in that case is a no-op guess at the wrong
+            // fix -- GPS was never the problem, and the driver is already
+            // separately alerted via raiseEngineFailureAlert for the real
+            // cause. Reading the flag that same method now writes lets
+            // this receiver skip the pointless reacquire and log the
+            // correct cause instead.
+            boolean engineFailureIsTheCause = prefs.getBoolean(KEY_ENGINE_FAILURE_ACTIVE, false);
+            if (engineFailureIsTheCause) {
+                logToEngine(context, "WATCHDOG", "Service reports running and heartbeat is stale, but the "
+                        + "engine/DB pipeline is the reported cause (not GPS) -- skipping the pointless "
+                        + "location reacquire; the driver is already separately alerted for this via "
+                        + "raiseEngineFailureAlert");
+            } else {
+                Intent reacquireIntent = new Intent(context, TripForegroundService.class);
+                reacquireIntent.setAction(TripForegroundService.ACTION_REACQUIRE_LOCATION);
+                context.startForegroundService(reacquireIntent);
+                logToEngine(context, "WATCHDOG", "Service reports running but heartbeat is stale -- "
+                        + "asked it to re-register location updates");
+            }
         }
     }
 

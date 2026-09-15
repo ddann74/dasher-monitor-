@@ -1,8 +1,14 @@
 # Premortem: Monitoring Uptime Guarantee
 
 Status: LIVING RISK REGISTER (created 2026-09-15, last updated
-2026-09-15, Ralph-loop iteration 6: R1, R2, R3, R4, R5, and R6 closed).
-Companion to `docs/monitoring_uptime_guarantee/PRD.md`.
+2026-09-15, Ralph-loop iteration 7: R1-R7 all closed -- every item in
+this register now reads Mitigated or Ruled out). Companion to
+`docs/monitoring_uptime_guarantee/PRD.md`. Per that PRD's own acceptance
+criteria (§4), this register being fully closed is necessary but not
+sufficient -- a FRESH scouting pass, run after all current Open items
+were closed, still needs to find nothing new before the invariant is
+considered "held" rather than just "improved." See that PRD for why this
+is inherently a moving target, not a one-time finish line.
 Updated by every Ralph-loop iteration that closes or narrows a risk --
 see that PRD's own acceptance criteria for when this register is
 considered "done."
@@ -139,17 +145,24 @@ unconditionally called `force_end_trip()`, which would have silently
 ended a genuinely real trip in exactly this scenario -- now gated on the
 same interruption flag.
 
-### R7 — [Open, LOW] GPS-reacquire fires as a no-op guess when the real cause is an engine/DB failure
+### R7 — [Mitigated] GPS-reacquire fires as a no-op guess when the real cause is an engine/DB failure
 
-When the watchdog finds `isRunning=true` but the heartbeat stale, it
-unconditionally sends `ACTION_REACQUIRE_LOCATION` -- even when the real
-cause is `writeWatchdogHeartbeatIfEngineHealthy` deliberately
+When the watchdog found `isRunning=true` but the heartbeat stale, it
+unconditionally sent `ACTION_REACQUIRE_LOCATION` -- even when the real
+cause was `writeWatchdogHeartbeatIfEngineHealthy` deliberately
 withholding the heartbeat because `consecutiveEngineFailures >= 3` (an
 engine/DB problem, not a GPS problem). Harmless but pointless in that
-case, since the driver is still separately alerted via
-`raiseEngineFailureAlert`. Found by round 11's scouting pass, not yet
-fixed. Lowest priority in this register -- the driver is never left
-uninformed by this gap, only some wasted churn occurs.
+case, since the driver was still separately alerted via
+`raiseEngineFailureAlert`. Found by round 11's scouting pass. Lowest
+priority in this register -- the driver was never left uninformed by
+this gap, only some wasted churn occurred.
+
+**Fixed:** `docs/watchdog_engine_failure_aware_reacquire/PRD.md` -- a new
+`SharedPreferences` flag (`KEY_ENGINE_FAILURE_ACTIVE`), written in the
+same file/lifecycle as the existing heartbeat timestamp, lets
+`MonitoringWatchdogReceiver` tell the two causes apart and skip the
+pointless reacquire when the engine/DB is the real cause, while a
+genuine GPS stall still correctly triggers the reacquire as before.
 
 ### R8 — [Mitigated] Accessibility "granted" != accessibility "alive"
 
