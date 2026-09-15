@@ -8,11 +8,13 @@ import android.app.Service;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.location.Location;
+import android.location.LocationManager;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.Looper;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationCompat;
+import androidx.core.location.LocationManagerCompat;
 
 import com.chaquo.python.PyException;
 import com.chaquo.python.PyObject;
@@ -889,6 +891,12 @@ public class TripForegroundService extends Service {
     // docs/dasher_package_verification/PRD.md -- see checkAndLogPermissions
     // and raiseDasherPackageNotFoundAlert.
     private Boolean lastLoggedDasherInstalled = null;
+    // docs/location_services_toggle_check/PRD.md -- monitoring-uptime-
+    // guarantee premortem R3. Deliberately separate from lastLoggedLocation
+    // above: that tracks the ACCESS_FINE_LOCATION permission GRANT, this
+    // tracks the device's system-wide Location services toggle, which can
+    // be off even while the permission is granted.
+    private Boolean lastLoggedLocationServicesEnabled = null;
     private android.os.PowerManager.WakeLock tripWakeLock = null;
 
     /**
@@ -902,6 +910,21 @@ public class TripForegroundService extends Service {
     private void checkAndLogPermissions(boolean forceLog) {
         boolean hasLocation = ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED;
+        // docs/location_services_toggle_check/PRD.md -- CONFIRMED REAL GAP,
+        // fixed here (monitoring-uptime-guarantee premortem R3): hasLocation
+        // above is only the ACCESS_FINE_LOCATION permission grant -- it
+        // stays true even when the device's Location services toggle is off
+        // system-wide, which is a real, distinct OS state (not a permission
+        // issue at all). LocationManagerCompat.isLocationEnabled handles the
+        // pre/post-API-28 difference (LOCATION_MODE setting vs.
+        // LocationManager.isLocationEnabled()) so this works identically
+        // across the app's supported OS range.
+        boolean hasLocationServicesEnabled = true;
+        LocationManager locationManagerForToggleCheck =
+                (LocationManager) getSystemService(LOCATION_SERVICE);
+        if (locationManagerForToggleCheck != null) {
+            hasLocationServicesEnabled = LocationManagerCompat.isLocationEnabled(locationManagerForToggleCheck);
+        }
         boolean hasOverlay = OverlayHelper.hasPermission(this);
         String enabledListeners = android.provider.Settings.Secure.getString(getContentResolver(),
                 "enabled_notification_listeners");
@@ -959,6 +982,7 @@ public class TripForegroundService extends Service {
         boolean dasherAppInstalled = DasherAppInfo.isInstalled(this);
 
         boolean changed = !Boolean.valueOf(hasLocation).equals(lastLoggedLocation)
+                || !Boolean.valueOf(hasLocationServicesEnabled).equals(lastLoggedLocationServicesEnabled)
                 || !Boolean.valueOf(hasOverlay).equals(lastLoggedOverlay)
                 || !Boolean.valueOf(hasNotificationAccess).equals(lastLoggedNotificationAccess)
                 || !Boolean.valueOf(hasBatteryExemption).equals(lastLoggedBatteryExempt)
@@ -985,6 +1009,12 @@ public class TripForegroundService extends Service {
         if (monitoringActive) {
             if (lastLoggedLocation != null && lastLoggedLocation && !hasLocation) {
                 raisePermissionRevokedAlert("Location", "GPS tracking has stopped completely");
+            }
+            if (lastLoggedLocationServicesEnabled != null && lastLoggedLocationServicesEnabled
+                    && !hasLocationServicesEnabled) {
+                raisePermissionRevokedAlert("Location Services",
+                        "GPS tracking has stopped completely because the device's Location toggle "
+                        + "was turned off (separate from the Location permission, which is still granted)");
             }
             if (lastLoggedOverlay != null && lastLoggedOverlay && !hasOverlay) {
                 // Premortem finding, fixed here (docs/road_warrior_icon/PRD.md
@@ -1042,6 +1072,10 @@ public class TripForegroundService extends Service {
             if (!hasLocation) {
                 raisePermissionRevokedAlert("Location", "GPS tracking won't start", true);
             }
+            if (!hasLocationServicesEnabled) {
+                raisePermissionRevokedAlert("Location Services",
+                        "GPS tracking won't start because the device's Location toggle is off", true);
+            }
             if (!hasOverlay) {
                 raisePermissionRevokedAlert("Overlay",
                         "The Smart Score badge, status dot, and RoadWarrior navigation icon won't show", true);
@@ -1060,7 +1094,8 @@ public class TripForegroundService extends Service {
         }
 
         if (forceLog || changed) {
-            logDiagnostic("PERMISSIONS", "location=" + hasLocation + " overlay=" + hasOverlay
+            logDiagnostic("PERMISSIONS", "location=" + hasLocation
+                    + " locationServicesEnabled=" + hasLocationServicesEnabled + " overlay=" + hasOverlay
                     + " notificationAccess=" + hasNotificationAccess + " batteryExempt=" + hasBatteryExemption
                     + " accessibility=" + hasAccessibility
                     + " dasherAppInstalled=" + dasherAppInstalled
@@ -1077,6 +1112,7 @@ public class TripForegroundService extends Service {
                 refreshStatusDot();
             }
             lastLoggedLocation = hasLocation;
+            lastLoggedLocationServicesEnabled = hasLocationServicesEnabled;
             lastLoggedOverlay = hasOverlay;
             lastLoggedNotificationAccess = hasNotificationAccess;
             lastLoggedBatteryExempt = hasBatteryExemption;
@@ -1168,6 +1204,18 @@ public class TripForegroundService extends Service {
             // actually distinguishable in the log afterward.
             tapIntent.putExtra(PermissionsActivity.EXTRA_CONSENT_RECOVERY_SOURCE, "alert_notification_tap");
             tapIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            PendingIntent tapPendingIntent = PendingIntent.getActivity(this, notificationId, tapIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT
+                            | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0));
+            builder.setContentIntent(tapPendingIntent);
+        } else if ("Location Services".equals(permissionName)) {
+            // docs/location_services_toggle_check/PRD.md -- unlike the
+            // ACCESS_FINE_LOCATION permission grant (which PermissionsActivity's
+            // own flow requests), there's no in-app request path for the
+            // device's system-wide Location toggle -- deep-links straight to
+            // Android's own Location source settings screen instead.
+            Intent tapIntent = new Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS);
+            tapIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             PendingIntent tapPendingIntent = PendingIntent.getActivity(this, notificationId, tapIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT
                             | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0));

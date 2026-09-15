@@ -1,7 +1,7 @@
 # Premortem: Monitoring Uptime Guarantee
 
 Status: LIVING RISK REGISTER (created 2026-09-15, last updated
-2026-09-15, Ralph-loop iteration 2: R1 and R2 closed). Companion to
+2026-09-15, Ralph-loop iteration 3: R1, R2, and R3 closed). Companion to
 `docs/monitoring_uptime_guarantee/PRD.md`.
 Updated by every Ralph-loop iteration that closes or narrows a risk --
 see that PRD's own acceptance criteria for when this register is
@@ -73,15 +73,20 @@ so a failure leaves the stop unmatched and the next GPS tick naturally
 retries the match+write (the write itself was already idempotent via its
 `WHERE dropoff_arrival_ts IS NULL` guard).
 
-### R3 — [Open, LOW] System Location toggle being off entirely is never checked
+### R3 — [Mitigated] System Location toggle being off entirely is never checked
 
 Not a permission issue -- `ACCESS_FINE_LOCATION` can show granted while
 the device's Location services toggle is off system-wide. No
-`LocationManager.isProviderEnabled()`/`PROVIDERS_CHANGED` usage exists
-anywhere in the app. A driver in this state gets the same generic
+`LocationManager.isProviderEnabled()`/`PROVIDERS_CHANGED` usage existed
+anywhere in the app. A driver in this state got the same generic
 "monitoring may have stopped" alert as every other staleness cause,
-instead of a specific, actionable one. Found by round 9's scouting
-pass, not yet fixed.
+instead of a specific, actionable one. Found by round 9's scouting pass.
+
+**Fixed:** `docs/location_services_toggle_check/PRD.md` --
+`checkAndLogPermissions` now checks `LocationManagerCompat.isLocationEnabled()`
+on the same heartbeat cadence as every other critical permission, and
+raises a specific, deep-linked alert (distinct from the `ACCESS_FINE_LOCATION`
+grant alert) on a genuine drop or an already-off-at-start.
 
 ### R4 — [Open, LOW] `tripWakeLock` is never re-verified during an active trip
 
