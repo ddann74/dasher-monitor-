@@ -1707,7 +1707,22 @@ public class TripForegroundService extends Service {
         // it now instead.
         boolean wasTripActive = "TRIP_ACTIVE".equals(engine.callAttr("get_state").toString());
         try {
-            engine.callAttr("force_end_trip");
+            // docs/force_end_trip_auto_pause_truncation/PRD.md -- CONFIRMED
+            // REAL BUG, fixed here: an auto-pause stop used to call
+            // force_end_trip() completely unconditionally, even mid-
+            // delivery (pickup already departed, dropoff not yet reached)
+            // -- permanently finalizing the trip right at the pause point
+            // as if the delivery were complete, scoring it as a bad/
+            // incomplete trip and polluting offer_distance_accuracy with a
+            // truncated distance. GPS resumes within seconds after an
+            // auto-pause (see EXTRA_AUTO_PAUSE_STOP's own comment), so
+            // passing allow_mid_delivery_end=false here instead leaves a
+            // mid-delivery trip ACTIVE through the brief gap -- it
+            // continues and completes naturally once ticks resume. A
+            // manual stop (isAutoPauseStop=false) keeps the original
+            // unconditional behavior: there, finalizing a truncated trip
+            // is still far better than leaving it orphaned forever.
+            engine.callAttr("force_end_trip", !isAutoPauseStop);
             // Manual stop doesn't necessarily go through handleGpsResult's
             // natural TRIP_ACTIVE -> IDLE transition detection (no more
             // GPS ticks arrive once monitoring stops) -- fires the same

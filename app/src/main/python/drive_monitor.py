@@ -3936,7 +3936,7 @@ class TripManager:
         self._delay_logged_for_current_park = False
         return delivery_speed_event
 
-    def force_end_trip(self):
+    def force_end_trip(self, allow_mid_delivery_end=True):
         """
         Explicitly ends the current trip right now, regardless of speed --
         used when monitoring is manually stopped mid-drive.
@@ -3962,9 +3962,40 @@ class TripManager:
         went wrong unexpectedly (a crash); deliberately stopping
         monitoring is a normal, intentional way for a trip to end, and
         the data collected up to this point is entirely legitimate.
+
+        docs/force_end_trip_auto_pause_truncation/PRD.md -- CONFIRMED REAL
+        BUG, fixed here: this used to run completely unconditionally, even
+        from TripForegroundService's auto-pause path (the "Dash Paused"
+        screen briefly appearing then clearing, GPS resuming seconds
+        later -- see EXTRA_AUTO_PAUSE_STOP's own comment). Unlike
+        _evaluate_trip_end (which already refuses to end a DASHER trip
+        with a pending dropoff stop or an active, not-yet-departed
+        pickup), this had no such guard -- so an auto-pause mid-delivery
+        (a real, ordinary workflow: pause the Dash briefly en route to
+        the customer) permanently finalized the trip right at the pause
+        point as if the delivery were complete. That scored the
+        interrupted trip as a bad delivery (the dropoff stop looks
+        "unmatched") purely because it was paused, not because anything
+        was actually wrong, and wrote a truncated distance into the
+        offer_distance_accuracy learning table with nothing to flag it as
+        paused rather than genuinely finished. allow_mid_delivery_end=False
+        (passed only from the auto-pause call site) skips ending in
+        exactly that situation instead, mirroring _evaluate_trip_end's own
+        guard -- the trip simply stays ACTIVE through the brief gap in GPS
+        ticks and continues naturally once they resume. The default
+        (True) preserves the original unconditional behavior for every
+        other caller (manual "Stop Monitoring", crash/onDestroy safety
+        net) -- there, finalizing a truncated trip is still far better
+        than leaving it orphaned forever, which is the original bug this
+        method exists to fix.
         """
         if self.state != self.STATE_ACTIVE:
             return None
+        if not allow_mid_delivery_end:
+            has_pending_stop = self.stops and not all(s["matched"] for s in self.stops)
+            has_active_pickup = self.pickup is not None and not self.pickup.get("recorded")
+            if self._trip_mode == "DASHER" and (has_pending_stop or has_active_pickup):
+                return None
         return self._end_trip(time.time())
 
     # -- scoring / persistence ------------------------------------------
@@ -5079,9 +5110,9 @@ class DriveMonitorEngine:
     def get_state(self):
         return self.trip_manager.state
 
-    def force_end_trip(self):
+    def force_end_trip(self, allow_mid_delivery_end=True):
         """Wrapper -- see TripManager.force_end_trip for the actual logic."""
-        return self.trip_manager.force_end_trip()
+        return self.trip_manager.force_end_trip(allow_mid_delivery_end)
 
     def get_mode(self):
         return self.trip_manager.get_mode()
