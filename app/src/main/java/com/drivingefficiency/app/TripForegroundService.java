@@ -223,11 +223,37 @@ public class TripForegroundService extends Service {
                                 location.getLatitude(), location.getLongitude(),
                                 speedKmh, tsMs).toString();
                         handleGpsResult(resultJson);
+                        // docs/heartbeat_engine_health_gate/PRD.md -- a
+                        // successful call is the actual proof of engine
+                        // health this heartbeat is meant to represent.
+                        consecutiveEngineFailures = 0;
+                        engineFailureAlertRaised = false;
                     } catch (RuntimeException e) { // covers PyException too -- handleGpsResult does
                         // real Java-side work (overlays, mode changes, the navigation icon), not just
                         // Python calls, so this needs to catch more than PyException alone to avoid
                         // silently crashing the always-on foreground service on one bad GPS tick.
                         logDiagnostic("ERROR", "GPS tick exception: " + android.util.Log.getStackTraceString(e));
+                        // docs/heartbeat_engine_health_gate/PRD.md --
+                        // CONFIRMED REAL GAP, fixed here: previously this
+                        // failure was ONLY ever logged, with no counter and
+                        // no user-visible alert of any kind, while
+                        // maybeLogHeartbeat (called above, before this try
+                        // block) kept the watchdog's own heartbeat
+                        // perpetually fresh regardless -- a genuinely dead
+                        // delivery-tracking pipeline (e.g. a locked/
+                        // corrupted sqlite3 connection, which has no
+                        // reconnect path anywhere in the live call path)
+                        // could silently persist for the rest of a shift
+                        // with nothing anywhere telling the driver. Now
+                        // tracked distinctly from GPS liveness -- see
+                        // writeWatchdogHeartbeatIfEngineHealthy (which
+                        // this also indirectly gates) and the edge-
+                        // triggered alert below.
+                        consecutiveEngineFailures++;
+                        if (consecutiveEngineFailures >= ENGINE_FAILURE_ALERT_THRESHOLD && !engineFailureAlertRaised) {
+                            engineFailureAlertRaised = true;
+                            raiseEngineFailureAlert(consecutiveEngineFailures);
+                        }
                     }
                 }
             }
@@ -1338,6 +1364,42 @@ public class TripForegroundService extends Service {
     }
 
     /**
+     * docs/heartbeat_engine_health_gate/PRD.md -- same "explain why,
+     * don't just buzz with no context" principle as
+     * raiseRecordingVerificationFailedAlert immediately above, for the
+     * distinct failure mode consecutiveEngineFailures tracks: the
+     * on_gps_update pipeline itself repeatedly erroring (a DB/engine
+     * problem), not a permission or a recording issue. Deliberately NOT
+     * reusing raisePermissionRevokedAlert's wording ("turned off... until
+     * re-enabled") -- there is no permission toggle to re-enable here,
+     * and this codebase's own established practice is precise wording
+     * over a generic reused message. Edge-triggered by the caller (only
+     * once per failure streak, via engineFailureAlertRaised), same
+     * pattern as every other repeating-condition alert in this file.
+     */
+    private void raiseEngineFailureAlert(int consecutiveFailures) {
+        String reason = "Delivery tracking has failed " + consecutiveFailures
+                + " times in a row (internal error) -- restart the app to reset it.";
+        logDiagnostic("ERROR", "ALERT: " + reason);
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) {
+            String channelId = "engine_failure_alert";
+            NotificationChannelHelper.ensureChannel(manager, channelId, "Delivery Tracking Error Alerts",
+                    NotificationManager.IMPORTANCE_HIGH,
+                    "Alerts if offer detection and trip tracking repeatedly fail internally", true);
+            Notification notification = new Notification.Builder(this, channelId)
+                    .setContentTitle("⚠ Delivery tracking error")
+                    .setContentText(reason)
+                    .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                    .setPriority(Notification.PRIORITY_HIGH)
+                    .setDefaults(Notification.DEFAULT_SOUND | Notification.DEFAULT_VIBRATE)
+                    .setAutoCancel(true)
+                    .build();
+            manager.notify(9300, notification);
+        }
+    }
+
+    /**
      * Driver-requested (2026-09-02): an alarm-style REPEATING vibration,
      * not the notification's own single default buzz -- runs until
      * either updatePermissionAlertVibration() detects every critical
@@ -1669,6 +1731,27 @@ public class TripForegroundService extends Service {
     private long lastHeartbeatMs = 0;
     private static final long HEARTBEAT_INTERVAL_MS = 15 * 1000; // 15 sec
 
+    // docs/heartbeat_engine_health_gate/PRD.md -- CONFIRMED REAL GAP,
+    // fixed here (round-9 scouting finding #2): maybeLogHeartbeat's own
+    // SharedPreferences write (the exact value MonitoringWatchdogReceiver
+    // reads for staleness) previously ran unconditionally on every GPS
+    // tick, BEFORE engine.callAttr("on_gps_update", ...) even ran -- so
+    // it only ever proved FusedLocationProviderClient delivered a fix,
+    // never that the actual engine/DB pipeline (offer detection, trip
+    // state, every DB write) is still working. If drive_monitor.py's
+    // sqlite3 connection ever becomes unusable mid-session (locked,
+    // corrupted handle -- there is no reconnect path in the live call
+    // path, only in the separate export/backup code), every on_gps_update
+    // call would fail while GPS ticks kept arriving normally, keeping the
+    // watchdog heartbeat perpetually "fresh" and the whole delivery-
+    // tracking pipeline silently dead for the rest of a shift with zero
+    // alert anywhere. These two fields track that distinctly from GPS
+    // liveness -- see writeWatchdogHeartbeatIfEngineHealthy() and the
+    // catch block in the location callback for how they're used.
+    private int consecutiveEngineFailures = 0;
+    private boolean engineFailureAlertRaised = false;
+    private static final int ENGINE_FAILURE_ALERT_THRESHOLD = 3;
+
     // Requirement change (2026-08-30, docs/watchdog_reliability/PRD.md):
     // real uploaded field log evidence -- two full monitoring blackouts,
     // ~15min and ~7min, with ZERO WATCHDOG: log entries during either one
@@ -1719,14 +1802,41 @@ public class TripForegroundService extends Service {
         logDiagnostic("HEARTBEAT", "Still tracking (mode=" + lastKnownMode + ", trip=" + lastKnownTripState
                 + ", " + getBatteryAndDozeInfo() + ")");
         checkAndLogPermissions(false);
-        getSharedPreferences(MonitoringWatchdogReceiver.PREFS_NAME, MODE_PRIVATE)
-                .edit()
-                .putLong(MonitoringWatchdogReceiver.KEY_LAST_HEARTBEAT_MS, nowMs)
-                .apply();
+        // docs/heartbeat_engine_health_gate/PRD.md -- see
+        // consecutiveEngineFailures's own doc. checkAndLogPermissions
+        // above is intentionally NOT gated the same way -- permission
+        // state is independent of engine/DB health and should keep
+        // being checked even while the engine pipeline is broken; only
+        // the WATCHDOG's own staleness signal (which specifically
+        // claims "the tracking pipeline is alive") is gated here.
+        writeWatchdogHeartbeatIfEngineHealthy(nowMs);
         // Redundant watchdog re-arm used to live here, gated on a GPS
         // callback actually arriving -- moved to watchdogRearmRunnable
         // (see startTracking()), which fires on its own fixed schedule
         // instead. See WATCHDOG_REARM_INTERVAL_MS's own comment for why.
+    }
+
+    /**
+     * docs/heartbeat_engine_health_gate/PRD.md -- the watchdog-visible
+     * heartbeat only advances while the engine/DB pipeline has been
+     * responding recently (below ENGINE_FAILURE_ALERT_THRESHOLD
+     * consecutive on_gps_update failures -- tracked in the location
+     * callback's own try/catch, see consecutiveEngineFailures's doc).
+     * Skipping this write while unhealthy lets staleness accumulate in
+     * MonitoringWatchdogReceiver's eyes even though raw GPS ticks keep
+     * arriving -- the existing staleness alert + circuit-breaker-guarded
+     * auto-restart (docs/watchdog_restart_circuit_breaker/PRD.md) then
+     * apply to this failure mode too, instead of it being invisible to
+     * both.
+     */
+    private void writeWatchdogHeartbeatIfEngineHealthy(long nowMs) {
+        if (consecutiveEngineFailures >= ENGINE_FAILURE_ALERT_THRESHOLD) {
+            return;
+        }
+        getSharedPreferences(MonitoringWatchdogReceiver.PREFS_NAME, MODE_PRIVATE)
+                .edit()
+                .putLong(MonitoringWatchdogReceiver.KEY_LAST_HEARTBEAT_MS, nowMs)
+                .apply();
     }
 
     @Override
