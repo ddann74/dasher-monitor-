@@ -3128,6 +3128,18 @@ class TripManager:
         self.stops = [s for s in self.stops if not s["matched"]]
         self.events = []
         self.delays = []
+        # docs/messages_not_cleared_between_trips/PRD.md -- CONFIRMED REAL
+        # BUG, fixed here: unlike gps_points/events/delays above, this list
+        # was never reset per trip, so _persist_trip (which iterates ALL of
+        # self.messages, not just this trip's) re-persisted every prior
+        # trip's messages again under each new trip_id, growing without
+        # bound for the whole session. Live TTS/overlay announcement
+        # (_check_approach_instruction, _evaluate_arrivals) already filters
+        # by self._last_message_cutoff, reset to this trip's start ts a few
+        # lines below -- a stale message's timestamp is always <= the new
+        # cutoff, so it was already excluded there; this only fixes the
+        # persisted-history/reporting side.
+        self.messages = []
         self._below_stop_speed_since = None
         self._parked_since = None
         self._delay_logged_for_current_park = False
