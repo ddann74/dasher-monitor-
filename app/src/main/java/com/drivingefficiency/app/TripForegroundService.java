@@ -1045,6 +1045,31 @@ public class TripForegroundService extends Service {
                     PendingIntent.FLAG_UPDATE_CURRENT
                             | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0));
             builder.setContentIntent(tapPendingIntent);
+        } else if ("Accessibility".equals(permissionName)) {
+            // docs/accessibility_alert_deep_link/PRD.md -- round-8 scouting
+            // finding: unlike the GPS watchdog (which can automatically
+            // restart tracking, MonitoringWatchdogReceiver.onReceive), a
+            // dead/unbound AccessibilityService has no Android API this
+            // app can call to silently re-enable it -- self-healing simply
+            // isn't possible here the way it is for GPS. The one thing
+            // that IS reliably possible is reducing how much this alert
+            // demands of the driver to fix it manually: previously tapping
+            // it did nothing at all (no setContentIntent, same gap Trip
+            // Capture's own alert had before its ss21 fix above), leaving
+            // the driver to separately remember/find Permissions & Setup
+            // -> Accessibility on their own. Deep-links straight to
+            // Android's own Accessibility Settings screen instead -- the
+            // exact same Settings.ACTION_ACCESSIBILITY_SETTINGS intent
+            // PermissionsActivity's own accessibilityButton already uses,
+            // so toggling this app's service off and back on (the one
+            // manual action that reliably rebinds it) is one tap away
+            // from the alert itself, not several.
+            Intent tapIntent = new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS);
+            tapIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            PendingIntent tapPendingIntent = PendingIntent.getActivity(this, notificationId, tapIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT
+                            | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0));
+            builder.setContentIntent(tapPendingIntent);
         }
         Notification notification = builder.build();
         manager.notify(notificationId, notification);
