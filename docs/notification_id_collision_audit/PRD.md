@@ -40,10 +40,11 @@ constant across the app (`grep` for every literal/constant in the
 | ID / range | Owner |
 |---|---|
 | 9001, 9002 | `MonitoringWatchdogReceiver` (alert, escalated alert) |
-| 9100-9199 | `raisePermissionRevokedAlert` (hash-based, unchanged) |
+| 9100-9199 | `raisePermissionRevokedAlert` (hash-based) -- see `docs/notification_id_9199_reservation/PRD.md`: this range was NOT actually fully free at the time of this audit, see that PRD for the correction |
 | 9200 | `AppNotificationListenerService.AUTO_LAUNCH_NOTIFICATION_ID` (unchanged) |
 | 9210 | `CONSENT_RECOVERY_NOTIFICATION_ID` (unchanged) |
 | **9220** | **`RECORDING_VERIFICATION_FAILED_NOTIFICATION_ID` (NEW -- moved off the colliding 9200)** |
+| 9230 | `DASHER_PACKAGE_NOT_FOUND_NOTIFICATION_ID` -- moved here from a bare 9199 by `docs/notification_id_9199_reservation/PRD.md` (round 13); 9199 sat inside the 9100-9199 row above, un-accounted-for by this audit at the time it was written |
 | 9300 | `BootAndUpdateReceiver.notifyResumed` (unchanged) |
 | 9400 | `raiseMonitoringNotActiveAlert` (unchanged) |
 | 9500 | `raiseEngineFailureAlert` (unchanged) |

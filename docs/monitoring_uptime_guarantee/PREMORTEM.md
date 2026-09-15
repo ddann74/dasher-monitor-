@@ -3,11 +3,12 @@
 Status: LIVING RISK REGISTER (created 2026-09-15, last updated
 2026-09-15). R1-R7 closed the loop's originally-known Open items. The
 required verification pass (round 13, per the parent PRD's §4
-acceptance criteria) then found 3 new items (R20-R22), now being closed
-in the same Ralph-loop rhythm. Companion to
-`docs/monitoring_uptime_guarantee/PRD.md`. Per that PRD, this is
-inherently a moving target, not a one-time finish line -- a future
-scouting pass can always find something new.
+acceptance criteria) then found 3 new items (R20-R22), now also closed
+-- every item in this register currently reads Mitigated or Ruled out.
+Companion to `docs/monitoring_uptime_guarantee/PRD.md`. Per that PRD,
+this is inherently a moving target, not a one-time finish line -- a
+future scouting pass can always find something new, which is exactly
+what round 13 itself demonstrated.
 Updated by every Ralph-loop iteration that closes or narrows a risk --
 see that PRD's own acceptance criteria for when this register is
 considered "done."
@@ -278,23 +279,28 @@ the same point `consecutiveEngineFailures` itself (the in-memory
 trigger) already implicitly resets to 0 via a fresh
 `TripForegroundService` instance.
 
-### R22 — [Open, LOW-MEDIUM] Notification ID 9199 sits unreserved inside the hash-auto-assigned 9100-9199 band
+### R22 — [Mitigated] Notification ID 9199 sat unreserved inside the hash-auto-assigned 9100-9199 band
 
 Found by round 13's verification pass. `raiseDasherPackageNotFoundAlert`
-has used a hardcoded `9199` since `docs/dasher_package_verification/PRD.md`
+used a hardcoded `9199` since `docs/dasher_package_verification/PRD.md`
 (2026-09-14) -- predating round 11's notification-ID collision audit,
 which documented 9100-9199 as belonging entirely to
 `raisePermissionRevokedAlert`'s hash-based scheme without accounting for
 this prior claim. No permission name currently hashes to 9199 (verified
 by direct computation against all 8 in-use `permissionName` strings), so
-there is no ACTIVE collision today, but nothing prevents a future or
-renamed permission from silently colliding with it. Not yet fixed.
+there was no ACTIVE collision, but nothing prevented a future or renamed
+permission from silently colliding with it.
 
-**Fix direction:** move `raiseDasherPackageNotFoundAlert` off 9199 to a
-genuinely free, disjoint ID, and update
-`docs/notification_id_collision_audit/PRD.md`'s own namespace table to
-correctly exclude the ID it occupies from the hash-auto-assigned range's
-effectively-available set.
+**Fixed:** `docs/notification_id_9199_reservation/PRD.md` -- moved
+`raiseDasherPackageNotFoundAlert` to a new dedicated constant,
+`DASHER_PACKAGE_NOT_FOUND_NOTIFICATION_ID = 9230`, genuinely disjoint
+from the hash-reserved band and every other fixed ID/range in the app,
+and updated `docs/notification_id_collision_audit/PRD.md`'s own
+namespace table with the correction. This is the third time this exact
+class of bug has occurred (rounds 10, 11, 13) -- that PRD's own
+follow-up suggestion (a shared, compile-time-enforced ID registry) is
+now worth genuinely considering rather than continuing to rely on manual
+audits alone.
 
 ## How this register is used
 

@@ -1326,6 +1326,22 @@ public class TripForegroundService extends Service {
      * since the real-world consequence is just as severe: EVERY
      * detection path in this app silently stops working.
      */
+    // docs/notification_id_9199_reservation/PRD.md -- CONFIRMED REAL GAP,
+    // fixed here (monitoring-uptime-guarantee premortem R22, round-13
+    // verification finding #3): this used to be a bare hardcoded 9199,
+    // sitting INSIDE the 9100-9199 band raisePermissionRevokedAlert's own
+    // hash formula (9100 + abs(permissionName.hashCode() % 100)) treats
+    // as fully available for auto-assignment -- this alert predates
+    // round 11's notification-ID collision audit, so that audit's "final
+    // namespace" table never accounted for this prior claim on 9199. No
+    // permission name currently hashes to 99 (confirmed by direct
+    // computation against every permissionName string in this file), so
+    // there was no ACTIVE collision, but nothing stopped a future or
+    // renamed permission from silently landing on it. Given its own
+    // dedicated id, clear of every other id in this file's audit (see
+    // RATE_DELIVERY_NOTIFICATION_ID_BASE's own doc for the rest of it).
+    private static final int DASHER_PACKAGE_NOT_FOUND_NOTIFICATION_ID = 9230;
+
     private void raiseDasherPackageNotFoundAlert(boolean alreadyMissingAtStart) {
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager == null) {
@@ -1346,7 +1362,7 @@ public class TripForegroundService extends Service {
                 .setDefaults(Notification.DEFAULT_SOUND | Notification.DEFAULT_VIBRATE)
                 .setAutoCancel(true)
                 .build();
-        manager.notify(9199, notification);
+        manager.notify(DASHER_PACKAGE_NOT_FOUND_NOTIFICATION_ID, notification);
         // Deliberately NOT buildInstallTimingNote() here -- that reports
         // THIS app's (Monitor's) own install/update timing, useful
         // elsewhere for "did reinstalling Monitor reset a permission,"
@@ -1375,8 +1391,8 @@ public class TripForegroundService extends Service {
     // See notifyRateThisDelivery's own call site -- a dedicated, wide
     // reserved block (9600-10599) for per-trip delivery-rating
     // notifications, far from every other id in this file (9001-9002,
-    // 9100-9199, 9200, 9210, 9220, 9300, 9400, 9500) so it can never
-    // collide with any of them as trip_id keeps growing across the
+    // 9100-9199, 9200, 9210, 9220, 9230, 9300, 9400, 9500) so it can
+    // never collide with any of them as trip_id keeps growing across the
     // install's lifetime -- see its own doc for the bug this replaces.
     private static final int RATE_DELIVERY_NOTIFICATION_ID_BASE = 9600;
     private static final int RATE_DELIVERY_ID_RANGE = 1000;
