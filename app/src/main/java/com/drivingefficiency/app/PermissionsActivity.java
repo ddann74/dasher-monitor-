@@ -254,14 +254,37 @@ public class PermissionsActivity extends AppCompatActivity {
                     // paired with an address that never actually
                     // geocoded would be worse than the feature just not
                     // being configured yet.
-                    ShiftRoutingPrefs.clearHomeLocation(PermissionsActivity.this);
+                    //
+                    // docs/home_address_regeocode_failure_wipe/PRD.md --
+                    // CONFIRMED REAL BUG, fixed here: this used to call
+                    // clearHomeLocation() unconditionally, even when a
+                    // PREVIOUSLY saved, working home location already
+                    // existed -- a typo'd edit, or a transient network
+                    // failure, silently wiped it and disabled Shift
+                    // Routing (isConfigured() -> false), while
+                    // KEY_HOME_ADDRESS (never touched here) kept showing
+                    // what looks like a valid, working address on the next
+                    // screen load -- no clear signal anything had changed.
+                    // Only clear when there wasn't already a valid saved
+                    // location to protect: a failed FIRST-time setup still
+                    // shouldn't keep stale placeholder coordinates, but a
+                    // failed EDIT of an already-working configuration now
+                    // leaves that working configuration alone instead of
+                    // destroying it.
+                    boolean hadWorkingLocation = ShiftRoutingPrefs.getHomeLatLon(PermissionsActivity.this) != null;
+                    if (!hadWorkingLocation) {
+                        ShiftRoutingPrefs.clearHomeLocation(PermissionsActivity.this);
+                    }
                     refreshShiftRoutingSubtext(shiftRoutingSubtext);
                     // Field-test note: this specific geocode call site was
                     // missing from the audit that added logging to every
                     // other GoogleApiHelper caller -- was Toast-only.
-                    logDiagnostic("SHIFT_ROUTING", "Could not resolve home address \"" + address + "\" -- " + message);
+                    logDiagnostic("SHIFT_ROUTING", "Could not resolve home address \"" + address + "\" -- " + message
+                            + (hadWorkingLocation ? " (kept previous working home address)" : ""));
                     Toast.makeText(PermissionsActivity.this,
-                            "Could not resolve that address: " + message, Toast.LENGTH_LONG).show();
+                            "Could not resolve that address: " + message
+                                    + (hadWorkingLocation ? " Keeping your previous home address." : ""),
+                            Toast.LENGTH_LONG).show();
                 }
             };
             if (TripForegroundService.hasValidLocation) {
