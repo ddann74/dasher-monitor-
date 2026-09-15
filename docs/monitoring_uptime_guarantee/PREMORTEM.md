@@ -1,7 +1,7 @@
 # Premortem: Monitoring Uptime Guarantee
 
 Status: LIVING RISK REGISTER (created 2026-09-15, last updated
-2026-09-15, Ralph-loop iteration 1: R1 closed). Companion to
+2026-09-15, Ralph-loop iteration 2: R1 and R2 closed). Companion to
 `docs/monitoring_uptime_guarantee/PRD.md`.
 Updated by every Ralph-loop iteration that closes or narrows a risk --
 see that PRD's own acceptance criteria for when this register is
@@ -57,19 +57,21 @@ while still always re-running the naturally-idempotent `trips` UPDATE and
 still always computing/returning `delivery_speed_event` (never received
 by the caller from the failed first attempt).
 
-### R2 — [Open, LOW-MEDIUM] `dropoff_arrival_ts` can be silently and permanently lost on a single-stop trip
+### R2 — [Mitigated] `dropoff_arrival_ts` can be silently and permanently lost on a single-stop trip
 
 Same root-cause family as R1: a scattered, ad-hoc mid-trip `UPDATE` +
-`commit()` in `_evaluate_arrivals` (not deferred to `_persist_trip`) can
-fail after `matched = True` is already set in memory, and since that
-code path is gated on `not stop["matched"]`, it never runs again for
-that stop -- the column stays `NULL` forever with no retry. Lower
+`commit()` in `_evaluate_arrivals` (not deferred to `_persist_trip`)
+could fail after `matched = True` was already set in memory, and since
+that code path is gated on `not stop["matched"]`, it never ran again for
+that stop -- the column stayed `NULL` forever with no retry. Lower
 severity than R1 (one supplementary timing field, not core trip data).
-Found by round 12, not yet fixed.
+Found by round 12.
 
-**Fix direction:** same class of fix as R1 -- defer this write into
-`_persist_trip`'s own transaction, or add a retry path independent of
-the in-memory `matched` flag.
+**Fixed:** `docs/dropoff_arrival_ts_retry/PRD.md` -- `nearest["matched"]`/
+`arrival_time` are now only set AFTER the DB write commits successfully,
+so a failure leaves the stop unmatched and the next GPS tick naturally
+retries the match+write (the write itself was already idempotent via its
+`WHERE dropoff_arrival_ts IS NULL` guard).
 
 ### R3 — [Open, LOW] System Location toggle being off entirely is never checked
 

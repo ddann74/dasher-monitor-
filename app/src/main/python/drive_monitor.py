@@ -3431,8 +3431,22 @@ class TripManager:
             if d < nearest_dist:
                 nearest, nearest_dist = stop, d
         if nearest and nearest_dist <= ARRIVAL_GEOFENCE_METERS:
-            nearest["matched"] = True
-            nearest["arrival_time"] = ts
+            # docs/dropoff_arrival_ts_retry/PRD.md -- CONFIRMED REAL BUG,
+            # fixed here (monitoring-uptime-guarantee premortem R2):
+            # nearest["matched"]/arrival_time used to be set BEFORE this
+            # DB write. If the write or commit() failed (a transient DB
+            # hiccup), matched stayed True in memory regardless -- the
+            # loop above skips any already-matched stop, so a failed
+            # write here could never be retried on a later tick,
+            # permanently losing dropoff_arrival_ts for that stop. Now
+            # matched/arrival_time are only set AFTER the write commits,
+            # so a failure leaves the stop unmatched and the very next
+            # GPS tick naturally re-evaluates and retries the whole
+            # match+write -- the same "flag set only after the operation
+            # it describes has verifiably succeeded" pattern as
+            # docs/start_trip_state_lie_on_failure/PRD.md and
+            # docs/trip_end_persistence_idempotency/PRD.md.
+            #
             # Only the FIRST dropoff arrival -- a multi-stop batch would
             # have several, and this is deliberately a simplified,
             # single-primary-flow breakdown, not a full per-stop one.
@@ -3441,6 +3455,8 @@ class TripManager:
                 (ts,),
             )
             self.db.conn.commit()
+            nearest["matched"] = True
+            nearest["arrival_time"] = ts
             # GAP 3 (diagnostic-coverage pass): previously silent. Only
             # set if a row was genuinely updated -- the guard clause above
             # means this can legitimately affect zero rows for a second
