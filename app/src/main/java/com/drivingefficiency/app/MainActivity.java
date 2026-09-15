@@ -554,6 +554,18 @@ public class MainActivity extends AppCompatActivity {
                     && !AppNotificationListenerService.isListenerConnected) {
                 problems.add("Notification listener disconnected");
             }
+            // docs/notification_visibility_check/PRD.md -- CONFIRMED REAL
+            // GAP, fixed here: every alert this app can raise (permission-
+            // revoked, watchdog, engine-failure, recording-verification)
+            // is a notification -- if the driver has disabled this app's
+            // notifications at the OS level, ALL of them are silently
+            // invisible, with nothing anywhere telling the driver that.
+            // This status line is read directly (not via a notification),
+            // so it's one of the few surfaces that can actually warn about
+            // this specific failure mode.
+            if (TripForegroundService.notificationsAppearDisabled) {
+                problems.add("Notifications disabled -- alerts won't reach you");
+            }
             if (!problems.isEmpty()) {
                 return "\n⚠ Detection: " + String.join(", ", problems);
             }

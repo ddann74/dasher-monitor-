@@ -50,4 +50,26 @@ final class NotificationChannelHelper {
         }
         manager.createNotificationChannel(channel);
     }
+
+    /**
+     * docs/notification_visibility_check/PRD.md -- CONFIRMED REAL GAP,
+     * fixed here (round-10 scouting finding #5): every alert this app
+     * raises (permission-revoked, watchdog staleness/escalation, engine-
+     * failure, recording-verification-failed) ends in a bare
+     * manager.notify(...) call, with nothing anywhere checking whether
+     * the driver can actually SEE it. A driver who has disabled this
+     * app's notifications entirely (Settings -> Apps -> Dasher Monitor
+     * -> Notifications) gets zero visible symptom -- notify() doesn't
+     * throw or report failure in that case, it just silently delivers
+     * nothing. Every fail-safe mechanism this whole session built
+     * ultimately terminates in this same unverified call, making this a
+     * single point of silent failure for the entire alerting layer.
+     * areNotificationsEnabled() (real platform API, added API 24; this
+     * app's minSdk is 26, no version gate needed) is Android's own
+     * documented, authoritative answer to "can this app post anything
+     * the user will ever see," independent of any specific channel.
+     */
+    static boolean areNotificationsDisabled(NotificationManager manager) {
+        return manager != null && !manager.areNotificationsEnabled();
+    }
 }

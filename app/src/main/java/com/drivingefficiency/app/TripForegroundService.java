@@ -105,6 +105,20 @@ public class TripForegroundService extends Service {
     public static volatile boolean isRunning = false;
 
     /**
+     * docs/notification_visibility_check/PRD.md -- true once
+     * checkAndLogPermissions has confirmed this app's notifications are
+     * disabled at the OS level (see NotificationChannelHelper.
+     * areNotificationsDisabled's own doc for why this matters: every
+     * alert this app can raise is otherwise silently invisible). Static
+     * and cross-component, same pattern as isRunning above, specifically
+     * so MainActivity's status line and this service's own persistent
+     * notification text -- the two surfaces that don't themselves depend
+     * on a NEW notification actually reaching the driver -- can both
+     * warn about it.
+     */
+    public static volatile boolean notificationsAppearDisabled = false;
+
+    /**
      * True whenever this service object exists at all -- idle or actively
      * tracking, doesn't matter. False only once quitCompletely() (or the
      * OS) has actually torn it down. Distinguishing this from isRunning is
@@ -897,6 +911,17 @@ public class TripForegroundService extends Service {
         if (powerManager != null) {
             hasBatteryExemption = powerManager.isIgnoringBatteryOptimizations(getPackageName());
         }
+        // docs/notification_visibility_check/PRD.md -- see
+        // NotificationChannelHelper.areNotificationsDisabled's own doc
+        // and notificationsAppearDisabled's own doc for why this can't
+        // be surfaced as a notification-based alert like every other
+        // check here (that would be self-defeating) -- set directly as
+        // a static flag the two non-notification-dependent surfaces
+        // (MainActivity's status line, this service's own persistent
+        // notification text) can read instead.
+        NotificationManager notificationManagerForVisibilityCheck = getSystemService(NotificationManager.class);
+        notificationsAppearDisabled = NotificationChannelHelper.areNotificationsDisabled(
+                notificationManagerForVisibilityCheck);
         // Previously omitted entirely -- confirmed as a real gap: the
         // PERMISSIONS log line couldn't answer "is accessibility access
         // actually on" at all, despite that being exactly what offer/
@@ -1041,6 +1066,7 @@ public class TripForegroundService extends Service {
                     + " dasherAppInstalled=" + dasherAppInstalled
                     + " notificationListenerConnected=" + (notificationListenerEverConnected
                             ? String.valueOf(hasNotificationListenerConnected) : "not yet connected")
+                    + " appNotificationsEnabled=" + !notificationsAppearDisabled
                     + (changed && !forceLog ? " (CHANGED since last check)" : ""));
             // Immediate visual update the moment accessibility actually
             // changes (drops OR recovers) -- previously the blue-flashing
@@ -2668,6 +2694,15 @@ public class TripForegroundService extends Service {
         if (AppNotificationListenerService.lastListenerConnectedMs > 0
                 && !AppNotificationListenerService.isListenerConnected) {
             problems.add("notification listener disconnected");
+        }
+        // docs/notification_visibility_check/PRD.md -- same consolidation
+        // as MainActivity.buildDasherDetectionStatusLine's own copy of
+        // this check. Worth its place specifically on the PERSISTENT
+        // notification (this text) since that's one of the few surfaces
+        // that keeps showing even when every notification-based ALERT
+        // channel has been silenced.
+        if (notificationsAppearDisabled) {
+            problems.add("notifications disabled -- alerts won't reach you");
         }
         if (problems.isEmpty()) {
             return text;
