@@ -3122,7 +3122,42 @@ class TripManager:
             self._above_start_speed_since = None
 
     def _start_trip(self, ts, lat, lon, is_test_data=False):
-        self.state = self.STATE_ACTIVE
+        # docs/start_trip_state_lie_on_failure/PRD.md -- CONFIRMED REAL
+        # BUG, fixed here (round-11 scouting finding #1): self.state used
+        # to be set to STATE_ACTIVE as this method's very FIRST statement,
+        # before ~55 more lines of unguarded work -- including a real DB
+        # read (_learned_accel_brake_thresholds) and the INSERT below that
+        # finally assigns self.trip_id. If anything in that window threw
+        # (most plausibly a locked/corrupted sqlite3 connection -- the
+        # exact scenario docs/heartbeat_engine_health_gate/PRD.md's
+        # engine-failure alert exists for), self.state was left ACTIVE
+        # while self.trip_id stayed None. get_state() would then lie
+        # "TRIP_ACTIVE" indefinitely: real GPS points/events/delays kept
+        # accumulating in memory for the rest of the delivery (state !=
+        # IDLE routes into _process_point_during_trip etc.), but
+        # _persist_trip() silently no-ops when trip_id is None -- the
+        # entire trip's data was discarded with zero DB row ever written.
+        # Worse, since the underlying DB issue is usually transient, the
+        # VERY NEXT tick's on_gps_update call would succeed, resetting
+        # Java's consecutiveEngineFailures/engineFailureAlertRaised and
+        # silently clearing any pending "Delivery tracking error" alert
+        # -- even though the engine's internal state was now permanently
+        # corrupted for this trip.
+        #
+        # Fix: self.state is now set to STATE_ACTIVE as the LAST
+        # statement in this method, only once self.trip_id has been
+        # successfully assigned from a real, committed INSERT. Nothing
+        # earlier in this method reads self.state (confirmed by reading
+        # every self.state reference in this file), so reordering this
+        # one assignment is the complete fix -- no try/except needed. A
+        # failure anywhere in this method now leaves self.state at
+        # whatever it already was (STATE_IDLE, the only state this is
+        # ever called from -- see on_gps_update/_evaluate_trip_start),
+        # so the exception still propagates to the Java caller exactly as
+        # before (preserving the engine-failure alert's own detection),
+        # and the very next GPS tick naturally retries a full, clean trip
+        # start from scratch instead of being stuck in a corrupted
+        # ACTIVE-with-no-trip_id limbo for the rest of the delivery.
         self._trip_is_test_data = is_test_data
         self.gps_points = []
         self.stops = [s for s in self.stops if not s["matched"]]
@@ -3179,6 +3214,9 @@ class TripManager:
         )
         self.db.conn.commit()
         self.trip_id = cur.lastrowid
+        # See this method's own opening comment -- only becomes ACTIVE
+        # once trip_id is genuinely set from a committed insert.
+        self.state = self.STATE_ACTIVE
 
     def _process_point_during_trip(self, lat, lon, speed_kmh, ts):
         classification = self._classify_speed(speed_kmh)
