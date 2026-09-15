@@ -1448,7 +1448,18 @@ public class TripForegroundService extends Service {
                     .setDefaults(Notification.DEFAULT_SOUND | Notification.DEFAULT_VIBRATE)
                     .setAutoCancel(true)
                     .build();
-            manager.notify(9300, notification);
+            // docs/boot_watchdog_rearm/PRD.md -- CONFIRMED REAL BUG,
+            // fixed here: this collided with BootAndUpdateReceiver.
+            // notifyResumed's own hardcoded id 9300 -- Notification IDs
+            // are keyed per-package, not per-channel, so whichever of
+            // these two completely unrelated notifications posted
+            // SECOND would silently replace the other in the shade
+            // (e.g. a genuine "Delivery tracking error" alert could be
+            // silently wiped from view by an unrelated "monitoring
+            // resumed after reboot" notification, or vice versa) --
+            // found while working on the watchdog re-arm fix just
+            // above, in the same file this collides with.
+            manager.notify(9500, notification);
         }
     }
 

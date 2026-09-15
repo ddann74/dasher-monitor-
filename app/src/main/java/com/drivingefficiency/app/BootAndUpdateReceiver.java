@@ -59,6 +59,34 @@ public class BootAndUpdateReceiver extends BroadcastReceiver {
             logToEngine(context, "SYSTEM", message + " -- monitoring was off before this, not resuming");
             return;
         }
+        // docs/boot_watchdog_rearm/PRD.md -- CONFIRMED REAL GAP, fixed
+        // here (round-10 scouting finding #1): AlarmManager alarms do
+        // NOT survive a reboot -- the watchdog's own alarm from before
+        // this reboot is already gone by the time this runs.
+        // scheduleWatchdog() was previously only ever called from
+        // INSIDE a successful TripForegroundService.startTracking() (or
+        // its own re-arm runnable, itself only scheduled inside
+        // startTracking() too) -- so this receiver only ever fired
+        // ACTION_START_TRACKING and hoped startTracking() got far
+        // enough to re-arm the watchdog itself. If that restart attempt
+        // fails (e.g. the same Android 14 FGS-location eligibility
+        // SecurityException this codebase already guards against
+        // elsewhere -- boot-triggered starts are not obviously exempt
+        // from that specific check), NO watchdog alarm would exist at
+        // all after this reboot -- silently disarming every fail-safe
+        // mechanism (staleness alert, circuit breaker, escalated alert,
+        // GPS reacquire) for the rest of the shift, with nothing
+        // anywhere telling the driver the safety net itself is gone.
+        // Called directly here, unconditionally, independent of whether
+        // the restart attempt below ends up succeeding -- the exact
+        // "device just rebooted" moment is precisely when a fresh alarm
+        // most needs (re-)arming. Safe to call even if startTracking()
+        // ALSO successfully schedules it moments later --
+        // AlarmManager.setExactAndAllowWhileIdle with FLAG_UPDATE_CURRENT
+        // safely replaces any still-pending alarm (the same idempotent
+        // re-arm pattern already established elsewhere in this
+        // codebase, e.g. watchdogRearmRunnable).
+        MonitoringWatchdogReceiver.scheduleWatchdog(context);
         try {
             Intent startIntent = new Intent(context, TripForegroundService.class);
             startIntent.setAction(TripForegroundService.ACTION_START_TRACKING);
