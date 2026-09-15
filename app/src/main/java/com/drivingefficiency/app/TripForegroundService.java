@@ -572,7 +572,45 @@ public class TripForegroundService extends Service {
         monitoringActive = true;
         isRunning = true;
         lastKnownMode = null; // force onModeChanged to fire on the next GPS fix
-        startForegroundLocationOnly(buildNotificationForMode("GENERAL"));
+        try {
+            startForegroundLocationOnly(buildNotificationForMode("GENERAL"));
+        } catch (SecurityException e) {
+            // docs/starttracking_foreground_start_guard/PRD.md -- CONFIRMED
+            // REAL GAP, fixed here (round-10 scouting finding #2): unlike
+            // onCreate()'s OWN startForegroundLocationOnly() call (guarded
+            // just above in this file), this second call -- reached via
+            // onStartCommand() -- had no try/catch at all. Android still
+            // delivers the already-queued onStartCommand() for the intent
+            // that started this service even after onCreate() internally
+            // caught its own SecurityException and called stopSelf() --
+            // stopSelf() schedules teardown, it doesn't cancel already-
+            // dispatched callbacks. If the same Android 14 FGS-location
+            // eligibility rejection onCreate() already hit still applies a
+            // few milliseconds later (it will -- nothing about the
+            // environment changed), this call throws the identical
+            // exception, and previously that was uncaught -- crashing the
+            // entire app process immediately after onCreate()'s own guard
+            // was supposed to have already degraded this gracefully. Same
+            // recovery shape as onCreate()'s catch block: roll back the
+            // flags just set above (this attempt did not actually start
+            // anything), alert, record the failure for the circuit
+            // breaker, and stop cleanly instead of crashing.
+            monitoringActive = false;
+            isRunning = false;
+            logDiagnostic("ERROR", "startTracking()'s startForegroundLocationOnly() rejected -- "
+                    + "same Android 14 FGS-location eligibility issue as onCreate(): "
+                    + android.util.Log.getStackTraceString(e));
+            raiseMonitoringNotActiveAlert(this, "foreground service start rejected by the OS");
+            int consecutiveFailures = MonitoringWatchdogReceiver.recordRestartFailure(this);
+            logDiagnostic("ERROR", "Consecutive restart failures: " + consecutiveFailures);
+            // Mirrors onCreate()'s own catch block -- this attempt is
+            // being torn down via stopSelf() either way, whether or not
+            // onCreate() already set this false for the same underlying
+            // failure moments earlier.
+            serviceExists = false;
+            stopSelf();
+            return;
+        }
         refreshStatusDot();
         startLocationUpdates();
         MonitoringWatchdogReceiver.markIntendedActive(this, true);
