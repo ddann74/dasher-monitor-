@@ -1031,6 +1031,24 @@ public class TripForegroundService extends Service {
                 raisePermissionRevokedAlert("Notification Access",
                         "Offer detection via notification and message reading won't work");
             }
+            // docs/battery_exemption_revoked_alert/PRD.md -- CONFIRMED REAL
+            // GAP, fixed here (monitoring-uptime-guarantee premortem R5):
+            // hasBatteryExemption was already computed every heartbeat
+            // right alongside the other 3 critical permissions above, but
+            // unlike them, its true->false transition never triggered this
+            // alert -- a driver could lose this exemption (an OEM battery
+            // manager silently re-enabling optimization, or the driver
+            // themself toggling it in Settings) and get no signal at all
+            // until background GPS/heartbeat throttling eventually produced
+            // a generic staleness alert, if it did at all. Re-granting
+            // can't be automated (a real Android restriction -- the OS
+            // requires an explicit user action in Settings), but detecting
+            // and alerting the loss follows the same already-established
+            // pattern as every other permission here.
+            if (lastLoggedBatteryExempt != null && lastLoggedBatteryExempt && !hasBatteryExemption) {
+                raisePermissionRevokedAlert("Battery Optimization Exemption",
+                        "Android may delay or throttle GPS tracking in the background");
+            }
             if (lastLoggedAccessibility != null && lastLoggedAccessibility && !hasAccessibility) {
                 raisePermissionRevokedAlert("Accessibility",
                         "Offer detection and Accept/Decline tracking won't work");
@@ -1215,6 +1233,21 @@ public class TripForegroundService extends Service {
             // device's system-wide Location toggle -- deep-links straight to
             // Android's own Location source settings screen instead.
             Intent tapIntent = new Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS);
+            tapIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            PendingIntent tapPendingIntent = PendingIntent.getActivity(this, notificationId, tapIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT
+                            | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0));
+            builder.setContentIntent(tapPendingIntent);
+        } else if ("Battery Optimization Exemption".equals(permissionName)) {
+            // docs/battery_exemption_revoked_alert/PRD.md -- mirrors
+            // PermissionsActivity's own batteryOptimizationButton click
+            // handler exactly: ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+            // with a package: URI triggers Android's direct "allow this app
+            // to ignore battery optimizations" system dialog in one tap,
+            // rather than dropping the driver into a settings list to find
+            // this app themselves.
+            Intent tapIntent = new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    android.net.Uri.parse("package:" + getPackageName()));
             tapIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             PendingIntent tapPendingIntent = PendingIntent.getActivity(this, notificationId, tapIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT

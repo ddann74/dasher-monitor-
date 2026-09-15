@@ -1,8 +1,8 @@
 # Premortem: Monitoring Uptime Guarantee
 
 Status: LIVING RISK REGISTER (created 2026-09-15, last updated
-2026-09-15, Ralph-loop iteration 3: R1, R2, and R3 closed). Companion to
-`docs/monitoring_uptime_guarantee/PRD.md`.
+2026-09-15, Ralph-loop iteration 4: R1, R2, R3, and R5 closed). Companion
+to `docs/monitoring_uptime_guarantee/PRD.md`.
 Updated by every Ralph-loop iteration that closes or narrows a risk --
 see that PRD's own acceptance criteria for when this register is
 considered "done."
@@ -98,14 +98,22 @@ An early release (a documented real edge case on some OEM skins) would
 silently degrade GPS tracking with no detection. Found by round 9, not
 yet fixed.
 
-### R5 — [Open, LOW] Battery-optimization-exemption loss is tracked but never alerted
+### R5 — [Mitigated] Battery-optimization-exemption loss is tracked but never alerted
 
-`hasBatteryExemption` is computed every heartbeat alongside the other 3
+`hasBatteryExemption` was computed every heartbeat alongside the other 3
 critical permissions, but unlike them, its true->false transition never
-triggers `raisePermissionRevokedAlert`. Re-granting it can't be
+triggered `raisePermissionRevokedAlert`. Re-granting it can't be
 automated (a real Android restriction), but detecting and alerting the
 loss follows the same already-established, safe pattern used for
-accessibility's deep-link alert. Found by round 9, not yet fixed.
+accessibility's deep-link alert. Found by round 9.
+
+**Fixed:** `docs/battery_exemption_revoked_alert/PRD.md` -- a mid-session
+transition block identical in shape to the other 3 critical permissions
+now fires `raisePermissionRevokedAlert`, deep-linking to
+`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` (mirroring `PermissionsActivity`'s
+own re-grant button exactly). Deliberately scoped to the mid-session
+transition only, not an already-off-at-start alert -- see that PRD's
+Honest Limits.
 
 ### R6 — [Open, LOW] Tutorial/Developer-Testing simulation threads race the shared engine singleton
 
