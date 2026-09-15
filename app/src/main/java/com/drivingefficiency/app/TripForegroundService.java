@@ -636,6 +636,28 @@ public class TripForegroundService extends Service {
         // genuine recovery, not merely an attempt, so any prior run of
         // consecutive restart failures is no longer relevant.
         MonitoringWatchdogReceiver.recordRestartSuccess(this);
+        // docs/watchdog_engine_failure_flag_session_reset/PRD.md --
+        // CONFIRMED REAL GAP, fixed here (monitoring-uptime-guarantee
+        // premortem R21, round-13 verification finding #2, auditing R7's
+        // own fix for regressions): consecutiveEngineFailures itself (the
+        // in-memory trigger for KEY_ENGINE_FAILURE_ACTIVE) already
+        // implicitly resets to 0 for every fresh TripForegroundService
+        // instance, but the durable SharedPreferences flag it drives does
+        // NOT -- it's only ever written from writeWatchdogHeartbeatIfEngineHealthy,
+        // which requires a GPS callback plus a full heartbeat interval to
+        // have already elapsed. A session that ended while the engine was
+        // genuinely failing left the flag stuck true on disk; the NEXT
+        // session inherited that stale value, and a genuine GPS stall in
+        // THIS new session -- before its own first successful heartbeat
+        // tick -- would be wrongly attributed to the old, already-resolved
+        // failure, skipping the real ACTION_REACQUIRE_LOCATION self-heal.
+        // Reset explicitly right here, at the same "a genuine new session
+        // has just started" point recordRestartSuccess() above already
+        // marks.
+        getSharedPreferences(MonitoringWatchdogReceiver.PREFS_NAME, MODE_PRIVATE)
+                .edit()
+                .putBoolean(MonitoringWatchdogReceiver.KEY_ENGINE_FAILURE_ACTIVE, false)
+                .apply();
         MonitoringWatchdogReceiver.scheduleWatchdog(this);
         // Dedicated, independent check specifically for accessibility --
         // the regular heartbeat is tied to GPS ticks, which slow down

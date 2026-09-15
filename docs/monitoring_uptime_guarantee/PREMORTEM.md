@@ -256,24 +256,27 @@ and replaced the unconditional notification with a `goAsync()` + short
 delayed re-check (mirrors `DasherAccessibilityService`'s own established
 pattern) that only posts "resumed" once genuinely confirmed.
 
-### R21 — [Open, MEDIUM] `KEY_ENGINE_FAILURE_ACTIVE` (this session's own R7 flag) could stay stuck `true` across a session boundary
+### R21 — [Mitigated] `KEY_ENGINE_FAILURE_ACTIVE` (this session's own R7 flag) could stay stuck `true` across a session boundary
 
 Found by round 13's verification pass, auditing R7's own fix for
-regressions. The flag is only ever reset by a genuine heartbeat write,
-which requires a GPS callback plus a full heartbeat interval to have
-already elapsed. A session ending while the engine was genuinely failing
-leaves the flag `true` in `SharedPreferences`; the next session inherits
-that stale value, and if IT then hits a genuine GPS stall before its own
-first successful heartbeat, the watchdog would wrongly attribute the new
-stall to the old, already-resolved failure and skip the real
+regressions. The flag was only reset by a genuine heartbeat write, which
+requires a GPS callback plus a full heartbeat interval to have already
+elapsed. A session ending while the engine was genuinely failing left
+the flag `true` in `SharedPreferences`; the next session inherited that
+stale value, and if IT then hit a genuine GPS stall before its own first
+successful heartbeat, the watchdog would wrongly attribute the new stall
+to the old, already-resolved failure and skip the real
 `ACTION_REACQUIRE_LOCATION` self-heal. Bounded impact -- the primary
-staleness alert still fires either way, so the driver is never left with
-zero signal; only the auto-recovery action R7 exists to gate correctly
-would be skipped for the wrong reason. Not yet fixed.
+staleness alert still fired either way, so the driver was never left
+with zero signal; only the auto-recovery action R7 exists to gate
+correctly would be skipped for the wrong reason.
 
-**Fix direction:** reset the flag to `false` at session start, the same
-point `consecutiveEngineFailures` itself (the in-memory trigger) already
-implicitly resets to 0 via a fresh `TripForegroundService` instance.
+**Fixed:** `docs/watchdog_engine_failure_flag_session_reset/PRD.md` --
+the flag is now explicitly reset to `false` at session start (inside
+`startTracking()`'s success path, right after `recordRestartSuccess()`),
+the same point `consecutiveEngineFailures` itself (the in-memory
+trigger) already implicitly resets to 0 via a fresh
+`TripForegroundService` instance.
 
 ### R22 — [Open, LOW-MEDIUM] Notification ID 9199 sits unreserved inside the hash-auto-assigned 9100-9199 band
 
