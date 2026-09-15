@@ -456,6 +456,24 @@ public class DasherAccessibilityService extends AccessibilityService {
      */
     private void attemptAutoStartMonitoring(String action, String logCategory, String successMessage,
                                              String failureReasonForAlert) {
+        // docs/circuit_breaker_other_autostart_paths/PRD.md -- CONFIRMED
+        // REAL GAP, fixed here: this method (all 3 call sites -- service-
+        // connect detection, debounced foreground transition, Dash-Paused
+        // auto-resume) used to have no awareness of
+        // MonitoringWatchdogReceiver's own restart circuit breaker, so it
+        // kept re-attempting the identical doomed startForegroundService
+        // call (and firing its own separate raiseMonitoringNotActiveAlert)
+        // every single trigger, even after the breaker had already
+        // tripped and gone quiet elsewhere -- defeating the whole point
+        // of tripping it. A quiet log line, not a duplicate alert -- the
+        // watchdog's own escalated alert already told the driver this
+        // needs a manual app open.
+        if (MonitoringWatchdogReceiver.isRestartCircuitBreakerTripped(this)) {
+            logDiagnostic(logCategory, "Skipping auto-start attempt (" + failureReasonForAlert + ") -- "
+                    + "the restart circuit breaker has already tripped from repeated failures; "
+                    + "open the app manually to resume");
+            return;
+        }
         Intent intent = new Intent(this, TripForegroundService.class);
         intent.setAction(action);
         try {

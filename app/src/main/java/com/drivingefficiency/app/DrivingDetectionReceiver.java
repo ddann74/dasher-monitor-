@@ -45,7 +45,22 @@ public class DrivingDetectionReceiver extends BroadcastReceiver {
                 if (isEnteringVehicle) {
                     logToEngine(context, "DRIVING_DETECTION",
                             "Activity Recognition detected entering a vehicle -- attempting auto-start");
-                    if (!TripForegroundService.isRunning) {
+                    // docs/circuit_breaker_other_autostart_paths/PRD.md --
+                    // CONFIRMED REAL GAP, fixed here: this auto-start path
+                    // used to have no awareness of MonitoringWatchdogReceiver's
+                    // own restart circuit breaker -- every vehicle entry
+                    // re-triggered the identical doomed startForegroundService
+                    // call (and its own separate raiseMonitoringNotActiveAlert)
+                    // even after the breaker had already tripped and gone
+                    // quiet elsewhere, defeating the whole point of tripping
+                    // it. A quiet log line, not a duplicate alert -- the
+                    // watchdog's own escalated alert already told the driver
+                    // this needs a manual app open.
+                    if (MonitoringWatchdogReceiver.isRestartCircuitBreakerTripped(context)) {
+                        logToEngine(context, "DRIVING_DETECTION",
+                                "Skipping auto-start -- the restart circuit breaker has already tripped "
+                                        + "from repeated failures; open the app manually to resume");
+                    } else if (!TripForegroundService.isRunning) {
                         // docs/dash_monitoring_awareness/PRD.md -- own
                         // try/catch (not just the outer one below) so a
                         // real startForegroundService rejection (a

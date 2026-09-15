@@ -140,6 +140,29 @@ public class MonitoringWatchdogReceiver extends BroadcastReceiver {
                 .getInt(KEY_CONSECUTIVE_RESTART_FAILURES, 0);
     }
 
+    /**
+     * docs/circuit_breaker_other_autostart_paths/PRD.md -- CONFIRMED REAL
+     * GAP, fixed here (round-10 scouting finding #3): the circuit breaker
+     * above was only ever CHECKED inside this class's own onReceive() --
+     * DrivingDetectionReceiver and DasherAccessibilityService's
+     * attemptAutoStartMonitoring() (3 call sites) each call
+     * startForegroundService()/ACTION_START_TRACKING directly, with zero
+     * awareness of whether this exact failure has already been tripping
+     * repeatedly. recordRestartFailure() increments the SAME shared
+     * counter regardless of which caller's restart attempt failed, so
+     * those other paths kept re-triggering the identical doomed restart
+     * (and firing their own separate, undeduplicated
+     * raiseMonitoringNotActiveAlert()) even after this class's own
+     * breaker had already tripped and gone quiet -- exactly the
+     * "battery-draining spin-up/teardown loop with indistinguishable
+     * repeat alerts" the breaker was built to eliminate, just through
+     * call sites it didn't know about. Public so those other components
+     * can check it themselves before attempting their own auto-start.
+     */
+    public static boolean isRestartCircuitBreakerTripped(Context context) {
+        return getConsecutiveRestartFailures(context) >= RESTART_CIRCUIT_BREAKER_THRESHOLD;
+    }
+
     public static void markIntendedActive(Context context, boolean active) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
