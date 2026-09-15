@@ -52,7 +52,29 @@ public class MonitoringWatchdogReceiver extends BroadcastReceiver {
     // this code cannot override or guarantee around. This is the fastest
     // reasonable target, not a promise Android will always honor exactly.
     private static final long WATCHDOG_INTERVAL_DASHER_MS = 45 * 1000;
-    private static final long ALERT_THRESHOLD_DASHER_MS = 60 * 1000;
+    // docs/watchdog_deep_park_margin/PRD.md -- CONFIRMED REAL GAP, fixed
+    // here (round-8 scouting finding #4): this heartbeat can only update
+    // as often as a real GPS fix actually arrives (maybeLogHeartbeat runs
+    // from the location callback, not on its own independent timer -- see
+    // its own doc), and TripForegroundService's deep-park GPS tier
+    // (GPS_INTERVAL_DEEP_PARK_MS, 30s) is exactly the tier active during
+    // the screen-off, long-idle condition most likely to also trigger
+    // real Android Doze throttling on the device -- the same class of
+    // delay this file's own class doc cites a real 17-minute incident for
+    // (a nominal 5-minute interval, not even a battery-tier one). Was
+    // 60s: only a 2x margin over the 30s nominal interval, uncomfortably
+    // tight once real Doze delay on top of that nominal interval is
+    // considered -- risking a spurious "monitoring may have stopped"
+    // alert during an ordinary long restaurant wait, which trains a
+    // driver to distrust/ignore the alert exactly when a REAL failure
+    // happens. Widened to a 4x margin (matching the same margin
+    // philosophy used for the accessibility liveness heartbeat's own
+    // threshold, docs/accessibility_liveness_heartbeat/PRD.md) -- still
+    // meaningfully faster than ALERT_THRESHOLD_GENERAL_MS below, so
+    // DASHER mode's "detect faster, it costs a real delivery" intent is
+    // preserved, just with a safer margin around the interval that
+    // actually feeds this heartbeat.
+    private static final long ALERT_THRESHOLD_DASHER_MS = 120 * 1000;
     private static final long WATCHDOG_INTERVAL_GENERAL_MS = 2 * 60 * 1000;
     private static final long ALERT_THRESHOLD_GENERAL_MS = 3 * 60 * 1000;
     private static final int ALERT_NOTIFICATION_ID = 9001;
