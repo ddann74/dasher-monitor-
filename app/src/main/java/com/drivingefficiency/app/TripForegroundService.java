@@ -842,8 +842,16 @@ public class TripForegroundService extends Service {
             // covered by the reactive trip-start check above. Avoids a
             // duplicate alert for the exact same underlying failure.
             if (lastLoggedTripCaptureHealthy != null && lastLoggedTripCaptureHealthy && !healthy) {
-                raisePermissionRevokedAlert("Trip Capture",
-                        "Capture stopped running mid-trip - re-grant consent in Setup if this keeps happening");
+                // docs/screen_recording_liveness_check/PRD.md -- isRecording()
+                // can now go false for a genuine MediaRecorder error, not
+                // just lost consent -- surface which one this actually was
+                // rather than always suggesting the consent-loss fix, which
+                // wouldn't help a codec/encoder failure.
+                String errorDetail = screenRecordingController.recorderErrorDetail();
+                String reason = errorDetail != null
+                        ? "Capture stopped running mid-trip (recorder error: " + errorDetail + ")"
+                        : "Capture stopped running mid-trip - re-grant consent in Setup if this keeps happening";
+                raisePermissionRevokedAlert("Trip Capture", reason);
             }
             lastLoggedTripCaptureHealthy = healthy;
         }

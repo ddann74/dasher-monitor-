@@ -258,6 +258,21 @@ class ScreenRecordingController {
     private MediaProjection mediaProjection;
     private VirtualDisplay virtualDisplay;
     private MediaRecorder mediaRecorder;
+    // docs/screen_recording_liveness_check/PRD.md -- CONFIRMED REAL GAP,
+    // fixed here (round-10 scouting finding #4): isRecording() (below)
+    // used to be a bare `mediaRecorder != null` reference check -- the
+    // exact "lifecycle flag mistaken for liveness" blind spot round 9
+    // fixed for the GPS pipeline (TripForegroundService.isRunning), left
+    // unfixed here. Per documented Android MediaRecorder behavior, the
+    // recorder can hit an encoder/codec error mid-session (e.g.
+    // MEDIA_RECORDER_ERROR_UNKNOWN) without being released and without
+    // `mediaRecorder` ever becoming null -- it just silently stops
+    // writing real frames to disk. Set by the OnErrorListener registered
+    // in newRecorder() below; reset there too, so a stale error from a
+    // PREVIOUS (already-rotated-out) recorder instance can never mark
+    // the CURRENT one broken.
+    private volatile boolean recorderErrored = false;
+    private volatile String recorderErrorDetail = null;
     private File currentFile;
     private Service activeService;
     private String tripTimestamp;
@@ -526,6 +541,13 @@ class ScreenRecordingController {
      * setVideoEncoder() call right below it.
      */
     private MediaRecorder newRecorder(File file) {
+        // See recorderErrored's own doc -- this is the single choke
+        // point both beginCapture() and rotateSegment() go through to
+        // create a fresh recorder, so resetting here guarantees a new
+        // recorder instance always starts with a clean health state,
+        // never inheriting a stale error from whatever it's replacing.
+        recorderErrored = false;
+        recorderErrorDetail = null;
         MediaRecorder recorder = new MediaRecorder();
         if (audioEnabledForThisTrip) {
             recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
@@ -550,6 +572,22 @@ class ScreenRecordingController {
         recorder.setOnInfoListener((mr, what, extra) -> {
             if (what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED) {
                 rotateSegment(mr);
+            }
+        });
+        // See recorderErrored's own doc -- the real, documented Android
+        // MediaRecorder error callback (encoder/codec failure, disk I/O
+        // error, etc.), previously never registered at all. Only marks
+        // unhealthy when this fired for the CURRENTLY active recorder --
+        // mirrors the existing `finishedRecorder != mediaRecorder`
+        // identity-check pattern already used elsewhere in this class
+        // (finalizeSegment) for the same "don't act on a stale/replaced
+        // instance's own callback" reason.
+        recorder.setOnErrorListener((mr, what, extra) -> {
+            if (mr == mediaRecorder) {
+                recorderErrored = true;
+                recorderErrorDetail = "what=" + what + " extra=" + extra;
+                android.util.Log.e("ScreenRecordingController",
+                        "MediaRecorder error: " + recorderErrorDetail);
             }
         });
         return recorder;
@@ -956,8 +994,28 @@ class ScreenRecordingController {
         }
     }
 
+    /**
+     * docs/screen_recording_liveness_check/PRD.md -- now a real health
+     * check, not just a reference-existence check (see recorderErrored's
+     * own doc). TripForegroundService.checkTripCaptureHealth() already
+     * had the alert-firing machinery in place for a true->false
+     * transition of this exact return value (raisePermissionRevokedAlert
+     * on the 15s heartbeat) -- it just never had a way to observe THIS
+     * failure mode before, since a mid-session encoder/codec error left
+     * mediaRecorder non-null. No new alert path needed; fixing the
+     * signal here is enough for that existing consumer to correctly
+     * fire on it.
+     */
     boolean isRecording() {
-        return mediaRecorder != null;
+        return mediaRecorder != null && !recorderErrored;
+    }
+
+    /** Null unless isRecording() is currently false because of a real
+      * MediaRecorder error (as opposed to never having started, or a
+      * clean stop) -- lets a caller distinguish why capture isn't
+      * healthy right now. */
+    String recorderErrorDetail() {
+        return recorderErrorDetail;
     }
 
     /** docs/screen_recording/PRD.md §27 -- only meaningful after a
