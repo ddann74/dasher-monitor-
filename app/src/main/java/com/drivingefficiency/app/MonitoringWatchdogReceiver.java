@@ -328,6 +328,31 @@ public class MonitoringWatchdogReceiver extends BroadcastReceiver {
                 context.startForegroundService(restartIntent);
                 logToEngine(context, "WATCHDOG", "Attempted automatic restart of monitoring after staleness detected");
             }
+        } else {
+            // docs/watchdog_stalled_gps_reacquire/PRD.md -- CONFIRMED REAL
+            // GAP, fixed here (round-9 scouting finding #3): isRunning
+            // only reflects service LIFECYCLE (set true in startTracking(),
+            // cleared in stopTracking()/onDestroy()) -- it says nothing
+            // about whether GPS ticks are actually still arriving. Before
+            // this fix, staleness with isRunning still true fell through
+            // this whole method with the alert above as the ONLY action --
+            // no recovery of any kind was ever attempted for "the service
+            // object is alive but the location pipeline has silently
+            // stalled" (e.g. a stuck FusedLocationProviderClient callback
+            // chain, or the system Location toggle being cycled off and
+            // back on). Re-registering location updates on the already-
+            // running instance is safe and always idempotent -- see
+            // TripForegroundService.reacquireLocationUpdates's own doc --
+            // and unlike the restart branch above, does NOT risk the
+            // Android 14 background-FGS-eligibility SecurityException
+            // (the service is already in the foreground state, not being
+            // newly promoted into it), so this doesn't need its own
+            // circuit breaker the way that one does.
+            Intent reacquireIntent = new Intent(context, TripForegroundService.class);
+            reacquireIntent.setAction(TripForegroundService.ACTION_REACQUIRE_LOCATION);
+            context.startForegroundService(reacquireIntent);
+            logToEngine(context, "WATCHDOG", "Service reports running but heartbeat is stale -- "
+                    + "asked it to re-register location updates");
         }
     }
 

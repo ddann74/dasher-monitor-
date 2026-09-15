@@ -54,6 +54,19 @@ public class TripForegroundService extends Service {
     public static final String ACTION_START_TRACKING = "com.drivingefficiency.app.START_TRACKING";
     public static final String ACTION_STOP_TRACKING = "com.drivingefficiency.app.STOP_TRACKING";
     public static final String ACTION_QUIT_COMPLETELY = "com.drivingefficiency.app.QUIT_COMPLETELY";
+    // docs/watchdog_stalled_gps_reacquire/PRD.md -- round-9 scouting
+    // finding #3: MonitoringWatchdogReceiver's restart branch only fires
+    // when !isRunning -- it has no recovery action at all for "the
+    // service object is alive (isRunning=true) but GPS ticks have
+    // silently stopped arriving" (e.g. a stalled FusedLocationProviderClient
+    // callback chain, or the system Location toggle being cycled). This
+    // action lets the watchdog ask an ALREADY-RUNNING instance to
+    // re-register location updates -- a safe, always-idempotent Fused
+    // Location Provider API call, and (unlike ACTION_START_TRACKING sent
+    // to a dead process) does NOT hit the Android 14 background-FGS-
+    // eligibility restriction, since the service is already in the
+    // foreground state, not being newly promoted into it.
+    public static final String ACTION_REACQUIRE_LOCATION = "com.drivingefficiency.app.REACQUIRE_LOCATION";
 
     /**
      * Set by DasherAccessibilityService's auto-pause detection (real
@@ -422,6 +435,8 @@ public class TripForegroundService extends Service {
         } else if (ACTION_QUIT_COMPLETELY.equals(action)) {
             quitCompletely();
             return START_NOT_STICKY; // don't restart -- this is a deliberate full shutdown
+        } else if (ACTION_REACQUIRE_LOCATION.equals(action)) {
+            reacquireLocationUpdates();
         } else {
             // No action (e.g. app-launch bootstrap, or a re-check after
             // overlay permission was just granted) -- don't change
@@ -2366,6 +2381,34 @@ public class TripForegroundService extends Service {
         startLocationUpdatesAtInterval(GPS_INTERVAL_MOVING_MS);
         currentGpsIntervalTier = 0;
         stationarySinceMs = 0;
+    }
+
+    /**
+     * docs/watchdog_stalled_gps_reacquire/PRD.md -- called only via
+     * ACTION_REACQUIRE_LOCATION, sent by MonitoringWatchdogReceiver when
+     * it finds the service reports isRunning=true but the heartbeat has
+     * gone stale anyway (see its own doc for why that combination
+     * previously had NO recovery action at all). Re-registers at
+     * whatever tier was last active (not forced back to the fastest
+     * moving-tier interval) -- if the driver is genuinely still deep-
+     * parked, this shouldn't silently increase polling frequency/battery
+     * cost, just re-kick the same registration in case the previous one
+     * stalled. requestLocationUpdates() replacing an existing
+     * registration is a normal, safe, idempotent Fused Location Provider
+     * operation -- this can't make a genuinely healthy registration
+     * worse, only possibly fix a stalled one.
+     */
+    private void reacquireLocationUpdates() {
+        if (!monitoringActive) {
+            return; // nothing to reacquire -- not currently supposed to be tracking
+        }
+        long interval = currentGpsIntervalTier == 0 ? GPS_INTERVAL_MOVING_MS
+                : currentGpsIntervalTier == 1 ? GPS_INTERVAL_STATIONARY_MS
+                : GPS_INTERVAL_DEEP_PARK_MS;
+        fusedLocationClient.removeLocationUpdates(locationCallback);
+        startLocationUpdatesAtInterval(interval);
+        logDiagnostic("WATCHDOG", "Re-registered location updates at tier " + currentGpsIntervalTier
+                + " (interval=" + interval + "ms) -- watchdog found isRunning=true but heartbeat stale");
     }
 
     private void startLocationUpdatesAtInterval(long intervalMs) {
