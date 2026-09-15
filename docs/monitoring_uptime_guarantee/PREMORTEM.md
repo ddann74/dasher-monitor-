@@ -1,8 +1,8 @@
 # Premortem: Monitoring Uptime Guarantee
 
 Status: LIVING RISK REGISTER (created 2026-09-15, last updated
-2026-09-15, Ralph-loop iteration 4: R1, R2, R3, and R5 closed). Companion
-to `docs/monitoring_uptime_guarantee/PRD.md`.
+2026-09-15, Ralph-loop iteration 5: R1, R2, R3, R4, and R5 closed).
+Companion to `docs/monitoring_uptime_guarantee/PRD.md`.
 Updated by every Ralph-loop iteration that closes or narrows a risk --
 see that PRD's own acceptance criteria for when this register is
 considered "done."
@@ -88,15 +88,21 @@ on the same heartbeat cadence as every other critical permission, and
 raises a specific, deep-linked alert (distinct from the `ACCESS_FINE_LOCATION`
 grant alert) on a genuine drop or an already-off-at-start.
 
-### R4 — [Open, LOW] `tripWakeLock` is never re-verified during an active trip
+### R4 — [Mitigated] `tripWakeLock` is never re-verified during an active trip
 
-Acquired once on the `TRIP_ACTIVE` state-entry edge, never checked
-(`isHeld()`) again until the trip ends or a 90-minute safety timeout
-expires. Unlike every other monitored resource (permissions, recording,
-notification listener), there's no periodic health check for this one.
+Was acquired once on the `TRIP_ACTIVE` state-entry edge, never checked
+(`isHeld()`) again until the trip ended or a 90-minute safety timeout
+expired. Unlike every other monitored resource (permissions, recording,
+notification listener), there was no periodic health check for this one.
 An early release (a documented real edge case on some OEM skins) would
-silently degrade GPS tracking with no detection. Found by round 9, not
-yet fixed.
+silently degrade GPS tracking with no detection. Found by round 9.
+
+**Fixed:** `docs/trip_wakelock_reverify/PRD.md` -- `verifyTripWakeLock()`
+now runs on the same heartbeat cadence as every other periodic check in
+`TripForegroundService`, and transparently re-acquires the wake lock (a
+safe, idempotent self-heal) if it's found unheld during an active trip,
+with a diagnostic log entry so field logs show exactly when/how often
+this fires.
 
 ### R5 — [Mitigated] Battery-optimization-exemption loss is tracked but never alerted
 

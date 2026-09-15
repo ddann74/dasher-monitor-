@@ -1765,6 +1765,33 @@ public class TripForegroundService extends Service {
         tripWakeLock = null;
     }
 
+    // docs/trip_wakelock_reverify/PRD.md -- CONFIRMED REAL GAP, fixed here
+    // (monitoring-uptime-guarantee premortem R4): acquireTripWakeLock() was
+    // only ever called on the TRIP_ACTIVE state-ENTRY edge (handleGpsResult,
+    // on a tripState transition), never re-checked again for the rest of
+    // that trip. Unlike every other monitored resource in this file
+    // (permissions, screen recording, notification listener), there was no
+    // periodic health check for this one -- an early release (a documented
+    // real edge case on some OEM skins that can drop a held PARTIAL_WAKE_LOCK
+    // under aggressive battery management) would silently degrade GPS
+    // tracking reliability during Doze for the rest of the trip, with
+    // nothing detecting or correcting it until the trip ended or the
+    // 90-minute safety timeout expired. Called from maybeLogHeartbeat on the
+    // same cadence as every other periodic check in this file --
+    // acquireTripWakeLock() itself already handles a non-null-but-unheld
+    // tripWakeLock correctly (its own isHeld() guard just falls through and
+    // creates a fresh WakeLock), so re-acquiring here is a simple, safe,
+    // idempotent self-heal -- the same "detected and auto-corrected" branch
+    // of the invariant in docs/monitoring_uptime_guarantee/PRD.md's own
+    // property 1 already used for GPS/engine recovery elsewhere.
+    private void verifyTripWakeLock() {
+        if ("TRIP_ACTIVE".equals(lastKnownTripState) && tripWakeLock != null && !tripWakeLock.isHeld()) {
+            logDiagnostic("WAKELOCK",
+                    "Was unexpectedly not held during an active trip (early release) -- re-acquiring");
+            acquireTripWakeLock();
+        }
+    }
+
     /**
      * Reversed by explicit driver request (2026-09-14, docs/
      * zero_interaction_delivery_completion/PRD.md): this used to force
@@ -2018,6 +2045,7 @@ public class TripForegroundService extends Service {
         logDiagnostic("HEARTBEAT", "Still tracking (mode=" + lastKnownMode + ", trip=" + lastKnownTripState
                 + ", " + getBatteryAndDozeInfo() + ")");
         checkAndLogPermissions(false);
+        verifyTripWakeLock();
         // docs/heartbeat_engine_health_gate/PRD.md -- see
         // consecutiveEngineFailures's own doc. checkAndLogPermissions
         // above is intentionally NOT gated the same way -- permission
