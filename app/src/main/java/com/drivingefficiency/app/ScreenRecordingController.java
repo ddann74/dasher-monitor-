@@ -670,8 +670,15 @@ class ScreenRecordingController {
      * a genuinely broken file fails setDataSource() or extractMetadata()
      * here the same way a real video player would fail to open it.
      * Returns false for a missing/empty file, one MediaMetadataRetriever
-     * can't open at all, or one that opens but reports no duration
-     * (present but content-free).
+     * can't open at all, one that opens but reports no duration (present
+     * but content-free), or one that plays back as uniformly BLANK
+     * content (see hasVisibleContent()'s own doc -- docs/
+     * screen_recording_blank_content_check/PRD.md, round-8 scouting
+     * finding: a file opening cleanly with a real duration is NOT the
+     * same claim as "the footage shows anything," and this method's own
+     * name/contract is exactly what every caller trusts to mean "verified
+     * usable," so the check belongs here, not as a separate signal
+     * callers would have to remember to also consult).
      */
     static boolean isPlayable(File file) {
         if (file == null || !file.exists() || file.length() == 0) {
@@ -682,7 +689,10 @@ class ScreenRecordingController {
             retriever.setDataSource(file.getAbsolutePath());
             String duration = retriever.extractMetadata(
                     android.media.MediaMetadataRetriever.METADATA_KEY_DURATION);
-            return duration != null && Long.parseLong(duration) > 0;
+            if (duration == null || Long.parseLong(duration) <= 0) {
+                return false;
+            }
+            return hasVisibleContent(retriever, Long.parseLong(duration));
         } catch (Exception e) { // exactly the class of corruption hasMoovBox() alone would miss
             android.util.Log.w("ScreenRecordingController", "isPlayable() -- " + file.getName()
                     + " failed to open: " + e.getClass().getSimpleName() + ": " + e.getMessage());
@@ -698,6 +708,90 @@ class ScreenRecordingController {
                 retriever.release();
             } catch (java.io.IOException | RuntimeException ignored) {
             }
+        }
+    }
+
+    // Out of 255 per RGB channel. Real video compression introduces tiny
+    // noise even in a genuinely solid-color source frame -- this needs to
+    // be loose enough that a truly blank frame's compression artifacts
+    // don't read as "real content," while still tight enough that any
+    // frame with actual on-screen content (text, UI chrome, a map) --
+    // which varies far more than compression noise alone ever would --
+    // is correctly detected as non-blank. Not independently derived; a
+    // judgment call, same honesty status as this class's other tuned
+    // constants (see e.g. PLACES_LOCATION_BIAS_RADIUS_METERS elsewhere in
+    // this codebase for the same pattern).
+    private static final int BLANK_FRAME_CHANNEL_TOLERANCE = 10;
+
+    // How many points to sample across the frame, per axis (so up to
+    // BLANK_SAMPLE_GRID * BLANK_SAMPLE_GRID pixel comparisons) -- coarse
+    // enough to stay fast on a full-resolution decoded frame, fine enough
+    // that real content (which isn't uniform) is virtually certain to
+    // differ from a flat color somewhere in the grid.
+    private static final int BLANK_SAMPLE_GRID = 12;
+
+    /**
+     * docs/screen_recording_blank_content_check/PRD.md -- CONFIRMED REAL
+     * GAP, closed here: this app's screen recording captures via
+     * MediaProjection (see the class doc + createVirtualDisplay() call
+     * site). Android's well-documented FLAG_SECURE window behavior makes
+     * MediaProjection render that window's content as solid BLACK on the
+     * virtual display -- MediaRecorder still writes a perfectly valid,
+     * correctly-timed MP4 of that black frame stream, and the duration/
+     * moov-box checks above would report it fully playable. If the real
+     * Dasher app (or any screen this records) ever sets FLAG_SECURE on a
+     * relevant screen, every recording from that screen would silently
+     * verify as "playable" while being entirely useless as delivery
+     * evidence -- exactly the false-positive "verification that can be
+     * fooled" this closes.
+     *
+     * Samples a frame from the MIDDLE of the clip (not time 0 -- a real,
+     * genuine recording's very first frame can legitimately still be
+     * blank/black for an instant while the virtual display's surface
+     * finishes its first real composite, which is not itself evidence of
+     * a problem) and checks a coarse grid of pixels for any real
+     * variation. A frame that can't be decoded at all is treated as NOT
+     * visible content (conservative -- "unknown" is not "verified good").
+     */
+    private static boolean hasVisibleContent(android.media.MediaMetadataRetriever retriever, long durationMs) {
+        long sampleTimeUs = (durationMs * 1000L) / 2;
+        android.graphics.Bitmap frame;
+        try {
+            frame = retriever.getFrameAtTime(sampleTimeUs,
+                    android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+        } catch (Exception e) {
+            return false; // treat "couldn't decode a frame" as unverified, not a pass
+        }
+        if (frame == null) {
+            return false;
+        }
+        try {
+            int width = frame.getWidth();
+            int height = frame.getHeight();
+            if (width <= 1 || height <= 1) {
+                return false;
+            }
+            int cols = Math.min(BLANK_SAMPLE_GRID, width);
+            int rows = Math.min(BLANK_SAMPLE_GRID, height);
+            int reference = frame.getPixel(0, 0);
+            for (int row = 0; row < rows; row++) {
+                int y = (row * (height - 1)) / Math.max(1, rows - 1);
+                for (int col = 0; col < cols; col++) {
+                    int x = (col * (width - 1)) / Math.max(1, cols - 1);
+                    int pixel = frame.getPixel(x, y);
+                    if (Math.abs(android.graphics.Color.red(pixel) - android.graphics.Color.red(reference))
+                                > BLANK_FRAME_CHANNEL_TOLERANCE
+                            || Math.abs(android.graphics.Color.green(pixel) - android.graphics.Color.green(reference))
+                                > BLANK_FRAME_CHANNEL_TOLERANCE
+                            || Math.abs(android.graphics.Color.blue(pixel) - android.graphics.Color.blue(reference))
+                                > BLANK_FRAME_CHANNEL_TOLERANCE) {
+                        return true; // found real variation -- genuinely not blank
+                    }
+                }
+            }
+            return false; // every sampled pixel matched the reference within tolerance -- blank
+        } finally {
+            frame.recycle();
         }
     }
 
