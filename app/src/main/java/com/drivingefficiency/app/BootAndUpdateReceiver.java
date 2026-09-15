@@ -38,6 +38,13 @@ import com.chaquo.python.PyObject;
 public class BootAndUpdateReceiver extends BroadcastReceiver {
 
     private static final String RESUME_CHANNEL_ID = "monitoring_auto_resumed";
+    // docs/boot_resume_circuit_breaker_and_false_notification/PRD.md --
+    // same value and reasoning as DasherAccessibilityService's own
+    // MONITORING_VERIFY_DELAY_MS: long enough for TripForegroundService's
+    // onCreate() to either genuinely finish starting or hit and handle
+    // its own SecurityException, short enough to stay well inside a
+    // BroadcastReceiver's goAsync() window.
+    private static final long MONITORING_VERIFY_DELAY_MS = 5 * 1000;
 
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -87,12 +94,66 @@ public class BootAndUpdateReceiver extends BroadcastReceiver {
         // re-arm pattern already established elsewhere in this
         // codebase, e.g. watchdogRearmRunnable).
         MonitoringWatchdogReceiver.scheduleWatchdog(context);
+
+        // docs/boot_resume_circuit_breaker_and_false_notification/PRD.md --
+        // CONFIRMED REAL GAP, fixed here (round-13 scouting finding #1):
+        // every OTHER background auto-start path
+        // (DrivingDetectionReceiver, DasherAccessibilityService's 3 call
+        // sites) already checks MonitoringWatchdogReceiver's restart
+        // circuit breaker before attempting a restart -- this one never
+        // did, despite docs/circuit_breaker_other_autostart_paths/PRD.md
+        // claiming the gap was closed for every auto-start path. A
+        // device with a persistent restart failure (e.g. the Android 14
+        // FGS-location SecurityException) would keep re-attempting the
+        // identical doomed start on every single reboot/app-update,
+        // exactly the repeated-doomed-retry behavior the breaker exists
+        // to stop. A quiet log line, not a duplicate alert -- the
+        // watchdog's own escalated alert already told the driver this
+        // needs a manual app open.
+        if (MonitoringWatchdogReceiver.isRestartCircuitBreakerTripped(context)) {
+            logToEngine(context, "SYSTEM", message + " -- skipping auto-resume, the restart circuit "
+                    + "breaker has already tripped from repeated failures; open the app manually to resume");
+            return;
+        }
         try {
             Intent startIntent = new Intent(context, TripForegroundService.class);
             startIntent.setAction(TripForegroundService.ACTION_START_TRACKING);
             context.startForegroundService(startIntent);
-            logToEngine(context, "SYSTEM", message + " -- monitoring was active before this, auto-resumed");
-            notifyResumed(context);
+            logToEngine(context, "SYSTEM", message + " -- monitoring was active before this, auto-resume dispatched");
+            // docs/boot_resume_circuit_breaker_and_false_notification/PRD.md
+            // -- CONFIRMED REAL GAP, fixed here (round-13 scouting finding
+            // #1): startForegroundService() dispatches ASYNCHRONOUSLY and
+            // does not throw for a failure inside TripForegroundService.
+            // onCreate() itself (e.g. that same SecurityException) -- it
+            // only rolls the start back, records the failure, and raises
+            // its own raiseMonitoringNotActiveAlert AFTER this call
+            // already returned successfully. Calling notifyResumed()
+            // unconditionally right here used to post a false "Dasher
+            // Monitor resumed" notification alongside that genuine
+            // failure alert -- a driver who trusts the reassuring one
+            // over the technical one is left thinking monitoring is
+            // running when it silently is not. goAsync() + a short
+            // delayed re-check (the exact same pattern already used by
+            // DasherAccessibilityService.attemptAutoStart's own
+            // monitoringVerifyHandler) confirms genuine success before
+            // posting the reassuring notification -- no duplicate alert
+            // on failure, since TripForegroundService's own onCreate()
+            // catch block already raises one.
+            PendingResult pendingResult = goAsync();
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                try {
+                    if (TripForegroundService.isRunning) {
+                        notifyResumed(context);
+                    } else {
+                        logToEngine(context, "ERROR", "Auto-resume after " + message + " appeared to "
+                                + "dispatch but monitoring still isn't running "
+                                + (MONITORING_VERIFY_DELAY_MS / 1000) + "s later -- not showing the "
+                                + "\"resumed\" notification");
+                    }
+                } finally {
+                    pendingResult.finish();
+                }
+            }, MONITORING_VERIFY_DELAY_MS);
         } catch (RuntimeException e) {
             logToEngine(context, "ERROR", "Auto-resume after " + message + " failed: "
                     + android.util.Log.getStackTraceString(e));

@@ -1,14 +1,13 @@
 # Premortem: Monitoring Uptime Guarantee
 
 Status: LIVING RISK REGISTER (created 2026-09-15, last updated
-2026-09-15, Ralph-loop iteration 7: R1-R7 all closed -- every item in
-this register now reads Mitigated or Ruled out). Companion to
-`docs/monitoring_uptime_guarantee/PRD.md`. Per that PRD's own acceptance
-criteria (§4), this register being fully closed is necessary but not
-sufficient -- a FRESH scouting pass, run after all current Open items
-were closed, still needs to find nothing new before the invariant is
-considered "held" rather than just "improved." See that PRD for why this
-is inherently a moving target, not a one-time finish line.
+2026-09-15). R1-R7 closed the loop's originally-known Open items. The
+required verification pass (round 13, per the parent PRD's §4
+acceptance criteria) then found 3 new items (R20-R22), now being closed
+in the same Ralph-loop rhythm. Companion to
+`docs/monitoring_uptime_guarantee/PRD.md`. Per that PRD, this is
+inherently a moving target, not a one-time finish line -- a future
+scouting pass can always find something new.
 Updated by every Ralph-loop iteration that closes or narrows a risk --
 see that PRD's own acceptance criteria for when this register is
 considered "done."
@@ -237,6 +236,62 @@ immediately, and `foregroundCheckRunnable` re-runs it every 20s
 independent of accessibility change events, correcting mode in BOTH
 directions. Already closes the same staleness shape rounds 8-11
 hardened for other flags. Closed without a code change -- already solid.
+
+### R20 — [Mitigated] `BootAndUpdateReceiver`'s auto-resume bypassed the restart circuit breaker, and could post a false "resumed" notification
+
+Found by round 13's verification scouting pass (run after R1-R7 closed,
+per this PRD's own acceptance criteria). Every other background
+auto-start path already checked the restart circuit breaker before
+attempting a restart; `BootAndUpdateReceiver`'s own reboot/update
+auto-resume was the one left out, and would keep re-attempting an
+identical doomed restart on every reboot. Its `notifyResumed()` call was
+also unconditional right after `startForegroundService()`'s async
+dispatch returned without throwing -- which does not mean the restart
+actually succeeded -- so a genuine downstream failure could produce both
+the correct failure alert AND a false "resumed" notification.
+
+**Fixed:** `docs/boot_resume_circuit_breaker_and_false_notification/PRD.md`
+-- added the same circuit-breaker check every other path already has,
+and replaced the unconditional notification with a `goAsync()` + short
+delayed re-check (mirrors `DasherAccessibilityService`'s own established
+pattern) that only posts "resumed" once genuinely confirmed.
+
+### R21 — [Open, MEDIUM] `KEY_ENGINE_FAILURE_ACTIVE` (this session's own R7 flag) could stay stuck `true` across a session boundary
+
+Found by round 13's verification pass, auditing R7's own fix for
+regressions. The flag is only ever reset by a genuine heartbeat write,
+which requires a GPS callback plus a full heartbeat interval to have
+already elapsed. A session ending while the engine was genuinely failing
+leaves the flag `true` in `SharedPreferences`; the next session inherits
+that stale value, and if IT then hits a genuine GPS stall before its own
+first successful heartbeat, the watchdog would wrongly attribute the new
+stall to the old, already-resolved failure and skip the real
+`ACTION_REACQUIRE_LOCATION` self-heal. Bounded impact -- the primary
+staleness alert still fires either way, so the driver is never left with
+zero signal; only the auto-recovery action R7 exists to gate correctly
+would be skipped for the wrong reason. Not yet fixed.
+
+**Fix direction:** reset the flag to `false` at session start, the same
+point `consecutiveEngineFailures` itself (the in-memory trigger) already
+implicitly resets to 0 via a fresh `TripForegroundService` instance.
+
+### R22 — [Open, LOW-MEDIUM] Notification ID 9199 sits unreserved inside the hash-auto-assigned 9100-9199 band
+
+Found by round 13's verification pass. `raiseDasherPackageNotFoundAlert`
+has used a hardcoded `9199` since `docs/dasher_package_verification/PRD.md`
+(2026-09-14) -- predating round 11's notification-ID collision audit,
+which documented 9100-9199 as belonging entirely to
+`raisePermissionRevokedAlert`'s hash-based scheme without accounting for
+this prior claim. No permission name currently hashes to 9199 (verified
+by direct computation against all 8 in-use `permissionName` strings), so
+there is no ACTIVE collision today, but nothing prevents a future or
+renamed permission from silently colliding with it. Not yet fixed.
+
+**Fix direction:** move `raiseDasherPackageNotFoundAlert` off 9199 to a
+genuinely free, disjoint ID, and update
+`docs/notification_id_collision_audit/PRD.md`'s own namespace table to
+correctly exclude the ID it occupies from the hash-auto-assigned range's
+effectively-available set.
 
 ## How this register is used
 
