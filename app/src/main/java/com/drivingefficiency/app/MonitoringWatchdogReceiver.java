@@ -81,6 +81,65 @@ public class MonitoringWatchdogReceiver extends BroadcastReceiver {
     private static final String ALERT_CHANNEL_ID = "monitoring_watchdog_alert";
     private static final int WATCHDOG_REQUEST_CODE = 5001;
 
+    // docs/watchdog_restart_circuit_breaker/PRD.md -- CONFIRMED REAL GAP,
+    // fixed here (round-9 scouting finding #1): TripForegroundService.
+    // onCreate()'s startForegroundLocationOnly() call can throw
+    // SecurityException (a documented, real Android 14 FGS-location
+    // eligibility rejection this codebase's own comment already says has
+    // "no known way to make this specific auto-start path itself
+    // Android-14-eligible without a user tap" -- i.e. genuinely
+    // un-fixable from code). That failure path tears the service back
+    // down WITHOUT ever setting isRunning=true or clearing
+    // intendedActive, so the NEXT watchdog cycle sees the exact same
+    // staleness and attempts the exact same doomed restart again --
+    // forever, every WATCHDOG_INTERVAL_*_MS, with no counter, no
+    // backoff, and identical alert text each time. This counter (durable
+    // across process death via SharedPreferences, same file as the
+    // heartbeat/intended-active state) tracks consecutive restart
+    // failures so onReceive() below can recognize "this has already
+    // failed repeatedly" and stop silently re-attempting a restart
+    // that's proven futile, instead raising ONE clearly different,
+    // escalated alert that tells the driver this needs a manual open of
+    // the app (which will succeed, since a foreground user-initiated
+    // start doesn't hit the same background-eligibility restriction) --
+    // rather than an indistinguishable repeat of the same generic
+    // message with a silent battery-draining spin-up/teardown loop
+    // behind it.
+    private static final String KEY_CONSECUTIVE_RESTART_FAILURES = "consecutive_restart_failures";
+    private static final int RESTART_CIRCUIT_BREAKER_THRESHOLD = 3;
+    private static final int ESCALATED_ALERT_NOTIFICATION_ID = 9002;
+
+    /**
+     * Called from TripForegroundService.onCreate()'s own SecurityException
+     * catch block -- the exact point a background auto-start attempt is
+     * confirmed to have failed. Returns the new consecutive-failure count
+     * so the caller can log it.
+     */
+    public static int recordRestartFailure(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        int count = prefs.getInt(KEY_CONSECUTIVE_RESTART_FAILURES, 0) + 1;
+        prefs.edit().putInt(KEY_CONSECUTIVE_RESTART_FAILURES, count).apply();
+        return count;
+    }
+
+    /**
+     * Called from TripForegroundService.startTracking() -- reaching that
+     * method at all means onCreate()'s own foreground-service start just
+     * succeeded (a genuine recovery, not merely an attempt), so any prior
+     * run of failures is no longer relevant.
+     */
+    public static void recordRestartSuccess(Context context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putInt(KEY_CONSECUTIVE_RESTART_FAILURES, 0)
+                .apply();
+    }
+
+    private static int getConsecutiveRestartFailures(Context context) {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getInt(KEY_CONSECUTIVE_RESTART_FAILURES, 0);
+    }
+
     public static void markIntendedActive(Context context, boolean active) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
@@ -246,10 +305,29 @@ public class MonitoringWatchdogReceiver extends BroadcastReceiver {
         // already running, so this can't cause a disruptive restart of
         // something that's actually fine.
         if (!TripForegroundService.isRunning) {
-            Intent restartIntent = new Intent(context, TripForegroundService.class);
-            restartIntent.setAction(TripForegroundService.ACTION_START_TRACKING);
-            context.startForegroundService(restartIntent);
-            logToEngine(context, "WATCHDOG", "Attempted automatic restart of monitoring after staleness detected");
+            int consecutiveFailures = getConsecutiveRestartFailures(context);
+            if (consecutiveFailures >= RESTART_CIRCUIT_BREAKER_THRESHOLD) {
+                // docs/watchdog_restart_circuit_breaker/PRD.md -- the last
+                // several attempts through this exact code path all failed
+                // the same way (see recordRestartFailure's own doc) --
+                // Android's own platform restriction means retrying it
+                // again right now is proven futile, not just unlucky.
+                // Stop silently re-attempting (each one is a real,
+                // wasted process spin-up/teardown) and tell the driver
+                // plainly instead -- a foreground, user-initiated
+                // "Start Monitoring" tap does not hit the same
+                // background-eligibility restriction, so opening the app
+                // is a real fix, not a shrug.
+                logToEngine(context, "WATCHDOG", "Circuit breaker: " + consecutiveFailures
+                        + " consecutive auto-restart failures -- skipping further automatic attempts, "
+                        + "escalated alert raised instead");
+                raiseEscalatedAlert(context, consecutiveFailures);
+            } else {
+                Intent restartIntent = new Intent(context, TripForegroundService.class);
+                restartIntent.setAction(TripForegroundService.ACTION_START_TRACKING);
+                context.startForegroundService(restartIntent);
+                logToEngine(context, "WATCHDOG", "Attempted automatic restart of monitoring after staleness detected");
+            }
         }
     }
 
@@ -282,5 +360,45 @@ public class MonitoringWatchdogReceiver extends BroadcastReceiver {
                 .setAutoCancel(true)
                 .build();
         manager.notify(ALERT_NOTIFICATION_ID, notification);
+    }
+
+    // docs/watchdog_restart_circuit_breaker/PRD.md -- distinct channel/id/
+    // text from raiseAlert() above, deliberately: a driver seeing this
+    // needs to understand "the app already tried and failed repeatedly to
+    // fix this itself, on its own" -- a materially different, more urgent
+    // situation than the first alert's "no activity detected yet," not
+    // just a repeat of the same message. Deep-links to MainActivity (a
+    // real, foreground, user-initiated open) since that's the one action
+    // that actually resolves the underlying Android 14 background-start
+    // restriction this circuit breaker exists for -- see
+    // recordRestartFailure's own doc.
+    private void raiseEscalatedAlert(Context context, int consecutiveFailures) {
+        NotificationManager manager = context.getSystemService(NotificationManager.class);
+        if (manager == null) {
+            return;
+        }
+        String channelId = "monitoring_watchdog_escalated_alert";
+        NotificationChannelHelper.ensureChannel(manager, channelId, "Monitoring Auto-Restart Failed Alerts",
+                NotificationManager.IMPORTANCE_HIGH,
+                "Alerts when Dasher Monitor has repeatedly failed to auto-restart and needs to be opened manually",
+                true);
+
+        Intent tapIntent = new Intent(context, MainActivity.class);
+        tapIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent tapPendingIntent = PendingIntent.getActivity(context, ESCALATED_ALERT_NOTIFICATION_ID, tapIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT
+                        | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0));
+
+        Notification notification = new Notification.Builder(context, channelId)
+                .setContentTitle("\u26A0 Monitoring couldn't restart itself")
+                .setContentText("Auto-restart failed " + consecutiveFailures + "x in a row -- tap to open "
+                        + "Dasher Monitor and start it manually.")
+                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .setPriority(Notification.PRIORITY_HIGH)
+                .setDefaults(Notification.DEFAULT_SOUND | Notification.DEFAULT_VIBRATE)
+                .setAutoCancel(true)
+                .setContentIntent(tapPendingIntent)
+                .build();
+        manager.notify(ESCALATED_ALERT_NOTIFICATION_ID, notification);
     }
 }

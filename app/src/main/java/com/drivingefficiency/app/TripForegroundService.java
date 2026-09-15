@@ -276,6 +276,14 @@ public class TripForegroundService extends Service {
                     + "background auto-start likely lacked an Android 14 FGS-location "
                     + "eligibility exemption: " + android.util.Log.getStackTraceString(e));
             raiseMonitoringNotActiveAlert(this, "foreground service start rejected by the OS");
+            // docs/watchdog_restart_circuit_breaker/PRD.md -- see
+            // MonitoringWatchdogReceiver.recordRestartFailure's own doc:
+            // this is the exact point a restart attempt (automatic or
+            // manual) is confirmed to have failed, so the watchdog can
+            // recognize a repeating, futile retry loop instead of
+            // silently re-attempting the same doomed restart forever.
+            int consecutiveFailures = MonitoringWatchdogReceiver.recordRestartFailure(this);
+            logDiagnostic("ERROR", "Consecutive restart failures: " + consecutiveFailures);
             serviceExists = false;
             stopSelf();
             return;
@@ -527,6 +535,12 @@ public class TripForegroundService extends Service {
         refreshStatusDot();
         startLocationUpdates();
         MonitoringWatchdogReceiver.markIntendedActive(this, true);
+        // docs/watchdog_restart_circuit_breaker/PRD.md -- reaching this
+        // point means onCreate()'s own foreground-service start just
+        // succeeded (see its own SecurityException catch block) -- a
+        // genuine recovery, not merely an attempt, so any prior run of
+        // consecutive restart failures is no longer relevant.
+        MonitoringWatchdogReceiver.recordRestartSuccess(this);
         MonitoringWatchdogReceiver.scheduleWatchdog(this);
         // Dedicated, independent check specifically for accessibility --
         // the regular heartbeat is tied to GPS ticks, which slow down
