@@ -1257,6 +1257,26 @@ public class TripForegroundService extends Service {
 
     private static final String CONSENT_RECOVERY_CHANNEL_ID = "screen_recording_consent_recovery_channel";
     private static final int CONSENT_RECOVERY_NOTIFICATION_ID = 9210;
+    // docs/notification_id_collision_audit/PRD.md -- CONFIRMED REAL BUG,
+    // fixed here (round-11 scouting finding #2/#3): raiseRecordingVerificationFailedAlert
+    // used to post to a bare hardcoded 9200 -- the exact same id
+    // AppNotificationListenerService.AUTO_LAUNCH_NOTIFICATION_ID already
+    // uses, and AUTO_LAUNCH fires on nearly every offer detected, not
+    // some rare condition. Since Android notification IDs are scoped
+    // per-package (not per-channel), whichever posted second silently
+    // replaced the other in the shade. Given its own dedicated id here,
+    // clear of every other id in this file's own notification-id audit
+    // (see RATE_DELIVERY_NOTIFICATION_ID_BASE's own doc for the rest of
+    // that audit).
+    private static final int RECORDING_VERIFICATION_FAILED_NOTIFICATION_ID = 9220;
+    // See notifyRateThisDelivery's own call site -- a dedicated, wide
+    // reserved block (9600-10599) for per-trip delivery-rating
+    // notifications, far from every other id in this file (9001-9002,
+    // 9100-9199, 9200, 9210, 9220, 9300, 9400, 9500) so it can never
+    // collide with any of them as trip_id keeps growing across the
+    // install's lifetime -- see its own doc for the bug this replaces.
+    private static final int RATE_DELIVERY_NOTIFICATION_ID_BASE = 9600;
+    private static final int RATE_DELIVERY_ID_RANGE = 1000;
 
     /**
      * docs/screen_recording/PRD.md §23 -- driver-requested full
@@ -1445,7 +1465,7 @@ public class TripForegroundService extends Service {
                     .setDefaults(Notification.DEFAULT_SOUND)
                     .setAutoCancel(true)
                     .build();
-            manager.notify(9200, notification);
+            manager.notify(RECORDING_VERIFICATION_FAILED_NOTIFICATION_ID, notification);
         }
         HapticFeedback.vibrateRecordingVerificationFailed(this);
     }
@@ -1746,7 +1766,24 @@ public class TripForegroundService extends Service {
                     .setContentIntent(pendingIntent)
                     .setAutoCancel(true)
                     .build();
-            manager.notify(9200 + tripId, notification);
+            // docs/notification_id_collision_audit/PRD.md -- CONFIRMED
+            // REAL BUG, fixed here (round-11 scouting finding #2): this
+            // used to be a bare "9200 + tripId" -- tripId is the SQLite
+            // autoincrement trips.id, which only grows across the whole
+            // install's lifetime, never resets. As it passed 10, 100,
+            // 200, 300 completed trips, that sum landed EXACTLY on
+            // CONSENT_RECOVERY_NOTIFICATION_ID (9210),
+            // BootAndUpdateReceiver's resume notification (9300),
+            // raiseMonitoringNotActiveAlert (9400), and even
+            // raiseEngineFailureAlert (9500) -- silently wiping whichever
+            // of those still-relevant alerts happened to be showing.
+            // RATE_DELIVERY_NOTIFICATION_ID_BASE's own doc explains the
+            // reserved block this now maps into instead -- still unique
+            // per trip within any realistic single shift (the modulo
+            // only prevents wraparound into another reserved range as
+            // trip_id keeps growing over the install's full lifetime),
+            // but never collides with any fixed alert id again.
+            manager.notify(RATE_DELIVERY_NOTIFICATION_ID_BASE + (tripId % RATE_DELIVERY_ID_RANGE), notification);
             logDiagnostic("BUTTON", "Posted ordinary (non-intrusive) rate-delivery notification for trip " + tripId);
         } catch (JSONException | RuntimeException e) {
             logDiagnostic("ERROR", "notifyRateThisDelivery exception: " + android.util.Log.getStackTraceString(e));
