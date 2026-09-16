@@ -639,11 +639,9 @@ public class TripForegroundService extends Service {
         // docs/watchdog_engine_failure_flag_session_reset/PRD.md --
         // CONFIRMED REAL GAP, fixed here (monitoring-uptime-guarantee
         // premortem R21, round-13 verification finding #2, auditing R7's
-        // own fix for regressions): consecutiveEngineFailures itself (the
-        // in-memory trigger for KEY_ENGINE_FAILURE_ACTIVE) already
-        // implicitly resets to 0 for every fresh TripForegroundService
-        // instance, but the durable SharedPreferences flag it drives does
-        // NOT -- it's only ever written from writeWatchdogHeartbeatIfEngineHealthy,
+        // own fix for regressions): the durable SharedPreferences flag
+        // KEY_ENGINE_FAILURE_ACTIVE (driven by consecutiveEngineFailures)
+        // is only ever written from writeWatchdogHeartbeatIfEngineHealthy,
         // which requires a GPS callback plus a full heartbeat interval to
         // have already elapsed. A session that ended while the engine was
         // genuinely failing left the flag stuck true on disk; the NEXT
@@ -658,6 +656,36 @@ public class TripForegroundService extends Service {
                 .edit()
                 .putBoolean(MonitoringWatchdogReceiver.KEY_ENGINE_FAILURE_ACTIVE, false)
                 .apply();
+        // docs/engine_failure_counters_restart_reset/PRD.md -- CONFIRMED
+        // REAL GAP, fixed here (monitoring-uptime-guarantee premortem
+        // R23, round-14 scouting finding): the R21 fix just above
+        // WRONGLY assumed consecutiveEngineFailures/engineFailureAlertRaised
+        // "already implicitly reset to 0 for every fresh
+        // TripForegroundService instance" -- true only when the OS
+        // actually kills and recreates the process, but this method (and
+        // the whole class's own doc, see stopTracking()) is deliberately
+        // designed to KEEP the same instance alive across a stop->restart
+        // cycle, and that's the MORE common restart path in real usage --
+        // DasherAccessibilityService's routine Dash-Paused/Dash-Resumed
+        // auto-pause detection, and the manual Stop/Start toggle, both
+        // fire ACTION_STOP_TRACKING then ACTION_START_TRACKING on this
+        // exact same live instance every time. Without this reset, if the
+        // engine/DB problem that originally tripped the threshold was
+        // still happening after such a restart, engineFailureAlertRaised
+        // stayed latched true forever (it's only otherwise reset by a
+        // genuine SUCCESSFUL on_gps_update, see its own reset above in
+        // the location callback) -- silently downgrading the specific,
+        // edge-triggered "Delivery tracking error" alert (designed to
+        // fire once per failure streak, see raiseEngineFailureAlert's own
+        // doc) into a fires-once-per-process-lifetime signal for the rest
+        // of the shift. The generic watchdog staleness alert still covers
+        // the driver either way (KEY_ENGINE_FAILURE_ACTIVE correctly
+        // flips back true at the very next heartbeat check if the
+        // stale counter is still >= threshold), so this was never a
+        // silent-staleness violation -- only a silently degraded
+        // diagnostic signal.
+        consecutiveEngineFailures = 0;
+        engineFailureAlertRaised = false;
         MonitoringWatchdogReceiver.scheduleWatchdog(this);
         // Dedicated, independent check specifically for accessibility --
         // the regular heartbeat is tied to GPS ticks, which slow down

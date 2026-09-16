@@ -1,14 +1,13 @@
 # Premortem: Monitoring Uptime Guarantee
 
 Status: LIVING RISK REGISTER (created 2026-09-15, last updated
-2026-09-15). R1-R7 closed the loop's originally-known Open items. The
-required verification pass (round 13, per the parent PRD's §4
-acceptance criteria) then found 3 new items (R20-R22), now also closed
--- every item in this register currently reads Mitigated or Ruled out.
-Companion to `docs/monitoring_uptime_guarantee/PRD.md`. Per that PRD,
-this is inherently a moving target, not a one-time finish line -- a
-future scouting pass can always find something new, which is exactly
-what round 13 itself demonstrated.
+2026-09-16). R1-R7 closed the loop's originally-known Open items. Round
+13's required verification pass (per the parent PRD's §4 acceptance
+criteria) found 3 new items (R20-R22). Round 14's follow-up pass found
+one more (R23), auditing round 13's own R21 fix. All currently
+Mitigated or Ruled out. Companion to `docs/monitoring_uptime_guarantee/PRD.md`.
+Per that PRD, this is inherently a moving target, not a one-time finish
+line -- each round has found something new so far.
 Updated by every Ralph-loop iteration that closes or narrows a risk --
 see that PRD's own acceptance criteria for when this register is
 considered "done."
@@ -301,6 +300,32 @@ class of bug has occurred (rounds 10, 11, 13) -- that PRD's own
 follow-up suggestion (a shared, compile-time-enforced ID registry) is
 now worth genuinely considering rather than continuing to rely on manual
 audits alone.
+
+### R23 — [Mitigated] `consecutiveEngineFailures`/`engineFailureAlertRaised` never reset on a same-process restart, silently downgrading the specific engine-failure alert
+
+Found by round 14's scouting pass, auditing R21's own fix. R21 reset the
+durable `KEY_ENGINE_FAILURE_ACTIVE` flag at `startTracking()`'s success
+point on the assumption that `consecutiveEngineFailures` itself
+"already implicitly resets to 0 for every fresh `TripForegroundService`
+instance" -- true only for a process-death restart, but
+`TripForegroundService` deliberately keeps the same instance alive
+across a stop→restart cycle, and that same-instance path
+(`DasherAccessibilityService`'s routine Dash-Paused/Dash-Resumed
+auto-pause, and the manual Stop/Start toggle) is the *more common*
+restart path in real usage. If the engine/DB problem that originally
+tripped the 3-failure threshold was still happening after such a
+restart, `engineFailureAlertRaised` stayed latched `true` forever,
+silently downgrading the specific "Delivery tracking error" alert
+(designed to fire once per failure streak) into a
+fires-once-per-process-lifetime signal for the rest of the shift. Never
+a silent-staleness violation (the generic watchdog alert still covered
+the driver either way), but a real degradation of the specific
+diagnostic signal.
+
+**Fixed:** `docs/engine_failure_counters_restart_reset/PRD.md` -- both
+in-memory fields are now reset alongside `KEY_ENGINE_FAILURE_ACTIVE` at
+the same `startTracking()` success point, regardless of which restart
+path triggered it.
 
 ## How this register is used
 
