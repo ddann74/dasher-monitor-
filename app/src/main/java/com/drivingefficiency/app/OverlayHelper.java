@@ -93,7 +93,22 @@ public final class OverlayHelper {
      */
     public static void showMessage(Context context, String message, long durationMs, Drawable background,
                                     Runnable onTapAction) {
-        if (!hasPermission(context) || message == null || message.isEmpty()) {
+        if (message == null || message.isEmpty()) {
+            return;
+        }
+        // docs/overlay_permission_silent_dropped_logging/PRD.md --
+        // CONFIRMED REAL GAP, fixed here: this used to return silently
+        // when the overlay permission wasn't granted -- including every
+        // Smart Score badge and arrival-instruction call site -- with
+        // zero trace anywhere. A driver who never granted (or had OEM-
+        // revoked) "draw over other apps" would see nothing, with no way
+        // to tell from a diagnostic log whether the badge was ever even
+        // attempted. Logged distinctly from every other early-return
+        // above (a null/empty message is a normal, uninteresting
+        // no-call, not worth logging) since a missing permission is a
+        // real, driver-actionable condition.
+        if (!hasPermission(context)) {
+            logDroppedForMissingPermission(context, message);
             return;
         }
         Context appContext = context.getApplicationContext();
@@ -329,6 +344,28 @@ public final class OverlayHelper {
         // notices on its own.
         if (reminderHandler != null && reminderRunnable != null) {
             reminderHandler.removeCallbacks(reminderRunnable);
+        }
+    }
+
+    /**
+     * docs/overlay_permission_silent_dropped_logging/PRD.md -- OverlayHelper
+     * is a static, Context-free utility with no engine reference of its
+     * own, so this mirrors the same PythonBridge.getEngine +
+     * FallbackLogger-safety-net pattern every other class's logDiagnostic
+     * already uses, rather than routing through the app's real
+     * diagnostic log implicitly. message is truncated -- the full text
+     * isn't the point here, just confirming an overlay call happened and
+     * was dropped.
+     */
+    private static void logDroppedForMissingPermission(Context context, String message) {
+        String category = "OVERLAY";
+        String logMessage = "showMessage() dropped -- overlay permission not granted (message: \""
+                + (message.length() > 40 ? message.substring(0, 40) + "..." : message) + "\")";
+        try {
+            com.chaquo.python.PyObject engine = PythonBridge.getEngine(context);
+            engine.callAttr("log_diagnostic", category, logMessage);
+        } catch (RuntimeException e) { // covers PyException too (Chaquopy PyException extends RuntimeException)
+            FallbackLogger.log(context, category, logMessage);
         }
     }
 

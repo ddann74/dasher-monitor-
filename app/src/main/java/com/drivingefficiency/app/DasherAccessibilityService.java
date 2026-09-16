@@ -59,6 +59,11 @@ public class DasherAccessibilityService extends AccessibilityService {
     // updated without the other.
     private PyObject engine;
     private String lastOfferKey = null;
+    // docs/null_score_offer_logging/PRD.md -- dedup key for the
+    // null-smart_score diagnostic log below, so a genuinely stuck offer
+    // screen (payout/distance never parse) is logged ONCE, not on every
+    // single TYPE_WINDOW_CONTENT_CHANGED tick while it's showing.
+    private String lastNullScoreOfferLogged = null;
 
     // Remembers the most recently seen offer's details so a subsequent
     // Accept/Decline tap can be recorded against it.
@@ -1379,6 +1384,7 @@ public class DasherAccessibilityService extends AccessibilityService {
             if (!parsed.optBoolean("is_offer_screen", false)) {
                 OverlayHelper.clear(this);
                 lastOfferKey = null;
+                lastNullScoreOfferLogged = null;
                 // Timeout detection: the offer screen just disappeared,
                 // but lastSeenRestaurantName is still set -- meaning
                 // handleOfferResult saw and scored an offer, yet neither
@@ -1444,6 +1450,29 @@ public class DasherAccessibilityService extends AccessibilityService {
 
             JSONObject score = parsed.optJSONObject("smart_score");
             if (score == null) {
+                // docs/null_score_offer_logging/PRD.md -- CONFIRMED REAL
+                // GAP, fixed here: this used to return silently whenever
+                // parse_offer_screen recognized a genuine offer screen but
+                // couldn't extract enough to compute a score (payout
+                // and/or distance not found in the on-screen text) -- the
+                // Smart Score badge just never appeared for that offer,
+                // with nothing in the diagnostic log explaining why. Logged
+                // once per distinct offer (dedup'd via lastNullScoreOfferLogged,
+                // reset when the offer screen disappears), not on every
+                // TYPE_WINDOW_CONTENT_CHANGED tick while this same offer
+                // is still showing -- reports exactly which of payout/
+                // distance is missing, so this is directly diagnosable
+                // from a log instead of only inferable.
+                String restaurantName = parsed.optString("restaurant_name", "unknown");
+                if (!restaurantName.equals(lastNullScoreOfferLogged)) {
+                    lastNullScoreOfferLogged = restaurantName;
+                    boolean hasPayout = !parsed.isNull("payout");
+                    boolean hasDistance = !parsed.isNull("distance_km");
+                    logDiagnostic("OFFER", "Offer screen recognized (" + restaurantName
+                            + ") but no Smart Score computable -- payout"
+                            + (hasPayout ? " parsed" : " NOT parsed") + ", distance"
+                            + (hasDistance ? " parsed" : " NOT parsed"));
+                }
                 return; // Not enough data parsed yet to compute a score.
             }
 
