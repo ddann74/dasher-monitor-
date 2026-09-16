@@ -1850,10 +1850,31 @@ public class TripForegroundService extends Service {
     // idempotent self-heal -- the same "detected and auto-corrected" branch
     // of the invariant in docs/monitoring_uptime_guarantee/PRD.md's own
     // property 1 already used for GPS/engine recovery elsewhere.
+    //
+    // docs/trip_wakelock_reverify_null_guard/PRD.md -- CONFIRMED REAL GAP,
+    // fixed here (monitoring-uptime-guarantee premortem R4, reopened by
+    // round-15 scouting): the guard below originally required
+    // "tripWakeLock != null", narrower than what acquireTripWakeLock()
+    // above actually supports (it's explicitly null-safe -- its own guard
+    // just falls through and builds a fresh WakeLock from null). A routine
+    // Dash-Paused auto-pause stop calls releaseTripWakeLock() unconditionally
+    // (setting tripWakeLock = null) even when the trip deliberately stays
+    // TRIP_ACTIVE through the pause (force_end_trip's own
+    // allow_mid_delivery_end=false guard correctly refuses to truncate a
+    // DASHER trip with a pending dropoff stop). Since lastKnownTripState
+    // never actually transitions in that case (it was TRIP_ACTIVE before
+    // the pause and still is after), handleGpsResult's own acquire-on-
+    // transition logic never re-fires either -- so the old, narrower guard
+    // here could never self-heal this specific, routine restart path: it
+    // required tripWakeLock to be non-null, but non-null was exactly what
+    // this scenario could no longer guarantee. Widened to also catch the
+    // null case, matching what the method it calls has always safely
+    // supported.
     private void verifyTripWakeLock() {
-        if ("TRIP_ACTIVE".equals(lastKnownTripState) && tripWakeLock != null && !tripWakeLock.isHeld()) {
+        if ("TRIP_ACTIVE".equals(lastKnownTripState) && (tripWakeLock == null || !tripWakeLock.isHeld())) {
             logDiagnostic("WAKELOCK",
-                    "Was unexpectedly not held during an active trip (early release) -- re-acquiring");
+                    "Was unexpectedly not held during an active trip (early release or a same-process "
+                    + "restart that cleared it) -- re-acquiring");
             acquireTripWakeLock();
         }
     }

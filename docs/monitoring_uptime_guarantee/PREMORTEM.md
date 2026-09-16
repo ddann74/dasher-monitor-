@@ -3,11 +3,17 @@
 Status: LIVING RISK REGISTER (created 2026-09-15, last updated
 2026-09-16). R1-R7 closed the loop's originally-known Open items. Round
 13's required verification pass (per the parent PRD's §4 acceptance
-criteria) found 3 new items (R20-R22). Round 14's follow-up pass found
-one more (R23), auditing round 13's own R21 fix. All currently
-Mitigated or Ruled out. Companion to `docs/monitoring_uptime_guarantee/PRD.md`.
-Per that PRD, this is inherently a moving target, not a one-time finish
-line -- each round has found something new so far.
+criteria) found 3 new items (R20-R22). Round 14 found one more (R23),
+auditing round 13's own R21 fix. Round 15, hunting for the same pattern
+R21/R23 revealed (a same-process restart not re-establishing state a
+fresh process gets "for free"), found it again in a different subsystem
+-- reopening and re-fixing R4 (a wake-lock guard too narrow to self-heal
+after a routine auto-pause). All currently Mitigated or Ruled out.
+Companion to `docs/monitoring_uptime_guarantee/PRD.md`. Per that PRD,
+this is inherently a moving target, not a one-time finish line -- every
+round so far has found something new, and round 15 additionally showed
+a fixed item can be worth re-opening under a related pattern, not just
+auditing brand-new code.
 Updated by every Ralph-loop iteration that closes or narrows a risk --
 see that PRD's own acceptance criteria for when this register is
 considered "done."
@@ -93,7 +99,7 @@ on the same heartbeat cadence as every other critical permission, and
 raises a specific, deep-linked alert (distinct from the `ACCESS_FINE_LOCATION`
 grant alert) on a genuine drop or an already-off-at-start.
 
-### R4 — [Mitigated] `tripWakeLock` is never re-verified during an active trip
+### R4 — [Mitigated, re-fixed round 15] `tripWakeLock` is never re-verified during an active trip
 
 Was acquired once on the `TRIP_ACTIVE` state-entry edge, never checked
 (`isHeld()`) again until the trip ended or a 90-minute safety timeout
@@ -102,12 +108,27 @@ notification listener), there was no periodic health check for this one.
 An early release (a documented real edge case on some OEM skins) would
 silently degrade GPS tracking with no detection. Found by round 9.
 
-**Fixed:** `docs/trip_wakelock_reverify/PRD.md` -- `verifyTripWakeLock()`
-now runs on the same heartbeat cadence as every other periodic check in
-`TripForegroundService`, and transparently re-acquires the wake lock (a
-safe, idempotent self-heal) if it's found unheld during an active trip,
-with a diagnostic log entry so field logs show exactly when/how often
-this fires.
+**Fixed (round 9):** `docs/trip_wakelock_reverify/PRD.md` --
+`verifyTripWakeLock()` now runs on the same heartbeat cadence as every
+other periodic check in `TripForegroundService`, and transparently
+re-acquires the wake lock (a safe, idempotent self-heal) if it's found
+unheld during an active trip, with a diagnostic log entry so field logs
+show exactly when/how often this fires.
+
+**Reopened and re-fixed (round 15):** that fix's own guard required
+`tripWakeLock != null`, narrower than what `acquireTripWakeLock()`
+actually supports (it's explicitly null-safe). A routine Dash-Paused
+auto-pause stop calls `releaseTripWakeLock()` unconditionally (setting
+the field to `null`) even when the trip deliberately stays `TRIP_ACTIVE`
+through the pause (a DASHER trip with a pending dropoff, per
+`force_end_trip`'s own `allow_mid_delivery_end=false` guard) --
+`lastKnownTripState` never transitions in that case, so the normal
+acquire-on-transition path never re-fires either, permanently defeating
+the self-heal through this specific, routine restart path. Same
+architectural shape as R21/R23 (a same-process restart not
+re-establishing state a fresh process gets "for free"), in a different
+subsystem. **Fixed:** `docs/trip_wakelock_reverify_null_guard/PRD.md` --
+widened the guard to `tripWakeLock == null || !tripWakeLock.isHeld()`.
 
 ### R5 — [Mitigated] Battery-optimization-exemption loss is tracked but never alerted
 
