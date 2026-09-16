@@ -329,6 +329,23 @@ public class DasherAccessibilityService extends AccessibilityService {
         super.onServiceConnected();
         lastHeartbeatMs = System.currentTimeMillis(); // see its own doc -- first liveness signal this process instance
         engine = PythonBridge.getEngine(this);
+        // docs/accessibility_lifecycle_logging/PRD.md -- see
+        // lastAccessibilityConnectedMs/lastAccessibilityDisconnectedMs's
+        // own doc. Reports the gap since the last disconnect (if any) so
+        // a real diagnostic log directly shows reconnect cadence -- a
+        // burst of these seconds apart, repeated throughout an active
+        // dash, is the concrete signature of an OEM killing/restarting
+        // this service component rather than the driver genuinely
+        // toggling accessibility off and back on.
+        long nowMs = System.currentTimeMillis();
+        if (lastAccessibilityDisconnectedMs > 0) {
+            logDiagnostic("ACCESSIBILITY_LIFECYCLE", "onServiceConnected() -- reconnected "
+                    + ((nowMs - lastAccessibilityDisconnectedMs) / 1000)
+                    + "s after the previous disconnect");
+        } else {
+            logDiagnostic("ACCESSIBILITY_LIFECYCLE", "onServiceConnected() -- first connection this process");
+        }
+        lastAccessibilityConnectedMs = nowMs;
         checkCurrentForegroundWindow();
         resumeStoreWaitTimerIfPending();
         // Previously this only ran ONCE, at connect time -- confirmed
@@ -1256,6 +1273,18 @@ public class DasherAccessibilityService extends AccessibilityService {
      * accessibility service operates independently of monitoring state).
      */
     public static volatile boolean isDasherForeground = false;
+    // docs/accessibility_lifecycle_logging/PRD.md -- previously nothing
+    // logged this service's own connect/disconnect cadence at all, only
+    // TripForegroundService's onCreate() -- so a real diagnostic log had
+    // no way to confirm or rule out an aggressive OEM (ColorOS
+    // confirmed on real hardware, see OemBackgroundHelper) silently
+    // killing/restarting the accessibility service COMPONENT itself,
+    // independent of full process restarts. Static (mirrors
+    // isDasherForeground above) so the value survives across a fresh
+    // service instance being constructed for a new connection within the
+    // same process.
+    private static volatile long lastAccessibilityConnectedMs = 0;
+    private static volatile long lastAccessibilityDisconnectedMs = 0;
     // Honest approximation only, not a definitive process-alive check --
     // Android doesn't let one app query whether a DIFFERENT app's process
     // is currently alive in the background without a separate, heavier
@@ -1937,6 +1966,13 @@ public class DasherAccessibilityService extends AccessibilityService {
 
     @Override
     public void onInterrupt() {
+        // docs/accessibility_lifecycle_logging/PRD.md -- logged distinctly
+        // from onUnbind/onDestroy below (see their own doc for why this
+        // callback alone isn't a reliable unbind signal) -- still worth
+        // recording, since a burst of these correlating with the
+        // reconnect-gap logging above would itself be diagnostic evidence
+        // of an OEM's own interrupt-then-restart pattern.
+        logDiagnostic("ACCESSIBILITY_LIFECYCLE", "onInterrupt()");
         foregroundCheckHandler.removeCallbacks(foregroundCheckRunnable);
     }
 
@@ -1976,6 +2012,17 @@ public class DasherAccessibilityService extends AccessibilityService {
      */
     @Override
     public boolean onUnbind(Intent intent) {
+        // docs/accessibility_lifecycle_logging/PRD.md -- see
+        // lastAccessibilityConnectedMs/lastAccessibilityDisconnectedMs's
+        // own doc. Reports how long this connection lasted, so a real
+        // diagnostic log directly shows whether disconnects are genuine
+        // (the driver toggled accessibility off, or a real, occasional
+        // OS-level teardown) or suspiciously frequent (an OEM repeatedly
+        // killing this service every few seconds during an active dash).
+        long nowMs = System.currentTimeMillis();
+        logDiagnostic("ACCESSIBILITY_LIFECYCLE", "onUnbind() -- was connected for "
+                + ((nowMs - lastAccessibilityConnectedMs) / 1000) + "s");
+        lastAccessibilityDisconnectedMs = nowMs;
         foregroundCheckHandler.removeCallbacks(foregroundCheckRunnable);
         removeStoreWaitTimerCallbacks();
         return super.onUnbind(intent);
@@ -1983,6 +2030,23 @@ public class DasherAccessibilityService extends AccessibilityService {
 
     @Override
     public void onDestroy() {
+        // docs/accessibility_lifecycle_logging/PRD.md -- a second,
+        // independent record for whichever teardown path actually fires
+        // on a given OS/OEM (matches this method's own established
+        // "second safety net" reasoning above for the Handler-callback
+        // cleanup it already does) -- onUnbind and onDestroy firing only
+        // a second or two apart is the SAME real teardown event logged
+        // twice, not two separate ones; only update
+        // lastAccessibilityDisconnectedMs if onUnbind hasn't already
+        // logged this exact teardown, so a reconnect's "gap since last
+        // disconnect" isn't measured from whichever of the two fired
+        // last for no real reason.
+        long nowMs = System.currentTimeMillis();
+        logDiagnostic("ACCESSIBILITY_LIFECYCLE", "onDestroy() -- was connected for "
+                + ((nowMs - lastAccessibilityConnectedMs) / 1000) + "s");
+        if (lastAccessibilityDisconnectedMs < lastAccessibilityConnectedMs) {
+            lastAccessibilityDisconnectedMs = nowMs;
+        }
         foregroundCheckHandler.removeCallbacks(foregroundCheckRunnable);
         removeStoreWaitTimerCallbacks();
         super.onDestroy();
