@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
@@ -201,6 +202,71 @@ final class OemBackgroundHelper {
         fallback.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         context.startActivity(fallback);
         return false;
+    }
+
+    private static final String PREFS_NAME = "oem_background_helper_prefs";
+    private static final String KEY_GUIDANCE_LAST_SHOWN_MS = "guidance_last_shown_ms";
+    private static final String KEY_LAST_KILL_SYMPTOM_MS = "last_kill_symptom_ms";
+    // Confirmed via a real diagnostic log (2026-09-20): MainActivity's
+    // proactive nudge previously showed exactly once, ever, per install
+    // (a plain boolean flag) -- so a driver who dismissed it (or saw it
+    // before they understood what to do) never gets reminded again, even
+    // as the exact symptom this guidance addresses keeps recurring days
+    // later (8 separate screen-recording consent losses to a process
+    // restart across that log, still happening the same day as the
+    // driver's own report). This cooldown is how long to wait after the
+    // guidance was last SHOWN before re-showing it in response to a fresh
+    // symptom -- long enough that a driver who just saw it isn't nagged
+    // again minutes later for a restart that was likely already in
+    // flight when they dismissed it, short enough to actually remind them
+    // on a later shift.
+    private static final long RENUDGE_COOLDOWN_MS = 24 * 60 * 60 * 1000L;
+
+    /**
+     * Call from wherever a real, concrete symptom of an OEM background
+     * kill is detected -- currently just TripForegroundService's screen-
+     * recording consent-loss-to-process-restart path, the one piece of
+     * hard evidence this specific investigation had. A no-op on a device
+     * that isn't a known aggressive OEM in the first place, so this is
+     * always safe to call unconditionally from a detection site.
+     */
+    static void recordPossibleKillSymptom(Context context) {
+        if (!isKnownAggressiveOem()) {
+            return;
+        }
+        prefs(context).edit().putLong(KEY_LAST_KILL_SYMPTOM_MS, System.currentTimeMillis()).apply();
+    }
+
+    /**
+     * True if MainActivity's proactive guidance nudge should show right
+     * now: either it has never been shown at all on this install, or a
+     * real kill symptom has been recorded SINCE it was last shown and
+     * RENUDGE_COOLDOWN_MS has passed since then. Deliberately does not
+     * re-show on every single kill symptom -- a driver on a known-bad
+     * OEM could see several in one day, and re-nagging on every one of
+     * them would just get dismissed on reflex without being read.
+     */
+    static boolean shouldShowGuidance(Context context) {
+        if (!isKnownAggressiveOem()) {
+            return false;
+        }
+        SharedPreferences p = prefs(context);
+        long lastShown = p.getLong(KEY_GUIDANCE_LAST_SHOWN_MS, 0);
+        if (lastShown == 0) {
+            return true; // never shown on this install
+        }
+        long lastSymptom = p.getLong(KEY_LAST_KILL_SYMPTOM_MS, 0);
+        return lastSymptom > lastShown
+                && (System.currentTimeMillis() - lastShown) >= RENUDGE_COOLDOWN_MS;
+    }
+
+    /** Call immediately after actually showing the guidance dialog (see shouldShowGuidance). */
+    static void markGuidanceShown(Context context) {
+        prefs(context).edit().putLong(KEY_GUIDANCE_LAST_SHOWN_MS, System.currentTimeMillis()).apply();
+    }
+
+    private static SharedPreferences prefs(Context context) {
+        return context.getApplicationContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
     }
 
     /**

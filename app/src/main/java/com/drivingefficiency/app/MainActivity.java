@@ -219,16 +219,22 @@ public class MainActivity extends AppCompatActivity {
      * query API exists), and does not itself prevent an OS/OEM kill; it
      * only gets the existing, already-correct guidance in front of the
      * driver earlier.
+     *
+     * CONFIRMED REAL GAP, fixed here (real diagnostic log, 2026-09-20):
+     * this previously showed exactly once, ever, per install. A driver
+     * who dismissed it (or saw it before understanding what to do) never
+     * got reminded again, even as the exact symptom this guidance exists
+     * for kept recurring days later. See
+     * OemBackgroundHelper.shouldShowGuidance for the re-nudge condition --
+     * it fires again (at most once per RENUDGE_COOLDOWN_MS) only when a
+     * real kill symptom was recorded since it was last shown, not on
+     * every plain app open.
      */
     private void maybeShowOemAutostartNudge() {
-        if (!OemBackgroundHelper.isKnownAggressiveOem()) {
+        if (!OemBackgroundHelper.shouldShowGuidance(this)) {
             return;
         }
-        android.content.SharedPreferences prefs = getSharedPreferences("dasher_monitor_prefs", MODE_PRIVATE);
-        if (prefs.getBoolean("oem_autostart_nudge_shown", false)) {
-            return;
-        }
-        prefs.edit().putBoolean("oem_autostart_nudge_shown", true).apply();
+        OemBackgroundHelper.markGuidanceShown(this);
         OemBackgroundHelper.showAutostartGuidanceDialog(this);
     }
 

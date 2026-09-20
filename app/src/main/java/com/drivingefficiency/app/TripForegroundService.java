@@ -526,6 +526,12 @@ public class TripForegroundService extends Service {
                 isScreenRecordingActive = false;
                 logDiagnostic("SCREEN_RECORDING", "Enabled, but no consent held (process likely "
                         + "restarted since it was last granted) - this trip will not be recorded");
+                // Concrete evidence of exactly the kind of background kill
+                // OemBackgroundHelper's guidance addresses -- feeds
+                // MainActivity's re-nudge logic so a driver on a known-
+                // aggressive OEM gets reminded again next time they open
+                // the app, not just once ever at first launch.
+                OemBackgroundHelper.recordPossibleKillSymptom(this);
                 // Driver-requested (2026-09-06): this alert's own title/text
                 // deliberately avoids the word "recording" -- unlike the
                 // SCREEN_RECORDING diagnostic-log tag just above, which stays
