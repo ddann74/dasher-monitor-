@@ -55,6 +55,15 @@ public class TripForegroundService extends Service {
     public static final String ACTION_START_TRACKING = "com.drivingefficiency.app.START_TRACKING";
     public static final String ACTION_STOP_TRACKING = "com.drivingefficiency.app.STOP_TRACKING";
     public static final String ACTION_QUIT_COMPLETELY = "com.drivingefficiency.app.QUIT_COMPLETELY";
+    // For MonitoringWatchdogReceiver specifically: re-requests Fused Location
+    // Provider updates without going through startTracking()'s early return.
+    // Confirmed via a real ~3.5-hour incident: the service (and even its
+    // independent 15-second accessibility heartbeat) stayed alive the whole
+    // time, isRunning/monitoringActive never went false -- only GPS location
+    // callbacks stopped arriving, which is exactly the failure mode
+    // startTracking() can't fix, since "if (monitoringActive) return;" makes
+    // it a complete no-op while the service still thinks it's tracking.
+    public static final String ACTION_KICK_LOCATION_UPDATES = "com.drivingefficiency.app.KICK_LOCATION_UPDATES";
 
     /**
      * Set by DasherAccessibilityService's auto-pause detection (real
@@ -368,6 +377,8 @@ public class TripForegroundService extends Service {
         String action = intent != null ? intent.getAction() : null;
         if (ACTION_START_TRACKING.equals(action)) {
             startTracking();
+        } else if (ACTION_KICK_LOCATION_UPDATES.equals(action)) {
+            kickLocationUpdates();
         } else if (ACTION_STOP_TRACKING.equals(action)) {
             boolean isAutoPauseStop = intent != null && intent.getBooleanExtra(EXTRA_AUTO_PAUSE_STOP, false);
             stopTracking(isAutoPauseStop);
@@ -515,6 +526,12 @@ public class TripForegroundService extends Service {
                 isScreenRecordingActive = false;
                 logDiagnostic("SCREEN_RECORDING", "Enabled, but no consent held (process likely "
                         + "restarted since it was last granted) - this trip will not be recorded");
+                // Concrete evidence of exactly the kind of background kill
+                // OemBackgroundHelper's guidance addresses -- feeds
+                // MainActivity's re-nudge logic so a driver on a known-
+                // aggressive OEM gets reminded again next time they open
+                // the app, not just once ever at first launch.
+                OemBackgroundHelper.recordPossibleKillSymptom(this);
                 // Driver-requested (2026-09-06): this alert's own title/text
                 // deliberately avoids the word "recording" -- unlike the
                 // SCREEN_RECORDING diagnostic-log tag just above, which stays
@@ -583,6 +600,29 @@ public class TripForegroundService extends Service {
             }
         }
     };
+
+    /**
+     * Recovery path for MonitoringWatchdogReceiver when the service is
+     * already "running" (isRunning/monitoringActive true) but the heartbeat
+     * has gone stale anyway -- meaning GPS location callbacks themselves
+     * stopped arriving, not that the service died. startTracking() can't
+     * fix this (its own early return no-ops while monitoringActive is
+     * true), so this re-requests updates from Fused Location Provider
+     * directly, using the same locationCallback instance -- re-registering
+     * the same callback is the standard, documented way to force FLP to
+     * re-establish delivery, no removeLocationUpdates() needed first.
+     * A no-op (logged, not silently ignored) if called while tracking
+     * genuinely isn't supposed to be active, so a stray/racy delivery of
+     * this action can't start GPS tracking on its own.
+     */
+    private void kickLocationUpdates() {
+        if (!monitoringActive) {
+            logDiagnostic("WATCHDOG", "Ignored a location-kick request -- tracking isn't active");
+            return;
+        }
+        logDiagnostic("WATCHDOG", "Re-requesting GPS location updates after stale heartbeat");
+        startLocationUpdates();
+    }
 
     private static final long ACCESSIBILITY_HEARTBEAT_INTERVAL_MS = 15 * 1000;
     // Driver backlog #4 (docs/driver_backlog_2026_09_03/PRD.md): same

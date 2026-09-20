@@ -37,6 +37,15 @@
         android:text="@string/stop_monitoring" />
 
     <Button
+        android:id="@+id/forceDasherModeButton"
+        android:backgroundTint="?attr/colorPrimary"
+        android:textColor="#FFFFFF"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/force_dasher_mode_off" />
+
+    <Button
         android:id="@+id/quitCompletelyButton"
         android:backgroundTint="?attr/colorPrimary"
         android:textColor="#FFFFFF"
