@@ -2272,6 +2272,16 @@ class TripManager:
         # partway through an already-started trip.
         self.dasher_app_foreground = False
         self._trip_mode = "GENERAL"
+        # Manual "Force Dasher Mode" override (driver-requested, docs/
+        # manual_dasher_override) -- accessibility-based auto-detection
+        # (DasherAccessibilityService) was confirmed via a real diagnostic
+        # log to never once report Dasher in the foreground across three
+        # separate real dashing sessions, even while offers were actively
+        # being processed via notifications. This flag, when set by the
+        # driver from MainActivity, forces get_mode() to DASHER
+        # unconditionally so every Dasher-dependent feature keeps working
+        # regardless of whether that detection is working.
+        self.manual_dasher_override = False
 
         # Pickup-location tracking: measures real time-at-pickup (parking +
         # waiting for the order, which GPS can't tell apart -- see
@@ -2631,12 +2641,16 @@ class TripManager:
         """
         has_pending_stop = any(not s["matched"] for s in self.stops)
         has_active_pickup = self.pickup is not None and not self.pickup.get("recorded")
-        if self.dasher_app_foreground or has_pending_stop or has_active_pickup:
+        if (self.manual_dasher_override or self.dasher_app_foreground
+                or has_pending_stop or has_active_pickup):
             return "DASHER"
         return "GENERAL"
 
     def set_dasher_foreground(self, is_foreground):
         self.dasher_app_foreground = bool(is_foreground)
+
+    def set_manual_dasher_override(self, enabled):
+        self.manual_dasher_override = bool(enabled)
 
     def add_stop(self, address, lat, lon, delivery_instruction=None):
         self.stops.append({
@@ -4570,6 +4584,12 @@ class DriveMonitorEngine:
         """Called from DasherAccessibilityService based on which app
         currently has focus -- drives DASHER vs GENERAL mode detection."""
         self.trip_manager.set_dasher_foreground(is_foreground)
+
+    def set_manual_dasher_override(self, enabled):
+        """Called from PythonBridge (MainActivity's Force Dasher Mode
+        toggle) -- forces DASHER mode regardless of accessibility-based
+        auto-detection. See TripManager.set_manual_dasher_override."""
+        self.trip_manager.set_manual_dasher_override(enabled)
 
     def get_last_trip_summary(self):
         """

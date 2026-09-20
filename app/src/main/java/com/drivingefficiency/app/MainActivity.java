@@ -32,6 +32,7 @@ public class MainActivity extends AppCompatActivity {
 
     private TextView statusText;
     private Button pickupNoteButton;
+    private Button forceDasherModeButton;
     private String lastKnownPickupRestaurant = null;
     private PyObject engine;
     private final Handler statusHandler = new Handler(Looper.getMainLooper());
@@ -89,6 +90,7 @@ public class MainActivity extends AppCompatActivity {
             statusText = findViewById(R.id.statusText);
             Button startButton = findViewById(R.id.startButton);
             Button stopButton = findViewById(R.id.stopButton);
+            forceDasherModeButton = findViewById(R.id.forceDasherModeButton);
             Button quitCompletelyButton = findViewById(R.id.quitCompletelyButton);
             Button openRoadWarriorButton = findViewById(R.id.openRoadWarriorButton);
             pickupNoteButton = findViewById(R.id.pickupNoteButton);
@@ -120,6 +122,26 @@ public class MainActivity extends AppCompatActivity {
                 // moment you're looking at this screen again after a shift --
                 // show the trip summary right away instead of an empty screen.
                 showLastTripSummaryThenPromptFeedback();
+            });
+
+            // Manual "Force Dasher Mode" override (docs/manual_dasher_override)
+            // -- confirmed via a real diagnostic log that
+            // DasherAccessibilityService's automatic foreground detection
+            // never once reported Dasher active across three real dashing
+            // sessions, even while offers were actively being processed via
+            // notifications. This lets the driver force DASHER mode on
+            // manually so every Dasher-dependent feature (offer parsing,
+            // Smart Score badge, mode-dependent trip logic) keeps working
+            // regardless of whether that detection is working. Persisted via
+            // PythonBridge/SharedPreferences so it survives a process death,
+            // not just this activity instance.
+            refreshForceDasherModeButtonLabel();
+            forceDasherModeButton.setOnClickListener(v -> {
+                boolean newState = !PythonBridge.getManualDasherOverride(this);
+                logDiagnostic("BUTTON", "Force Dasher Mode toggled " + (newState ? "ON" : "OFF"));
+                PythonBridge.setManualDasherOverride(this, newState);
+                refreshForceDasherModeButtonLabel();
+                updateStatusText();
             });
 
             // Genuine "fully off" -- no notification, no badge, nothing.
@@ -497,8 +519,18 @@ public class MainActivity extends AppCompatActivity {
             String mode = engine.callAttr("get_mode").toString();
             String stateLabel = "TRIP_ACTIVE".equals(state) ? "Driving" : "Idle";
             String modeLabel = "DASHER".equals(mode) ? "Dasher Mode" : "General Driving Mode";
+            if (PythonBridge.getManualDasherOverride(this)) {
+                modeLabel += " (Manual Override)";
+            }
             statusText.setText("Status: " + stateLabel + " -- " + modeLabel + warning + "\n" + buildLastUpdateLine());
             updatePickupNoteButton();
+        }
+
+        /** Reflects the persisted Force Dasher Mode state on the toggle button's own label. */
+        private void refreshForceDasherModeButtonLabel() {
+            boolean enabled = PythonBridge.getManualDasherOverride(this);
+            forceDasherModeButton.setText(enabled
+                    ? R.string.force_dasher_mode_on : R.string.force_dasher_mode_off);
         }
 
         /**

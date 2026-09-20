@@ -4,6 +4,8 @@
     <string name="start_monitoring">Start Monitoring</string>
     <string name="stop_monitoring">Stop Monitoring</string>
     <string name="quit_completely">Quit App Completely</string>
+    <string name="force_dasher_mode_off">Force Dasher Mode: OFF</string>
+    <string name="force_dasher_mode_on">Force Dasher Mode: ON</string>
     <string name="enable_notification_access">Enable Notification Access</string>
     <string name="enable_accessibility_access">Enable Accessibility Access</string>
     <string name="enable_overlay_permission">Enable Overlay Permission</string>
