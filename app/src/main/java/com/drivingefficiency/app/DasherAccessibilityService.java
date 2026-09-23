@@ -863,7 +863,7 @@ public class DasherAccessibilityService extends AccessibilityService {
                     ? TripForegroundService.lastKnownLon : null;
             String resultJson = engine.callAttr("parse_offer_screen", linesJson,
                     currentLat, currentLon).toString();
-            handleOfferResult(resultJson);
+            handleOfferResult(resultJson, linesJson);
 
             // Real post-accept dropoff address extraction -- built from
             // two real screenshots (see DropoffScreenParser), closing the
@@ -1047,7 +1047,7 @@ public class DasherAccessibilityService extends AccessibilityService {
      * restaurant wait time becomes real learned data over time (see
      * SmartScoreEngine.record_restaurant_wait in drive_monitor.py).
      */
-    private void handleOfferResult(String resultJson) {
+    private void handleOfferResult(String resultJson, String linesJson) {
         try {
             JSONObject parsed = new JSONObject(resultJson);
             if (!parsed.optBoolean("is_offer_screen", false)) {
@@ -1109,6 +1109,26 @@ public class DasherAccessibilityService extends AccessibilityService {
 
             JSONObject score = parsed.optJSONObject("smart_score");
             if (score == null) {
+                // CONFIRMED REAL BUG, real diagnostic log 2026-09-20: a
+                // recognized offer screen (is_offer_screen=true -- "Accept"
+                // and a payout pattern both matched) with a missing payout
+                // or distance previously returned here in total silence --
+                // no FULL_TEXT_DUMP, no OFFER log line, nothing. Confirmed
+                // for a real stacked add-on offer ("Thirroul Kebabs and 1
+                // other store") the driver actually saw and acted on --
+                // parse_offer_screen only computes smart_score when BOTH
+                // payout AND distance_km parsed (see its own code), so this
+                // left zero trace anywhere in the log, making it impossible
+                // to tell afterward whether the screen was ever seen at
+                // all, let alone why scoring failed. Logs the raw screen
+                // text and exactly which field was missing so the next
+                // occurrence is diagnosable instead of invisible.
+                boolean missingPayout = parsed.isNull("payout");
+                boolean missingDistance = parsed.isNull("distance_km");
+                logDiagnostic("OFFER", "Detected via screen but NOT scored -- missing "
+                        + (missingPayout && missingDistance ? "payout and distance"
+                                : missingPayout ? "payout" : "distance")
+                        + ". Raw text: " + linesJson);
                 return; // Not enough data parsed yet to compute a score.
             }
 
